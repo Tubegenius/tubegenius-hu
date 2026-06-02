@@ -361,10 +361,15 @@ async function callClaude(messages){
 }
 
 async function getYTData(videoId){
-  const r=await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,statistics&key=${YT_KEY}`);
+  const r=await fetch('/api/claude',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'youtube',videoId})
+  });
+  if(!r.ok){const e=await r.text();throw new Error('YouTube hiba: '+e);}
   const d=await r.json();
-  if(!d.items||d.items.length===0)throw new Error('Videó nem található');
-  return d.items[0];
+  if(d.error)throw new Error(d.error);
+  return d;
 }
 function extractVideoId(url){const m=url.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);return m?m[1]:null;}
 function setBtn(id,sid,tid,txt,on){const b=document.getElementById(id),s=document.getElementById(sid),t=document.getElementById(tid);b.disabled=on;s.style.display=on?'block':'none';t.textContent=on?'Betöltés...':txt;}
@@ -515,3 +520,4 @@ if(daysLeft()===0)setTimeout(showPW,600);
 </script>
 </body>
 </html>
+
