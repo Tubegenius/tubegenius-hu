@@ -2,55 +2,55 @@
 // WillViral — api/claude.js v2.0
 // Teljes backend: YouTube API, Claude API, Cache, Cost logging
 // ============================================================
- 
+
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages';
 const YT_API = 'https://www.googleapis.com/youtube/v3';
 const MODEL = 'claude-sonnet-4-6';
- 
+
 // ── Cache (memória alapú, Supabase nélkül is működik) ──────
 const memCache = new Map();
- 
+
 function cacheGet(key) {
   const item = memCache.get(key);
   if (!item) return null;
   if (Date.now() > item.expires) { memCache.delete(key); return null; }
   return item.data;
 }
- 
+
 function cacheSet(key, data, ttlMs) {
   memCache.set(key, { data, expires: Date.now() + ttlMs });
 }
- 
+
 // ── Segédfüggvények ────────────────────────────────────────
 function fmt(n) { return parseInt(n || 0); }
- 
+
 function videoType(url) {
   if (!url) return 'long';
   return url.includes('/shorts/') ? 'shorts' : 'long';
 }
- 
+
 function extractVideoId(url) {
   const m = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([a-zA-Z0-9_-]{11})/);
   return m ? m[1] : null;
 }
- 
+
 function formatViews(n) {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
   return n.toString();
 }
- 
+
 function daysSince(dateStr) {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
 }
- 
+
 // ── CORS headers ───────────────────────────────────────────
 function corsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
- 
+
 // ── YouTube API hívás ──────────────────────────────────────
 async function ytFetch(endpoint, params) {
   const YT_KEY = process.env.YT_API_KEY;
@@ -61,7 +61,7 @@ async function ytFetch(endpoint, params) {
   if (!res.ok) throw new Error(`YouTube API hiba: ${res.status}`);
   return res.json();
 }
- 
+
 // ── Claude API hívás ───────────────────────────────────────
 async function claudeFetch(messages, maxTokens = 4000, systemPrompt = null) {
   const body = {
@@ -70,7 +70,7 @@ async function claudeFetch(messages, maxTokens = 4000, systemPrompt = null) {
     messages
   };
   if (systemPrompt) body.system = systemPrompt;
- 
+
   const res = await fetch(ANTHROPIC_API, {
     method: 'POST',
     headers: {
@@ -80,19 +80,19 @@ async function claudeFetch(messages, maxTokens = 4000, systemPrompt = null) {
     },
     body: JSON.stringify(body)
   });
- 
+
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`Claude API hiba: ${err}`);
   }
- 
+
   const data = await res.json();
- 
+
   // Cost számítás
   const inputTokens = data.usage?.input_tokens || 0;
   const outputTokens = data.usage?.output_tokens || 0;
   const costUsd = (inputTokens * 3 + outputTokens * 15) / 1_000_000;
- 
+
   return {
     text: data.content?.[0]?.text || '',
     inputTokens,
@@ -100,11 +100,11 @@ async function claudeFetch(messages, maxTokens = 4000, systemPrompt = null) {
     costUsd
   };
 }
- 
+
 // ── Viral Score számítás (BACKEND számolja, nem Claude!) ───
 function calculateViralScore(searchData) {
   const { avgViews, avgLikes, avgComments, videoCount, freshRatio, uploadVelocity } = searchData;
- 
+
   // 1. Views Potential (0-30 pont)
   let viewsPotential = 0;
   if (avgViews >= 1_000_000) viewsPotential = 30;
@@ -114,7 +114,7 @@ function calculateViralScore(searchData) {
   else if (avgViews >= 10_000) viewsPotential = 8;
   else if (avgViews >= 1_000) viewsPotential = 4;
   else viewsPotential = 1;
- 
+
   // 2. Trend Score (0-25 pont) — YouTube dátum alapján
   let trendScore = 0;
   const freshPct = freshRatio || 0;
@@ -127,7 +127,7 @@ function calculateViralScore(searchData) {
   if (vel >= 50) trendScore = Math.min(25, trendScore + 3);
   else if (vel >= 20) trendScore = Math.min(25, trendScore + 2);
   else if (vel >= 5) trendScore = Math.min(25, trendScore + 1);
- 
+
   // 3. Competition Score (0-20 pont)
   let competitionScore = 0;
   if (videoCount <= 5) competitionScore = 20;
@@ -136,7 +136,7 @@ function calculateViralScore(searchData) {
   else if (videoCount <= 100) competitionScore = 8;
   else if (videoCount <= 200) competitionScore = 4;
   else competitionScore = 2;
- 
+
   // 4. Engagement Score (0-15 pont)
   let engagementScore = 0;
   const likeRatio = avgViews > 0 ? avgLikes / avgViews : 0;
@@ -145,18 +145,18 @@ function calculateViralScore(searchData) {
   else if (likeRatio >= 0.01) engagementScore = 7;
   else if (likeRatio >= 0.005) engagementScore = 3;
   else engagementScore = 1;
- 
+
   // 5. Search Interest (0-10 pont) — alap 5 pont, pytrends finomítja
   const searchInterest = 5;
- 
+
   const total = viewsPotential + trendScore + competitionScore + engagementScore + searchInterest;
   const score = Math.min(100, Math.max(1, Math.round(total)));
- 
+
   let szint = 'Gyenge';
   if (score >= 80) szint = 'Erős';
   else if (score >= 60) szint = 'Jó';
   else if (score >= 40) szint = 'Közepes';
- 
+
   return {
     viralScore: score,
     szint,
@@ -169,15 +169,15 @@ function calculateViralScore(searchData) {
     }
   };
 }
- 
+
 // ── YouTube Search + Stats ─────────────────────────────────
 async function youtubeSearch(query, regionCode = 'HU', mode = 'hu') {
   const cacheKey = `search_${query}_${regionCode}_${mode}`;
   const cached = cacheGet(cacheKey);
   if (cached) return cached;
- 
+
   const relevanceLang = regionCode === 'HU' ? 'hu' : 'en';
- 
+
   // 1. Keresés
   const searchData = await ytFetch('search', {
     q: query,
@@ -188,41 +188,41 @@ async function youtubeSearch(query, regionCode = 'HU', mode = 'hu') {
     relevanceLanguage: relevanceLang,
     order: 'relevance'
   });
- 
+
   if (!searchData.items?.length) {
     return { avgViews: 0, avgLikes: 0, avgComments: 0, videoCount: 0, freshRatio: 0, uploadVelocity: 0, topVideos: [] };
   }
- 
+
   // 2. Video ID-k + dátumok
   const videoIds = searchData.items.map(i => i.id?.videoId).filter(Boolean);
   const publishDates = searchData.items.map(i => i.snippet?.publishedAt).filter(Boolean);
- 
+
   // 3. Statisztikák batch lekérése
   const statsData = await ytFetch('videos', {
     id: videoIds.join(','),
     part: 'statistics,snippet,contentDetails'
   });
- 
+
   if (!statsData.items?.length) {
     return { avgViews: 0, avgLikes: 0, avgComments: 0, videoCount: 0, freshRatio: 0, uploadVelocity: 0, topVideos: [] };
   }
- 
+
   // 4. Számítások
   const views = statsData.items.map(v => fmt(v.statistics?.viewCount));
   const likes = statsData.items.map(v => fmt(v.statistics?.likeCount));
   const comments = statsData.items.map(v => fmt(v.statistics?.commentCount));
- 
+
   const avgViews = Math.round(views.reduce((a, b) => a + b, 0) / views.length);
   const avgLikes = Math.round(likes.reduce((a, b) => a + b, 0) / likes.length);
   const avgComments = Math.round(comments.reduce((a, b) => a + b, 0) / comments.length);
- 
+
   // 5. Fresh ratio (utolsó 7 nap %)
   const freshCount = publishDates.filter(d => daysSince(d) <= 7).length;
   const freshRatio = Math.round((freshCount / publishDates.length) * 100);
- 
+
   // 6. Upload velocity (utolsó 7 nap feltöltések száma)
   const uploadVelocity = freshCount;
- 
+
   // 7. Top videók (thumbnail + link + minden adat)
   const topVideos = statsData.items.slice(0, 6).map(v => {
     const isShorts = fmt(v.contentDetails?.duration?.match(/PT(\d+)S/)?.[1]) < 60
@@ -243,7 +243,7 @@ async function youtubeSearch(query, regionCode = 'HU', mode = 'hu') {
       region: regionCode
     };
   });
- 
+
   const result = {
     avgViews,
     avgLikes,
@@ -254,18 +254,18 @@ async function youtubeSearch(query, regionCode = 'HU', mode = 'hu') {
     topVideos,
     regionCode
   };
- 
+
   // Cache 6 óra
   cacheSet(cacheKey, result, 6 * 60 * 60 * 1000);
   return result;
 }
- 
+
 // ── Trending videók ────────────────────────────────────────
 async function getTrending(regionCode = 'HU', categoryId = '0') {
   const cacheKey = `trending_${regionCode}_${categoryId}`;
   const cached = cacheGet(cacheKey);
   if (cached) return cached;
- 
+
   const data = await ytFetch('videos', {
     chart: 'mostPopular',
     regionCode,
@@ -273,7 +273,7 @@ async function getTrending(regionCode = 'HU', categoryId = '0') {
     maxResults: 12,
     part: 'snippet,statistics,contentDetails'
   });
- 
+
   const videos = (data.items || []).map(v => {
     const duration = v.contentDetails?.duration || '';
     const seconds = parseDuration(duration);
@@ -293,77 +293,77 @@ async function getTrending(regionCode = 'HU', categoryId = '0') {
       region: regionCode
     };
   });
- 
+
   // Cache 1 óra
   cacheSet(cacheKey, videos, 60 * 60 * 1000);
   return videos;
 }
- 
+
 function parseDuration(duration) {
   const m = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
   if (!m) return 0;
   return (parseInt(m[1] || 0) * 3600) + (parseInt(m[2] || 0) * 60) + parseInt(m[3] || 0);
 }
- 
+
 // ── MASTER SYSTEM PROMPT ───────────────────────────────────
 const MASTER_PROMPT = `Te a WillViral Creator Intelligence Platform AI motorja vagy.
- 
+
 SZEMÉLYISÉGED:
 Tapasztalt creator barát vagy, nem AI. Rövid, tömör mondatok. Magyar köznyelv.
 TILOS: "kiemelkedő", "hatékony", "stratégiai", "optimális", "komprehenzív", "innovatív"
 TILOS: körülírás, AI szagú megfogalmazás, dagályos mondatok
 KÖTELEZŐ: konkrét számok, emberi hangnem, rövid mondatok
- 
+
 ADATKEZELÉS:
 - CSAK a backend által átadott valós YouTube adatokat használd
 - Ha nincs adat: mondd meg őszintén, NE becsülj
 - A Viral Score-t a BACKEND számolta, te csak magyarázod
 - Soha ne írj felül backend adatot
- 
+
 A FŐ KÉRDÉS AMIT MEGVÁLASZOLSZ:
 "Érdemes-e egyáltalán erről videót készítened?"`;
- 
+
 // ── Főbb logikák ───────────────────────────────────────────
- 
+
 // VÉGPONT: youtube (egyetlen videó adatai)
 async function handleYoutube(body, res) {
   const { videoId } = body;
   if (!videoId) return res.status(400).json({ error: 'videoId kötelező' });
- 
+
   const cacheKey = `video_${videoId}`;
   const cached = cacheGet(cacheKey);
   if (cached) return res.status(200).json(cached);
- 
+
   const data = await ytFetch('videos', {
     id: videoId,
     part: 'snippet,statistics,contentDetails'
   });
- 
+
   if (!data.items?.length) return res.status(404).json({ error: 'Videó nem található' });
- 
+
   const video = data.items[0];
   cacheSet(cacheKey, video, 6 * 60 * 60 * 1000);
   return res.status(200).json(video);
 }
- 
+
 // VÉGPONT: youtube_search (téma alapú keresés)
 async function handleYoutubeSearch(body, res) {
   const { searchQuery, regionCode = 'HU', mode = 'hu' } = body;
   if (!searchQuery) return res.status(400).json({ error: 'searchQuery kötelező' });
- 
+
   // Ha mindkettő kell: párhuzamos lekérdezés
   if (mode === 'both') {
     const [huData, globalData] = await Promise.all([
       youtubeSearch(searchQuery, 'HU', 'hu'),
       youtubeSearch(searchQuery, 'US', 'en')
     ]);
- 
+
     // Összefésülés: HU videók + global videók, jelölve
     const allVideos = [
       ...huData.topVideos.map(v => ({ ...v, region: 'hu' })),
       ...globalData.topVideos.map(v => ({ ...v, region: 'global' }))
     ].slice(0, 8);
- 
+
     return res.status(200).json({
       hu: huData,
       global: globalData,
@@ -371,36 +371,36 @@ async function handleYoutubeSearch(body, res) {
       mode: 'both'
     });
   }
- 
+
   const data = await youtubeSearch(searchQuery, regionCode, mode);
   return res.status(200).json(data);
 }
- 
+
 // VÉGPONT: viral_score_calc (Viral Score számítás)
 async function handleViralScoreCalc(body, res) {
   const { searchData } = body;
   if (!searchData) return res.status(400).json({ error: 'searchData kötelező' });
- 
+
   const result = calculateViralScore(searchData);
   return res.status(200).json(result);
 }
- 
+
 // VÉGPONT: trending (Trend Radar)
 async function handleTrending(body, res) {
   const { regionCode = 'HU', categoryId = '0' } = body;
   const videos = await getTrending(regionCode, categoryId);
   return res.status(200).json({ videos });
 }
- 
+
 // VÉGPONT: viral_score_full (teljes Viral Score flow)
 async function handleViralScoreFull(body, res) {
   const { query, regionCode = 'HU', mode = 'hu', creatorProfile = {} } = body;
   if (!query) return res.status(400).json({ error: 'query kötelező' });
- 
+
   // 1. YouTube adatok lekérése
   let searchData;
   let globalData = null;
- 
+
   if (mode === 'both') {
     const [hu, global] = await Promise.all([
       youtubeSearch(query, 'HU', 'hu'),
@@ -411,12 +411,12 @@ async function handleViralScoreFull(body, res) {
   } else {
     searchData = await youtubeSearch(query, regionCode, mode);
   }
- 
+
   // 2. Viral Score számítás (backend!)
   const scoreResult = calculateViralScore(searchData);
   let globalScoreResult = null;
   if (globalData) globalScoreResult = calculateViralScore(globalData);
- 
+
   // 3. pytrends próbálkozás (opcionális)
   let trendBonus = 0;
   try {
@@ -430,7 +430,7 @@ async function handleViralScoreFull(body, res) {
   } catch {
     // Silent fallback — pytrends nem működött, semmi baj
   }
- 
+
   // 4. Claude magyarázat
   const dataContext = `
 VALÓS YOUTUBE ADATOK (${regionCode === 'HU' ? 'Magyar' : 'Globális'} adatbázis):
@@ -442,25 +442,25 @@ VALÓS YOUTUBE ADATOK (${regionCode === 'HU' ? 'Magyar' : 'Globális'} adatbázi
 - Feltöltési sebesség (7 nap): ${searchData.uploadVelocity} videó
 - Komponensek: Nézettség ${scoreResult.komponensek.viewsPotential}/30, Trend ${scoreResult.komponensek.trendScore}/25, Verseny ${scoreResult.komponensek.competitionScore}/20, Engagement ${scoreResult.komponensek.engagementScore}/15
 ${globalScoreResult ? `\nGLOBÁLIS ADATOK:\n- Viral Score: ${globalScoreResult.viralScore}/100 (${globalScoreResult.szint})\n- Átlag nézettség: ${globalData.avgViews.toLocaleString()}` : ''}`;
- 
+
   const { text, inputTokens, outputTokens, costUsd } = await claudeFetch([
     {
       role: 'user',
       content: `${dataContext}
- 
+
 CREATOR PROFIL:
 - Platform: ${creatorProfile.platform || 'YouTube'}
 - Niche: ${creatorProfile.niche || 'általános'}
 - Stílus: ${creatorProfile.style || 'vegyes'}
 - Célközönség: ${creatorProfile.audience || 'általános'}
- 
+
 FELADAT: Magyarázd el emberi hangon (max 3-4 rövid mondat) mit jelent ez a Viral Score.
 Mondd meg konkrétan: megéri-e erről videót csinálni.
 Hivatkozz a valós számokra. Ne általánosíts.
 Csak a magyarázatot írd, semmi mást.`
     }
   ], 500, MASTER_PROMPT);
- 
+
   // 5. Top videók (thumbnail-lel!)
   const topVideos = (mode === 'both'
     ? [
@@ -469,7 +469,7 @@ Csak a magyarázatot írd, semmi mást.`
       ]
     : searchData.topVideos
   );
- 
+
   return res.status(200).json({
     viralScore: scoreResult.viralScore,
     szint: scoreResult.szint,
@@ -487,34 +487,34 @@ Csak a magyarázatot írd, semmi mást.`
     _cost: { inputTokens, outputTokens, costUsd }
   });
 }
- 
+
 // VÉGPONT: video_analyze (Video Analyzer)
 async function handleVideoAnalyze(body, res) {
   const { url, creatorProfile = {} } = body;
   if (!url) return res.status(400).json({ error: 'url kötelező' });
- 
+
   const videoId = extractVideoId(url);
   if (!videoId) return res.status(400).json({ error: 'Érvénytelen YouTube URL' });
- 
+
   const isShorts = videoType(url) === 'shorts';
- 
+
   // YouTube adatok
   const ytData = await ytFetch('videos', {
     id: videoId,
     part: 'snippet,statistics,contentDetails'
   });
- 
+
   if (!ytData.items?.length) return res.status(404).json({ error: 'Videó nem található' });
- 
+
   const video = ytData.items[0];
   const sn = video.snippet;
   const st = video.statistics;
- 
+
   const views = fmt(st.viewCount);
   const likes = fmt(st.likeCount);
   const comments = fmt(st.commentCount);
   const likeRatio = views > 0 ? ((likes / views) * 100).toFixed(2) : 0;
- 
+
   // Claude elemzés
   const { text, inputTokens, outputTokens, costUsd } = await claudeFetch([
     {
@@ -529,9 +529,9 @@ Komment: ${comments.toLocaleString()}
 Feltöltve: ${sn.publishedAt} (${daysSince(sn.publishedAt)} napja)
 Leírás (első 500 kar): ${(sn.description || '').substring(0, 500)}
 Tagek: ${(sn.tags || []).slice(0, 10).join(', ')}
- 
+
 CREATOR PROFIL: ${creatorProfile.niche || 'általános'} / ${creatorProfile.platform || 'YouTube'}
- 
+
 FELADAT: Elemezd ezt a videót. Adj JSON választ:
 {
   "hook_score": 0-100,
@@ -561,7 +561,7 @@ FELADAT: Elemezd ezt a videót. Adj JSON választ:
 Csak JSON, semmi más.`
     }
   ], 1500, MASTER_PROMPT);
- 
+
   let parsed;
   try {
     const clean = text.replace(/```json|```/g, '').trim();
@@ -570,7 +570,7 @@ Csak JSON, semmi más.`
   } catch {
     return res.status(500).json({ error: 'Claude válasz feldolgozási hiba' });
   }
- 
+
   return res.status(200).json({
     videoInfo: {
       videoId,
@@ -590,29 +590,29 @@ Csak JSON, semmi más.`
     _cost: { inputTokens, outputTokens, costUsd }
   });
 }
- 
+
 // VÉGPONT: content_generate (Content Generator)
 async function handleContentGenerate(body, res) {
   const { topic, platform = 'youtube', length = 'medium', tone = 'informativ', creatorProfile = {}, regionCode = 'HU', mode = 'hu' } = body;
   if (!topic) return res.status(400).json({ error: 'topic kötelező' });
- 
+
   // 1. YouTube ellenőrzés előbb!
   const searchData = await youtubeSearch(topic, regionCode, mode);
   const scoreResult = calculateViralScore(searchData);
- 
+
   // 2. Claude generál az adatok alapján
   const lenMap = { short: 'rövid Shorts/TikTok (30-60 mp)', medium: 'közepes (2-5 perc)', long: 'hosszú YouTube (8-15 perc)' };
   const toneMap = { megdobbento: 'megdöbbentő sokkos', informativ: 'informatív oktatói', vicces: 'vicces szórakoztató', komoly: 'komoly elemző', motivalo: 'motiváló inspiráló' };
- 
+
   const ytContext = searchData.avgViews > 0
     ? `VALÓS YOUTUBE ADATOK: ${searchData.videoCount} hasonló videó, átlag nézettség: ${searchData.avgViews.toLocaleString()}, Viral Score: ${scoreResult.viralScore}/100`
     : 'YouTube adat nem elérhető ehhez a témához.';
- 
+
   const { text, inputTokens, outputTokens, costUsd } = await claudeFetch([
     {
       role: 'user',
       content: `${ytContext}
- 
+
 CREATOR PROFIL:
 - Platform: ${creatorProfile.platform || platform}
 - Niche: ${creatorProfile.niche || 'általános'}
@@ -620,13 +620,13 @@ CREATOR PROFIL:
 - Stílus: ${creatorProfile.style || tone}
 - Tapasztalat: ${creatorProfile.experience || 'haladó'}
 - Cél: ${creatorProfile.goal || 'nézettség növelés'}
- 
+
 GENERÁLÁSI PARAMÉTEREK:
 - Téma: ${topic}
 - Hossz: ${lenMap[length] || lenMap.medium}
 - Hangvétel: ${toneMap[tone] || toneMap.informativ}
 - Mai dátum: ${new Date().toLocaleDateString('hu-HU')}
- 
+
 FELADAT: Generálj teljes tartalomcsomagot. Csak JSON:
 {
   "cimek": ["cím1", "cím2", "cím3", "cím4", "cím5"],
@@ -646,7 +646,7 @@ FELADAT: Generálj teljes tartalomcsomagot. Csak JSON:
 Csak JSON, semmi más.`
     }
   ], 4000, MASTER_PROMPT);
- 
+
   let parsed;
   try {
     const clean = text.replace(/```json|```/g, '').trim();
@@ -655,7 +655,7 @@ Csak JSON, semmi más.`
   } catch {
     return res.status(500).json({ error: 'Claude válasz feldolgozási hiba' });
   }
- 
+
   return res.status(200).json({
     viralScore: scoreResult.viralScore,
     szint: scoreResult.szint,
@@ -668,30 +668,30 @@ Csak JSON, semmi más.`
     _cost: { inputTokens, outputTokens, costUsd }
   });
 }
- 
+
 // VÉGPONT: content_gap (Content Gap Analysis)
 async function handleContentGap(body, res) {
   const { topic, regionCode = 'HU', mode = 'hu', creatorProfile = {} } = body;
   if (!topic) return res.status(400).json({ error: 'topic kötelező' });
- 
+
   // Top videók lekérése
   const searchData = await youtubeSearch(topic, regionCode, mode);
   const topVideos = searchData.topVideos.slice(0, 5);
- 
+
   if (!topVideos.length) return res.status(200).json({ error: 'Nem találhatók videók ehhez a témához' });
- 
+
   const videoList = topVideos.map((v, i) =>
     `${i + 1}. "${v.title}" — ${v.channel} (${v.viewsFormatted} nézés, ${v.daysSince} napja)`
   ).join('\n');
- 
+
   const { text, inputTokens, outputTokens, costUsd } = await claudeFetch([
     {
       role: 'user',
       content: `TOP VIDEÓK ERRŐL A TÉMÁRÓL (valós YouTube adatok):
 ${videoList}
- 
+
 CREATOR PROFIL: ${creatorProfile.niche || topic} / ${creatorProfile.audience || 'általános'}
- 
+
 FELADAT: Elemezd mit csinálnak ezek a videók és mit NEM.
 Csak JSON:
 {
@@ -708,7 +708,7 @@ Csak JSON:
 Csak JSON, semmi más.`
     }
   ], 1500, MASTER_PROMPT);
- 
+
   let parsed;
   try {
     const clean = text.replace(/```json|```/g, '').trim();
@@ -717,25 +717,25 @@ Csak JSON, semmi más.`
   } catch {
     return res.status(500).json({ error: 'Claude válasz feldolgozási hiba' });
   }
- 
+
   return res.status(200).json({
     topVideos,
     gap: parsed,
     _cost: { inputTokens, outputTokens, costUsd }
   });
 }
- 
+
 // VÉGPONT: video_package (Video Package Generator)
 async function handleVideoPackage(body, res) {
   const { topic, platform = 'youtube', length = 'medium', creatorProfile = {} } = body;
   if (!topic) return res.status(400).json({ error: 'topic kötelező' });
- 
+
   const isShorts = length === 'short';
- 
+
   const struktura = isShorts
     ? 'Hook (0-3mp), Tartalom (3-50mp), CTA (50-60mp)'
     : 'Hook (0-30mp), Intro (30mp-2p), Főtartalom (2p-vége), CTA+Outro (utolsó 1p)';
- 
+
   const { text, inputTokens, outputTokens, costUsd } = await claudeFetch([
     {
       role: 'user',
@@ -744,12 +744,12 @@ async function handleVideoPackage(body, res) {
 - Niche: ${creatorProfile.niche || 'általános'}
 - Stílus: ${creatorProfile.style || 'informatív'}
 - Célközönség: ${creatorProfile.audience || 'általános'}
- 
+
 VIDEÓ PARAMÉTEREK:
 - Téma: ${topic}
 - Hossz: ${length === 'short' ? 'Shorts (60 mp)' : length === 'long' ? 'Hosszú (10-15 perc)' : 'Közepes (3-8 perc)'}
 - Struktúra: ${struktura}
- 
+
 FELADAT: Generálj teljes videócsomagot. Csak JSON:
 {
   "jelenetek": [
@@ -770,7 +770,7 @@ ${isShorts ? 'SHORTS: 3 jelenet (Hook, Tartalom, CTA)' : 'LONG: 6-8 jelenet rés
 Csak JSON, semmi más.`
     }
   ], 5000, MASTER_PROMPT);
- 
+
   let parsed;
   try {
     const clean = text.replace(/```json|```/g, '').trim();
@@ -779,20 +779,20 @@ Csak JSON, semmi más.`
   } catch {
     return res.status(500).json({ error: 'Claude válasz feldolgozási hiba' });
   }
- 
+
   return res.status(200).json({
     csomag: parsed,
     _cost: { inputTokens, outputTokens, costUsd }
   });
 }
- 
+
 // VÉGPONT: claude (általános, visszafelé kompatibilis)
 async function handleClaude(body, res) {
   const { messages, maxTokens = 4000 } = body;
   if (!messages) return res.status(400).json({ error: 'messages kötelező' });
- 
+
   const { text, inputTokens, outputTokens, costUsd } = await claudeFetch(messages, maxTokens, MASTER_PROMPT);
- 
+
   // JSON parse próbálkozás (visszafelé kompatibilis)
   try {
     let clean = text.replace(/```json|```/g, '').trim();
@@ -810,46 +810,46 @@ async function handleClaude(body, res) {
     });
   }
 }
- 
+
 // ── FŐ HANDLER ─────────────────────────────────────────────
 module.exports = async (req, res) => {
   corsHeaders(res);
- 
+
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
- 
+
   try {
     const body = req.body || {};
     const { type } = body;
- 
+
     switch (type) {
       case 'youtube':
         return await handleYoutube(body, res);
- 
+
       case 'youtube_search':
         return await handleYoutubeSearch(body, res);
- 
+
       case 'viral_score_calc':
         return await handleViralScoreCalc(body, res);
- 
+
       case 'viral_score_full':
         return await handleViralScoreFull(body, res);
- 
+
       case 'trending':
         return await handleTrending(body, res);
- 
+
       case 'video_analyze':
         return await handleVideoAnalyze(body, res);
- 
+
       case 'content_generate':
         return await handleContentGenerate(body, res);
- 
+
       case 'content_gap':
         return await handleContentGap(body, res);
- 
+
       case 'video_package':
         return await handleVideoPackage(body, res);
- 
+
       case 'claude':
       default:
         return await handleClaude(body, res);
