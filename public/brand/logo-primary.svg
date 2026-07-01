@@ -1,0 +1,23 @@
+<svg viewBox="0 0 280 56" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="wg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <linearGradient id="wh" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22D3EE" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="tg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="6" width="44" height="44" rx="10" fill="#080B12" stroke="url(#wg)" stroke-width="1.5"/>
+  <path d="M14 18 L21 38 L28 26 L35 38 L42 18" fill="none" stroke="url(#wg)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M35 38 L42 18" fill="none" stroke="url(#wh)" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="42" cy="17" r="2" fill="#22D3EE" opacity="0.9"/>
+  <text x="58" y="37" font-family="Inter, system-ui, sans-serif" font-size="22" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="#F8FAFC">Will</tspan><tspan fill="url(#wg)">Viral</tspan>
+  </text>
+</svg>
