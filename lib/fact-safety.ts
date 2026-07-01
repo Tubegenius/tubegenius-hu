@@ -5,11 +5,15 @@
 // ── Típusok ──────────────────────────────────────────────────
 
 export type ContentType =
-  | 'factual_sensitive'    // politika, közélet, egészség, bűnügy, pénzügy
-  | 'factual_general'      // tudomány, technológia, történelem, pszichológia
+  | 'factual_sensitive'    // konkrét személy, botrány, vád, politikai konfliktus, egészség, jog, pénzügy, bűnügy, családi kapcsolat, tisztség, idézet
+  | 'factual_news'         // általános hír, aktuális esemény, gazdasági/technológiai/tudományos/politikai fejlemény
+  | 'factual_general'      // tudomány, technológia, történelem, pszichológia (evergreen, nem hír jellegű)
   | 'entertainment_trend'  // challenge, meme, viral, creator formátum
   | 'opinion_commentary'   // vélemény, elemzés, reakció
   | 'creative_fiction'     // kitalált történet, kreatív tartalom
+
+// Két szigorúsági szint a strict_fact_mode-on belül
+export type FactStrictnessLevel = 'standard_news' | 'high_risk' | null
 
 export type QualityStatus =
   | 'verified'
@@ -40,6 +44,7 @@ export interface VerifiedFactBlock {
   topic: string
   content_type: ContentType
   strict_fact_mode: boolean
+  fact_strictness_level: FactStrictnessLevel
   verified_facts: VerifiedFact[]
   allowed_inferences: string[]
   forbidden_claims: string[]
@@ -92,6 +97,28 @@ const FACTUAL_GENERAL_KEYWORDS = [
   'csillagászat', 'astronomy', 'ûr', 'space', 'nasa', 'james webb',
 ]
 
+// Általános hír / aktuális esemény / gazdasági-technológiai-tudományos-politikai
+// fejlemény jelzőszavai — ezek strict_fact_mode-ot triggerelnek, de csak
+// "standard_news" szinten (nem olyan szigorú mint a factual_sensitive/high_risk).
+const FACTUAL_NEWS_KEYWORDS = [
+  // Általános hír jelzők
+  'hír', 'hírek', 'news', 'bejelent', 'announce', 'közlemény', 'statement',
+  'sajtótájékoztató', 'press conference', 'fejlemény', 'development',
+  'legfrissebb', 'latest', 'derült ki', 'revealed', 'kiderült',
+  'jelentés szerint', 'according to report', 'ma történt', 'e héten', 'this week',
+  // Gazdasági fejlemény
+  'gazdaság', 'economy', 'gazdasági', 'economic', 'infláció', 'inflation',
+  'gdp', 'jegybank', 'central bank', 'mnb', 'költségvetés', 'budget',
+  'tőzsde', 'stock market', 'árfolyam', 'exchange rate', 'recesszió', 'recession',
+  // Politikai fejlemény (nem konkrét személyhez/konfliktushoz kötött)
+  'törvényjavaslat', 'bill', 'szavazás', 'vote', 'csúcstalálkozó', 'summit',
+  'megállapodás', 'agreement', 'szankció', 'sanction', 'eu döntés', 'eu decision',
+  // Technológiai / tudományos fejlemény
+  'bejelentette', 'bemutatta', 'piacra dobta', 'launch', 'új verzió', 'update',
+  'tudományos áttörés', 'scientific breakthrough', 'kutatók szerint', 'researchers',
+  'új tanulmány', 'new study', 'tanulmány szerint', 'felfedezték', 'discovered',
+]
+
 export function classifyContentType(topic: string): ContentType {
   const lower = topic.toLowerCase()
 
@@ -99,11 +126,17 @@ export function classifyContentType(topic: string): ContentType {
   const entertainmentMatches = ENTERTAINMENT_KEYWORDS.filter(k => lower.includes(k))
   if (entertainmentMatches.length >= 2) return 'entertainment_trend'
 
-  // Factual sensitive ellenőrzés
+  // Factual sensitive (high_risk) ellenőrzés — konkrét személy/botrány/vád/
+  // egészség/jog/pénzügy/bűnügy/családi kapcsolat/tisztség/idézet
   const sensitiveMatches = FACTUAL_SENSITIVE_KEYWORDS.filter(k => lower.includes(k))
   if (sensitiveMatches.length >= 1) return 'factual_sensitive'
 
-  // Factual general
+  // Factual news (standard_news) — általános hír/esemény/gazdasági-tech-tudományos-
+  // politikai fejlemény, de nem konkrét személyhez kötött
+  const newsMatches = FACTUAL_NEWS_KEYWORDS.filter(k => lower.includes(k))
+  if (newsMatches.length >= 1) return 'factual_news'
+
+  // Factual general — evergreen oktató jellegű tartalom, nem hír
   const generalMatches = FACTUAL_GENERAL_KEYWORDS.filter(k => lower.includes(k))
   if (generalMatches.length >= 1) return 'factual_general'
 
@@ -115,7 +148,13 @@ export function classifyContentType(topic: string): ContentType {
 }
 
 export function isStrictFactMode(contentType: ContentType): boolean {
-  return contentType === 'factual_sensitive'
+  return contentType === 'factual_sensitive' || contentType === 'factual_news'
+}
+
+export function getFactStrictnessLevel(contentType: ContentType): FactStrictnessLevel {
+  if (contentType === 'factual_sensitive') return 'high_risk'
+  if (contentType === 'factual_news') return 'standard_news'
+  return null
 }
 
 // ── Intenzitás downgrade ──────────────────────────────────────
@@ -129,6 +168,7 @@ export function applyIntensityDowngrade(
 
   const blockedForExtreme: ContentType[] = [
     'factual_sensitive',
+    'factual_news',
     'factual_general',
     'opinion_commentary',
   ]
@@ -164,8 +204,11 @@ export function buildVerifiedFactBlock(
   const allSources = [...webSources, ...youtubeSources, ...userSources]
   const sourceCount = allSources.length
 
-  // Minimum forrás követelmény
-  const minimumRequired = strictFactMode ? 2 : 1
+  const factStrictnessLevel = getFactStrictnessLevel(contentType)
+
+  // Minimum forrás követelmény — high_risk témánál több forrás kell,
+  // mint egy standard_news témánál
+  const minimumRequired = factStrictnessLevel === 'high_risk' ? 3 : factStrictnessLevel === 'standard_news' ? 2 : 1
   const minimumSourcesMet = sourceCount >= minimumRequired
 
   // Verified facts kinyerése a Serper snippetekből
@@ -189,21 +232,35 @@ export function buildVerifiedFactBlock(
     }
   })
 
-  // Forbidden claims — automatikus lista factual_sensitive esetén
+  // Forbidden claims — szint szerint differenciálva
   const forbiddenClaims: string[] = []
 
-  if (strictFactMode) {
+  if (factStrictnessLevel === 'standard_news' || factStrictnessLevel === 'high_risk') {
+    // Alap tiltások minden strict módnál (standard_news és high_risk is)
+    forbiddenClaims.push(
+      'Új tény kitalálása forrás nélkül',
+      'Időpont kitalálása',
+      'Szereplő kitalálása',
+      'Globális hír magyar eseménnyé alakítása',
+      'Bizonytalan állítás biztos tényként kezelése',
+      'Forrás nélküli következtetés',
+    )
+  }
+
+  if (factStrictnessLevel === 'high_risk') {
+    // Szigorúbb, személyhez/botrányhoz kötött tiltások — csak high_risk témánál
     forbiddenClaims.push(
       'Azonos vezetéknévből rokoni kapcsolatra következtetés',
       'Nem igazolt tisztség vagy beosztás állítása',
       'Nem igazolt idézet vagy nyilatkozat',
       'Nem igazolt reakció, érzelem vagy testbeszéd',
-      'Nem igazolt motiváció vagy szándék',
+      'Nem igazolt motiváció vagy szándék forrás nélkül',
       'Nem igazolt politikai kapcsolat vagy szövetség',
       'Nem igazolt pártviszony vagy lojalitás',
       'Nem igazolt személyes konfliktus',
-      'Nem igazolt esemény rekonstrukciója',
+      'Nem igazolt esemény rekonstrukciója vagy részletei',
       'Előzetes eredmény bizonyított áttörésként való bemutatása',
+      'Ellenőrizetlen személyazonosság állítása',
     )
   }
 
@@ -220,6 +277,7 @@ export function buildVerifiedFactBlock(
     topic,
     content_type: contentType,
     strict_fact_mode: strictFactMode,
+    fact_strictness_level: factStrictnessLevel,
     verified_facts: verifiedFacts,
     allowed_inferences: [
       'Ez arra utalhat, hogy...',
@@ -248,23 +306,37 @@ export function buildFactSafetyPromptRules(
   rules.push('')
   rules.push(`Tartalom tipusa: ${factBlock.content_type}`)
   rules.push(`Strict fact mode: ${factBlock.strict_fact_mode ? 'AKTIV' : 'inaktiv'}`)
+  rules.push(`Szigorusagi szint: ${factBlock.fact_strictness_level || 'nincs'}`)
   rules.push(`Intenzitas: ${intensityFinal}`)
   rules.push(`Rendelkezesre allo forrasok: ${factBlock.source_count} db`)
   rules.push('')
 
-  if (factBlock.strict_fact_mode) {
-    rules.push('SZIGORU TENYSZABALYOK (strict_fact_mode = true):')
+  if (factBlock.fact_strictness_level === 'standard_news') {
+    rules.push('STANDARD NEWS SZABALYOK (altalanos hir/esemeny/fejlemeny):')
     rules.push('- CSAK a verified_facts listaban szereplo allitasokat hasznald konkret tenyként.')
-    rules.push('- Ne talald ki a hianyzo reszleteket.')
-    rules.push('- Ne kovetkeztess rokonsagra azonos vezeteknévbol.')
-    rules.push('- Ne talalj ki tisztseget, beosztast vagy szervezeti kapcsolatot.')
-    rules.push('- Ne talalj ki esemenyeket, palyazatokat, konfrontat.')
-    rules.push('- Ne talalj ki idezeteket vagy nyilatkozatokat.')
-    rules.push('- Ne talalj ki reakciot, erzelmet vagy testbeszédet.')
-    rules.push('- Ne talalj ki motivaciot vagy szandekot.')
+    rules.push('- Ne talalj ki uj tenyt, amit a forrasok nem tamasztanak ala.')
+    rules.push('- Ne talalj ki idopontot vagy datumot.')
+    rules.push('- Ne talalj ki szereplot vagy erintett felet.')
+    rules.push('- Globalis/nemzetkozi hirt ne alakits at magyar esemennyé.')
+    rules.push('- Bizonytalan vagy elozetes allitast ne kezelj biztos tenyként.')
+    rules.push('- Forras nelkuli kovetkeztetest ne hasznalj tenyként.')
+    rules.push('- Ha nincs eleg teny, valassz gyengebb de igaz hookot.')
+    rules.push('')
+  }
+
+  if (factBlock.fact_strictness_level === 'high_risk') {
+    rules.push('HIGH RISK SZABALYOK (konkret szemely/botrany/vad/politikai konfliktus/egeszseg/jog/penzugy/bunugy/csaladi kapcsolat/tisztseg/idezet):')
+    rules.push('- CSAK a verified_facts listaban szereplo allitasokat hasznald konkret tenyként.')
+    rules.push('- Erzekeny allitashoz tobb (legalabb 2-3) fuggetlen forras szukseges — ha nincs, jelold bizonytalannak.')
+    rules.push('- Szemelyazonossagot csak akkor allits biztosra, ha a forrasok egyertelmuen igazoljak.')
+    rules.push('- Tisztseget vagy beosztast csak igazolt forras alapjan allits.')
+    rules.push('- Rokoni kapcsolatra ne kovetkeztess azonos vezeteknévbol vagy feltetelezesbol.')
+    rules.push('- Idezetet vagy nyilatkozatot csak akkor hasznalj, ha az szo szerint szerepel egy forrasban.')
+    rules.push('- Esemenyreszleteket (helyszin, sorrend, korulmenyek) csak igazolt forras alapjan allits, ne rekonstrualj.')
+    rules.push('- Motivaciot vagy szandekot ne allits forras nelkul.')
     rules.push('- Ne dramatizalj nem dokumentalt jelenetet.')
-    rules.push('- Ne nevezd biztosnak azt, ami csak lehetoseg.')
-    rules.push('- Ha nincs eleg ten, valassz gyengebb de igaz hookot.')
+    rules.push('- Ne nevezd biztosnak azt, ami csak lehetoseg vagy gyanu.')
+    rules.push('- Ha nincs eleg teny, valassz gyengebb de igaz hookot.')
     rules.push('')
   }
 

@@ -671,6 +671,9 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           creator_level: profile.creator_level,
           cache_only: cacheOnly,
           force_refresh: forceRefresh,
+          // Force refresh-nél kizárjuk a jelenleg látott témákat, hogy ne fizess
+          // kreditet ugyanannak a témának a visszakapásáért.
+          exclude_titles: forceRefresh ? topics.map(t => t.title) : [],
         }),
       })
       const data = await res.json()

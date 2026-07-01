@@ -226,7 +226,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const niche = (body.niche || '').replace(/[,;\s]+$/, '').trim()
-    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh } = body
+    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles } = body
+    const excludeTitles: string[] = Array.isArray(exclude_titles)
+      ? exclude_titles.map((t: string) => String(t).toLowerCase().trim()).filter(Boolean)
+      : []
     if (!niche) return NextResponse.json({ error: 'Niche megadása kötelező' }, { status: 400 })
 
     const supabase = createServerSupabaseClient()
@@ -431,6 +434,9 @@ export async function POST(request: NextRequest) {
       const topicLower = c.candidate_topic.toLowerCase()
       if (completedTopics.has(topicLower)) return false
       if (Array.from(rejectedTopics).some(r => topicLower.includes(r) || r.includes(c.seed_keyword.toLowerCase()))) return false
+      // Force refresh esetén ne adjuk vissza ugyanazt a témát, amit épp az imént mutattunk —
+      // különben a felhasználó fizet a kreditért, de vizuálisan semmi új nem történik.
+      if (force_refresh && excludeTitles.length > 0 && excludeTitles.some(et => topicLower.includes(et) || et.includes(topicLower))) return false
       return true
     })
 

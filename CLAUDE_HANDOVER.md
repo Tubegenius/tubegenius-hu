@@ -1,6 +1,6 @@
 # WILLVIRAL — CLAUDE CODE HANDOVER DOKUMENTUM
-# Dátum: 2026-07-01 (frissítve, előző verzió 2026-06-29)
-# Cél: Következő session kontextus átadás (Windows kontextusablak 95%-on, itt folytatjuk)
+# Dátum: 2026-07-01 (frissítve, előző verzió ugyanezen a napon korábban)
+# Cél: Következő session kontextus átadás (Windows kontextusablak megint 90%-on, itt folytatjuk)
 
 ---
 
@@ -12,7 +12,7 @@ Stack: Next.js 14.2, React, Tailwind CSS, Supabase, Anthropic Claude API, YouTub
 GitHub: github.com/Tubegenius/tubegenius-hu
 Supabase: sdvqzrcdvdtozfpjhnkh (eu-west-1)
 Domain: **willviral.com — MEGVÉVE, még nem deploy-olva**
-Social: **minden platformon (YouTube, TikTok, Instagram, Facebook) handle = "willviral.official"**, lefoglalva 2026-07-01
+Social: minden platformon (YouTube, TikTok, Instagram, Facebook) handle = "willviral.official", lefoglalva
 Modellek: lib/models.ts — primary: claude-sonnet-4-6, fast: claude-haiku-4-5-20251001
 
 ## MI A WILLVIRAL?
@@ -25,88 +25,102 @@ Nem sima AI-wrapper. A cél: megbízható creator intelligence platform, ahol mi
 5. Meglévő videót auditálni (Video Audit)
 6. Mindent Creator Memory-ban menteni
 
-**Brand-pozicionálás (2026-07-01 döntés):** a márka ne "egy újabb AI tool" legyen, hanem a Core Trust Engine hitelességére épüljön — "nem hazudik trendekről" ígéret. Célközönség: kezdő magyar YouTube/TikTok alkotók szűk közösségben, nem tömeges piac egyszerre.
+**Brand-pozicionálás:** a márka ne "egy újabb AI tool" legyen, hanem a Core Trust Engine hitelességére épüljön — "nem hazudik trendekről" ígéret. Célközönség: kezdő magyar YouTube/TikTok alkotók szűk közösségben, nem tömeges piac egyszerre.
 
-## BUILD ÁLLAPOT: `npx tsc --noEmit` — 0 HIBA (2026-07-01 végén ellenőrizve)
+## BUILD ÁLLAPOT: `npx tsc --noEmit` — 0 HIBA (ma este ellenőrizve, a legutóbbi trend feed fix után is)
 
-## ⚠️ GIT ÁLLAPOT — KRITIKUS, ELSŐ TEENDŐ A KÖVETKEZŐ SESSIONBEN
+## ⚠️ GIT ÁLLAPOT — ELSŐ TEENDŐ A KÖVETKEZŐ SESSIONBEN
 
-**Semmi nincs commitolva a teljes 2026-06-29 és 2026-07-01 közötti munkából.** A working tree tele van uncommitted/untracked fájllal (`git status` sok `??` sort mutat). Ez egyre kockázatosabb. **Első dolog legyen egy git commit checkpoint**, mielőtt bármi mást csinálunk.
+**A mai session változásai (lásd lent, 6 módosított fájl + 1 új migráció) MÉG NINCSENEK COMMITOLVA.** `git status` jelenleg ezt mutatja módosítottként:
+- app/api/opportunity/route.ts
+- app/api/video-package/route.ts
+- app/api/video-packages/route.ts
+- app/dashboard/video-package/page.tsx
+- components/dashboard/DashboardClient.tsx
+- lib/fact-safety.ts
+
+Új (untracked) fájl:
+- supabase/migrations/013_fact_strictness_level.sql
+
+**Első lépés legyen egy git commit checkpoint erre a 7 fájlra**, mielőtt bármi mást csinálunk. (A korábbi, 2026-06-29–07-01 közötti munka már commitolva van a `038112e` commitban — az rendben van, csak a mai új réteg nincs.)
+
+A projektben továbbra is ~45 db `willviral-*-patch*` / scratch mappa van szétszórva (untracked, régi one-off session-ekből) — ezek nem részei az élő appnak, commitolni nem kell őket, de idővel érdemes törölni vagy egy `.gitignore`-ba tenni, hogy ne zajongjanak a `git status`-ban.
 
 ---
 
-## 🔴 MAI SESSION (2026-07-01) — MIT CSINÁLTUNK
+## 🔴 MAI SESSION (2026-07-01, második fele) — MIT CSINÁLTUNK
 
-### 1. Supabase biztonsági incidens — MEGOLDVA
-Supabase security advisor riasztást küldött: `youtube_search_logs` tábla RLS nélkül, publikusan olvasható/írható/törölhető volt. Kiderült: a [002_youtube_search_logs.sql](supabase/migrations/002_youtube_search_logs.sql) migráció sosem futott le élesben (a kód RLS-t előírta, az élő DB mégsem tartalmazta). **Felhasználó lefuttatta a fix SQL-t, `select tablename from pg_tables where schemaname='public' and rowsecurity=false` most üres eredményt ad — MEGOLDVA.**
+### 1. Ellenőrzés: a korábbi session 3 döntése tényleg élesben úgy működik-e, ahogy megbeszéltük
+A user visszakérdezett a korábban meghozott 3 döntésre (snapshot táblák passzív gyűjtése, video_packages TEXT+JSONB szétválasztás, Similar Videos relevancia-kapu + viral ranking). Élő Supabase lekérdezéssel ellenőriztem — **mindhárom pontosan úgy működik éles adatokkal is, ahogy eltervezve volt, semmit nem kellett javítani**:
+- `youtube_videos`: 119 sor, `youtube_video_snapshots`: 246 sor, `youtube_channels`: 111 sor, `trend_candidates`: 26 sor (mind valós, a session során felgyűlt adat)
+- `video_packages` új JSONB mezői léteznek és helyesen vannak feltöltve a frontendből
+- `decideSimilarVideo()` relevancia-kapu (< 60 → hard reject) + `scoreValidatedVideo()` viral-súlyozás (velocity 30% / engagement 25% / outlier 20% / freshness 15% / relevancia 10%) pontosan a megbeszélt logika
 
-Tanulság: a projektben ~15 db `willviral-*-patch*` mappa van szétszórt, sosem konszolidált SQL migrációval, amiket kézzel másoltak be a Supabase SQL Editorba — hibázásra hajlamos folyamat. **Hosszabb távon érdemes ezeket egy `supabase/migrations/` mappába összevonni.**
+### 2. classifyContentType bővítés — MEGTÖRTÉNT, ÉLESÍTVE
+A korábban nyitva hagyott döntés lezárva: a user döntött, hogy **az általános hírek is triggereljék a `strict_fact_mode`-ot**, de két szigorúsági szinttel:
+- **standard_news** — általános hír/esemény/gazdasági-technológiai-tudományos-politikai fejlemény. Enyhébb tiltások: új tény/időpont/szereplő kitalálása, globális hír magyar eseménnyé alakítása, bizonytalan állítás biztos tényként kezelése, forrás nélküli következtetés. Min. 2 forrás szükséges.
+- **high_risk** — konkrét személy/botrány/vád/politikai konfliktus/egészség/jog/pénzügy/bűnügy/családi kapcsolat/tisztség/idézet. Szigorúbb: a fentiek + személyazonosság/tisztség/rokoni kapcsolat/idézet/eseményrészletek ellenőrzés, motiváció/szándék tiltása forrás nélkül. Min. 3 forrás szükséges.
 
-### 2. Codex-spec audit — mennyire egyezik a valós rendszer egy 5-pontos külső specifikációval
-A user kapott egy "Codex" specifikációt (Fact Safety Layer, Trend Quality Gate, Similar Videos, Snapshot adatvagyon, Encoding fix). Teljes fájlszintű audit lett elvégezve — **meglepő eredmény: a spec nagy része már készen volt** egy korábbi (nem ismert) körből:
+**Megvalósítás** ([lib/fact-safety.ts](lib/fact-safety.ts)):
+- Új `ContentType = 'factual_news'` + új `FactStrictnessLevel = 'standard_news' | 'high_risk' | null` típus
+- `classifyContentType()` sorrend: entertainment(2+) → factual_sensitive (high_risk) → factual_news (standard_news) → factual_general (evergreen, nem strict) → entertainment(1) → default
+- `isStrictFactMode()` most `factual_sensitive` VAGY `factual_news` esetén is `true`
+- Új `getFactStrictnessLevel()` export
+- `buildVerifiedFactBlock()` szint szerint differenciált `forbidden_claims` listát és `minimumRequired` forrásszámot ad
+- `buildFactSafetyPromptRules()` külön prompt-szöveget generál standard_news-hoz és high_risk-hez
 
-- **Fact Safety Layer (lib/fact-safety.ts)** — ~90% kész volt már: `content_type`, `strict_fact_mode`, intensity downgrade, `verified_fact_block`, `forbidden_claims`, `quality_status`, Sonnet+Haiku prompt szigorítás, `insufficient_sources` blokkolás mind megvolt [app/api/video-package/route.ts](app/api/video-package/route.ts)-ben bekötve.
-- **Trend Candidate Quality Gate** — kész volt: `MIN_USER_FACING_RELEVANCE=60`, `topicMatchSerperYoutube()`, `validateHungarianSeeds()` (szó szerint a spec tiltott seed-példáival), `weak_signal` sosem jut userhez.
-- **Similar Videos** — kész volt: `viral_video_score`, cluster-median outlier, badge-ek — egyetlen eltérés a súlyozásban (lásd lent).
-- **Snapshot adatvagyon** — 0%, semmi nem létezett.
-- **Encoding hibák** — nem volt reprodukálható a jelenlegi forrásban.
+**Teszt:** 12 mintatéma (politika, celeb, gyógyszer, baleset → high_risk; magyar/globális gazdasági hír, kereskedelmi megállapodás, tudományos áttörés, EU-csúcs → standard_news; evergreen tudomány/AI-oktatás, TikTok challenge, recept → nem strict) — **12/12 helyes**, nem blokkol túl agresszívan. A tesztet egy standalone `tsc` compile + node script futtatással validáltam, utána törölve.
 
-### 3. Ma ténylegesen elvégzett fejlesztés (a fenti audit alapján, user jóváhagyásával)
+**DB + mentés bekötve:**
+- Új [supabase/migrations/013_fact_strictness_level.sql](supabase/migrations/013_fact_strictness_level.sql) — `fact_strictness_level TEXT` oszlop + index a `video_packages` táblán
+- **A migráció LEFUTOTT ÉLESBEN, ellenőrizve** (`fact_strictness_level` oszlop élesben lekérdezhető)
+- Bekötve: [app/api/video-package/route.ts](app/api/video-package/route.ts) (generálás, `result.fact_strictness_level`), [app/api/video-packages/route.ts](app/api/video-packages/route.ts) (mentés), [app/dashboard/video-package/page.tsx](app/dashboard/video-package/page.tsx) (mindkét save hívás + típus)
 
-**a) Snapshot táblák (passzív adatgyűjtés)** — [supabase/migrations/011_youtube_snapshot_tables.sql](supabase/migrations/011_youtube_snapshot_tables.sql)
-- Új táblák: `youtube_videos`, `youtube_video_snapshots`, `youtube_channels`, `youtube_channel_snapshots` (séma kész, még nem íródik — subscriber-adathoz külön API hívás kellene), `trend_candidates`, `topic_clusters` (séma kész, klaszterező logika még nincs)
-- Új [lib/youtube-snapshot.ts](lib/youtube-snapshot.ts) helper — try/catch-be csomagolt, nem blokkolja a fő funkciót hiba esetén
-- Bekötve: [app/api/similar-videos/route.ts](app/api/similar-videos/route.ts) (`baseVideos` mentése) + [lib/trend-radar.ts](lib/trend-radar.ts) (`youtubeVideos` + végleges `trendCandidates` mentése)
-- **Nincs extra API-hívás** — csak azt menti, amit a rendszer amúgy is lekér
-- RLS bekapcsolva minden új táblán, csak `service_role` fér hozzá
+### 3. Trend Feed bug — MEGTALÁLVA ÉS JAVÍTVA
+**Tünet:** a user jelentette, hogy a Trend Feed "Új ajánlás — 2 kredit" gombja levonja a kreditet, de ugyanazt a témát hozza vissza, amit már látott.
 
-**b) video_packages fact-safety mezők** — [supabase/migrations/012_video_package_fact_safety_fields.sql](supabase/migrations/012_video_package_fact_safety_fields.sql)
-- User döntése: a meglévő `verified_fact_block TEXT` oszlop **nem** lett átalakítva (kockázat elkerülése), helyette új oszlopok: `verified_fact_block_json`, `forbidden_claims`, `sources_used` (JSONB), `quality_status`, `content_type`, `intensity_original`, `intensity_final` (TEXT), `strict_fact_mode` (BOOLEAN)
-- Frissítve: [app/api/video-packages/route.ts](app/api/video-packages/route.ts) (mentő endpoint) + [app/dashboard/video-package/page.tsx](app/dashboard/video-package/page.tsx) mindkét save hívása (`autoSavePackage` és `savePackage`) — korábban ezek a mezők ki lettek számolva a backend-en, de **sosem lettek elmentve** a DB-be.
+**Root cause:** a "force refresh" valóban friss keresést futtatott (bypassolta mindkét cache-t: `opportunity_cache`, `trend_candidate_cache`), DE nem volt semmilyen mechanizmus, ami kizárná a **már megmutatott** témákat az újraértékelésből. A kizárás eddig csak a Creator Memory `completed`/`rejected` state-jeit nézte — nem azt, amit a user az imént, ugyanabban a böngészési munkamenetben már látott. Mivel a valós YouTube/Serper adatok pár perc alatt nem változnak, a friss keresés statisztikailag ugyanazt a legerősebb trendet találta meg újra — érvényes eredmény lévén a kredit levonódott.
 
-**c) classifyContentType teszt (NEM élesítve, csak vizsgálat)**
-8 mintatémán tesztelve (politika, celeb-válás, gyógyszer, tudomány, AI, TikTok challenge, magyar gazdasági hír, baleset) — eredmény: jól kalibrált, nem túl agresszív. **Nyitott döntés a usernek:** az általános "hírek" témák jelenleg NEM triggerelik a `strict_fact_mode`-ot (csak konkrét esemény/személy/botrány igen) — a Codex-spec szerint minden "aktuális hír" strict kéne legyen. **Nem lett módosítva, döntés vár.**
+**Javítás:**
+- [components/dashboard/DashboardClient.tsx](components/dashboard/DashboardClient.tsx): `loadOpportunities` force-refresh híváskor most elküldi a jelenleg látott `topics` state címeit `exclude_titles` mezőben
+- [app/api/opportunity/route.ts](app/api/opportunity/route.ts): a `filteredCandidates` szűrő (kb. 430. sor) most force_refresh esetén kizárja azokat a jelölteket is, amiknek a `candidate_topic`-ja egyezik/tartalmazza az `exclude_titles`-ben kapott korábbi címeket
+- Ha kizárás után nem marad elég erős **új** téma, a már meglévő logika nem vonja le a kreditet, és jelzi: "Most nem találtunk elég erős új témát. Kreditet nem vontunk le."
 
-**d) Similar Videos scoring — nem kellett módosítani**
-User explicit döntése: relevance_score >= 60 legyen kemény kapu (nem csak súly), utána viral_video_score alapú rangsor (velocity/freshness/engagement/outlier domináljon). Ellenőrizve: [lib/scoring/willviral-decision-engine.ts](lib/scoring/willviral-decision-engine.ts) `decideSimilarVideo()` már pontosan ezt csinálja (`relevance_score < 60` → hard reject, utána `scoreValidatedVideo()` súlyozott score: velocity 0.30, engagement 0.25, outlier 0.20, freshness 0.15, relevance 0.10). **Semmi nem lett módosítva, már megfelelt.**
+**MÉG NEM ELLENŐRIZVE ÉLŐ BÖNGÉSZŐBEN** — a `tsc --noEmit` tiszta, de a tényleges böngészős tesztet (kattints "Új ajánlás"-ra kétszer egymás után) nem futtattuk le.
 
-### 4. Dev szerver
-`npm run dev` elindítva, fut: **http://localhost:3000**
+### 4. Windows kontextusablak-probléma megbeszélve
+A user jelezte, hogy a Windows Claude Code kontextusablak nagyon gyorsan (pár tool-hívás alatt) eléri a 90%-ot, ami megnehezíti a munkát. Tanács adva: kisebb, célzottabb feladatok friss session-ökben, `/clear` gyakoribb használata, memória + handover doc a folytonossághoz nagy chat-history helyett. **Ez nem projekt-hiba, hanem munkamódszer-kérdés — a következő session-ben érdemes ezt szem előtt tartani.**
 
 ---
 
 ## ⏳ KÖVETKEZŐ SESSION TEENDŐI (sorrendben)
 
-1. **Git commit checkpoint** — ELSŐ lépés legyen, rengeteg uncommitted munka van.
-2. **Futtasd le a két új migrációt élesben**, ha a user még nem tette meg:
-   - `supabase/migrations/011_youtube_snapshot_tables.sql`
-   - `supabase/migrations/012_video_package_fact_safety_fields.sql`
-   - Utána ellenőrzés: `select tablename from pg_tables where schemaname='public' and rowsecurity=false;` → üres kell legyen
-3. **Döntés kell:** classifyContentType — legyen-e minden "hír" típusú téma is `strict_fact_mode`, vagy maradjon a jelenlegi (csak konkrét esemény/személy/botrány trigger)?
-4. **Élő böngészős teszt** a mai változásokra (Similar Videos, Video Package mentés, snapshot írások — nézd meg konzolban/Supabase table editor-ban, hogy tényleg mentődnek-e sorok)
-5. **Korábbról nyitva maradt, még mindig releváns:**
-   - Opportunity Engine drilldown state mentése — **ELKÉSZÜLT** korábban ma (activeDrilldown sessionStorage-ban, app/dashboard/opportunities/page.tsx:728,769,842,980)
-   - Video Package saját keresési input memória — **ELKÉSZÜLT** korábban ma (video-package/page.tsx:449 useEffect)
-   - Core Trust Engine 10 teszteset — **10/10 PASS**, 2 hibát javítottunk (niche-fit arányos számítás, `contradicts()` forrásszám-alapú)
-   - LoadingScreen animált logó pótlás minden oldalon — **KÉSZ** (opportunities, script-extractor, similar-videos, video-audit, video-package, viral-score)
-6. **Ezután:** Stripe webhook / production / deploy blokk, VAGY social media bio-szövegek megírása (felajánlva, nem csinálva)
+1. **Git commit checkpoint** a mai 7 fájlra (lásd fent a listát) — ELSŐ lépés.
+2. **Élő böngészős teszt a Trend Feed fixre**: nyisd meg a Dashboardot, kattints "Új ajánlás — 2 kredit"-re kétszer egymás után ugyanazzal a niche-el — nézd meg, hogy vagy valódi más témát kapsz, vagy nem vonódik kredit (nem szabad, hogy ugyanaz jöjjön vissza kredit levonással).
+3. **Élő böngészős teszt a classifyContentType bővítésre**: generálj egy Video Package-t egy "standard_news" jellegű témával (pl. "Magyar gazdasági hír: az infláció alakulása") és egy "high_risk" témával (pl. politikus/celeb), nézd meg hogy a `fact_strictness_level` mező helyesen mentődik-e (Supabase table editor: `video_packages.fact_strictness_level`).
+4. **Régi scratch mappák rendrakása** — ~45 db `willviral-*-patch*` mappa zajong a `git status`-ban, érdemes törölni vagy `.gitignore`-ba tenni.
+5. **Ezután:** Stripe webhook / production / deploy blokk, VAGY social media bio-szövegek megírása (felajánlva, nem csinálva).
 
 ---
 
 ## ARCHITEKTÚRA
 
 ### Backend pipeline (Opportunity Engine):
-User niche → detectNicheIntent() → expandTopicQueries() → generateSeedsForNiche() (Haiku) → buildTrendCandidates() (Serper + YouTube, most snapshot-mentéssel) → computeOpportunityScore() → validateCandidateConsistency() → buildValidationSummary() → Claude explain (Haiku) → buildTopic() → response
+User niche → detectNicheIntent() → expandTopicQueries() → generateSeedsForNiche() (Haiku) → buildTrendCandidates() (Serper + YouTube, snapshot-mentéssel) → filteredCandidates (Creator Memory + **exclude_titles kizárás force refresh-nél, ÚJ**) → evaluateCandidate() (Core Trust Engine) → Claude explain (Haiku) → toOpportunityTopic() → response
 
 ### Similar Videos pipeline:
 User topic → generateSimilarVideoQueries() (Haiku) → youtubeSearch() (budget 3) → calcCombinedRelevance() → snapshot mentés → decideSimilarVideo() (relevance hard gate 60) → calculateNicheFit() → response
+
+### Video Package Fact Safety pipeline:
+topic → classifyContentType() → isStrictFactMode() + getFactStrictnessLevel() (ÚJ: standard_news/high_risk) → applyIntensityDowngrade() → buildVerifiedFactBlock() (szint szerint differenciált forbidden_claims + min. forrásszám) → buildFactSafetyPromptRules() (szint szerint eltérő prompt) → generateCreativeCore() (Sonnet) → generatePackaging() (Haiku) → mentés (verified_fact_block_json, fact_strictness_level stb.)
 
 ### Core Trust Engine (lib/core-trust-engine/):
 types, score, validate, decide, safe-output, cache, index — egyetlen központi döntési motor. Súlyozás: web 30% / niche-fit 20% / content-gap 20% / video 15% / freshness 15%. 5 döntési típus: hybrid_validated_trend, web_validated_opportunity, video_inspiration, research_required, polluted_candidate.
 
 ### Kredit rendszer:
 Free: napi 3 Similar Videos + heti 1 Opportunity Engine ingyenes
-Utána: kredit levonás (success-based — csak ha van valid eredmény, video-audit és similar-videos kredit-biztonsági fix ma korábban)
+Utána: kredit levonás (success-based — csak ha van valid eredmény)
+Trend Feed manuális frissítés: MINDIG 2 kredit, DE csak ha ténylegesen új téma jön (lásd a mai fix-et)
 Stripe subscription: Starter 2990 / Creator 5990 / Pro 11990 Ft/hó
 
 ---
@@ -114,10 +128,10 @@ Stripe subscription: Starter 2990 / Creator 5990 / Pro 11990 Ft/hó
 ## KULCS FÁJLOK
 
 ### Backend:
-- app/api/opportunity/route.ts — Opportunity Engine fő logika
-- app/api/similar-videos/route.ts — Similar Videos, Haiku query expansion, niche fit, **snapshot mentés (ma)**
-- app/api/video-package/route.ts — Video Package Generator, Fact Safety Layer (lib/fact-safety.ts)
-- app/api/video-packages/route.ts — Mentés/lista/törlés, **fact-safety mezőkkel bővítve (ma)**
+- app/api/opportunity/route.ts — Opportunity Engine fő logika, **exclude_titles kizárás force refresh-nél (ma)**
+- app/api/similar-videos/route.ts — Similar Videos, Haiku query expansion, niche fit, snapshot mentés
+- app/api/video-package/route.ts — Video Package Generator, Fact Safety Layer, **fact_strictness_level bekötve (ma)**
+- app/api/video-packages/route.ts — Mentés/lista/törlés, **fact_strictness_level mentése (ma)**
 - app/api/video-audit/route.ts — Video Audit, hibrid scoring
 - app/api/viral-score/route.ts — Viral Score
 - app/api/script-extract/route.ts — Script Extractor
@@ -127,37 +141,41 @@ Stripe subscription: Starter 2990 / Creator 5990 / Pro 11990 Ft/hó
 ### Lib modulok (legfontosabbak):
 - lib/core-trust-engine/ — types, score, validate, decide, safe-output, cache, index
 - lib/youtube-service.ts — Központi YouTube API, query budget, cache, quota guard
-- lib/youtube-snapshot.ts — **ÚJ (ma)** — passzív snapshot mentés helper
+- lib/youtube-snapshot.ts — passzív snapshot mentés helper
 - lib/trend-radar.ts — Serper + YouTube trend candidate pipeline, snapshot mentéssel bekötve
-- lib/fact-safety.ts — Content classification, strict_fact_mode, verified_fact_block, forbidden_claims
+- lib/fact-safety.ts — Content classification, **factual_news + FactStrictnessLevel bővítés (ma)**
 - lib/candidate-consistency.ts, lib/validation-summary.ts, lib/niche-fit.ts
 - lib/usage-protection.ts — Free limitek, kredit check
 - lib/scoring/willviral-decision-engine.ts — decideSimilarVideo(), scoreValidatedVideo()
+- lib/seed-generator.ts — Haiku alapú seed generálás niche-ből (nem cache-elt, minden force refresh-nél újrahívva)
 - lib/stripe.ts, lib/credits.ts
 
 ### Frontend:
-- components/ui/LoadingScreen.tsx — Animált W logó, **most minden fő oldalon bekötve**
-- app/dashboard/opportunities/page.tsx — drilldown state mentés (ma reggel)
-- app/dashboard/video-package/page.tsx — input auto-save + fact-safety mezők mentése (ma)
+- components/ui/LoadingScreen.tsx — Animált W logó, minden fő oldalon bekötve
+- components/dashboard/DashboardClient.tsx — Trend Feed / Dashboard, **exclude_titles küldése force refresh-nél (ma)**
+- app/dashboard/opportunities/page.tsx — drilldown state mentés
+- app/dashboard/video-package/page.tsx — input auto-save + fact-safety mezők mentése, **fact_strictness_level típus + save (ma)**
 - app/dashboard/similar-videos/page.tsx
 
 ---
 
-## SUPABASE TÁBLÁK (2026-07-01 állapot)
+## SUPABASE TÁBLÁK (2026-07-01 este állapot, élesben ellenőrizve)
 
-profiles, user_credits, creator_memory, video_packages (**bővítve ma**: verified_fact_block_json, forbidden_claims, sources_used, quality_status, content_type, strict_fact_mode, intensity_original, intensity_final), video_audits, ai_usage_logs, opportunity_cache, trend_candidate_cache, youtube_search_logs (**RLS fix ma**), source_video_analysis, topic_feedback, youtube_search_cache, **ÚJ (ma, migráció még lehet hogy nem futott le élesben)**: youtube_videos, youtube_video_snapshots, youtube_channels, youtube_channel_snapshots, trend_candidates, topic_clusters
+profiles, user_credits, creator_memory, video_packages (verified_fact_block_json, forbidden_claims, sources_used, quality_status, content_type, strict_fact_mode, intensity_original, intensity_final, **fact_strictness_level — ÚJ ma, élesben megvan**), video_audits, ai_usage_logs, opportunity_cache, trend_candidate_cache, youtube_search_logs (RLS-fixelve), source_video_analysis, topic_feedback, youtube_search_cache, youtube_videos (119 sor), youtube_video_snapshots (246 sor), youtube_channels (111 sor), youtube_channel_snapshots, trend_candidates (26 sor), topic_clusters (0 sor, klaszterező logika még nincs megírva)
 
-Migrációs fájlok szétszórva `supabase/migrations/` (001-012) ÉS `willviral-*-patch*/` mappákban — konszolidálás még várat magára.
+Migrációs fájlok: `supabase/migrations/001-013`. A `willviral-*-patch*/` mappákban lévő SQL-ek régiek/redundánsak, konszolidálás még várat magára.
 
 ---
 
 ## ISMERT PROBLÉMÁK / NYITOTT DÖNTÉSEK
 
-1. **classifyContentType "hír" határeset** — lásd fent, döntés vár.
-2. **Stripe webhook nincs aktív production-ben** — dev-ben manuális kredit jóváírás.
-3. **Git — semmi nincs commitolva** — lásd fent, sürgős.
-4. **Migrációk 011/012 élesítése** — ellenőrizni kell, lefutott-e már.
-5. **Similar Videos súlyozás** — a Codex-spec numerikusan mást javasolt (relevance 0.25 vs jelenlegi 0.10), de a user explicit döntött úgy, hogy a jelenlegi (relevancia = kapu, nem fő súly) marad — ez nem hiba, tudatos döntés.
+1. **Git — a mai 7 fájl nincs commitolva** — lásd fent, sürgős.
+2. **Trend Feed fix nincs élő böngészőben tesztelve** — csak `tsc` szinten ellenőrizve.
+3. **classifyContentType bővítés nincs élő böngészőben tesztelve** — csak standalone script szinten (12/12 helyes).
+4. **Stripe webhook nincs aktív production-ben** — dev-ben manuális kredit jóváírás.
+5. **topic_clusters tábla üres** — a klaszterező logika (trend-mintázat felismerés a felgyűlt snapshot-adatból) még nincs megírva, csak a séma létezik.
+6. **~45 db régi scratch/patch mappa** szemetel a `git status`-ban, rendrakásra vár.
+7. **Similar Videos súlyozás** — user explicit döntött úgy, hogy relevancia = kapu (nem fő súly) marad — ez tudatos döntés, nem hiba.
 
 ---
 

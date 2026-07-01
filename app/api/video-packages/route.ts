@@ -63,6 +63,7 @@ export async function POST(request: NextRequest) {
       quality_status: body.quality_status || null,
       content_type: body.content_type || null,
       strict_fact_mode: body.strict_fact_mode || false,
+      fact_strictness_level: body.fact_strictness_level || null,
       intensity_original: body.intensity_original || null,
       intensity_final: body.intensity_final || null,
       hook: body.hook,

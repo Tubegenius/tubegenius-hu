@@ -5,6 +5,7 @@ import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } fr
 import {
   classifyContentType,
   isStrictFactMode,
+  getFactStrictnessLevel,
   applyIntensityDowngrade,
   buildVerifiedFactBlock,
   buildFactSafetyPromptRules,
@@ -327,6 +328,7 @@ export async function POST(request: NextRequest) {
     // Content type classification
     const contentType = classifyContentType(topic)
     const strictFactMode = isStrictFactMode(contentType)
+    const factStrictnessLevel = getFactStrictnessLevel(contentType)
 
     // Intensity downgrade ha szükséges
     const { final_intensity, was_downgraded, reason: downgrade_reason } = applyIntensityDowngrade(
@@ -381,6 +383,7 @@ export async function POST(request: NextRequest) {
         error: 'insufficient_sources',
         quality_status: 'insufficient_sources',
         content_type: contentType,
+        fact_strictness_level: factStrictnessLevel,
         message: 'A temahoz nincs elegendo ellenorzott informacio egy megbizhato videócsomag elkeszitesehez. Adj meg forrasokat, vagy valassz masik temat.',
       }, { status: 422 })
     }
@@ -442,6 +445,7 @@ export async function POST(request: NextRequest) {
       intensity_downgrade_reason: downgrade_reason,
       content_type: contentType,
       strict_fact_mode: strictFactMode,
+      fact_strictness_level: factStrictnessLevel,
       quality_status: qualityStatus,
       estimated_word_count: `${t.words} szo`,
       estimated_duration: isShorts ? `${t.seconds} mp` : `${t.minutes} perc`,

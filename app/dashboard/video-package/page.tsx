@@ -33,6 +33,7 @@ interface VideoPackageResult {
   estimated_duration?: string
   content_type?: string
   strict_fact_mode?: boolean
+  fact_strictness_level?: string | null
   quality_status?: string
   forbidden_claims?: string[]
   verified_fact_block?: unknown
@@ -688,6 +689,7 @@ export default function VideoPackagePage() {
           quality_status: pkg.quality_status || null,
           content_type: pkg.content_type || null,
           strict_fact_mode: pkg.strict_fact_mode || false,
+          fact_strictness_level: pkg.fact_strictness_level || null,
           intensity_original: pkg.intensity_original || null,
           intensity_final: pkg.intensity_final || null,
           hook: pkg.hook,
@@ -774,6 +776,7 @@ export default function VideoPackagePage() {
         quality_status: result.quality_status || null,
         content_type: result.content_type || null,
         strict_fact_mode: result.strict_fact_mode || false,
+        fact_strictness_level: result.fact_strictness_level || null,
         intensity_original: result.intensity_original || null,
         intensity_final: result.intensity_final || null,
         hook: result.hook,
