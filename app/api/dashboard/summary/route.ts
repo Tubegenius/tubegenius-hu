@@ -152,7 +152,7 @@ export async function GET() {
         date: p.created_at,
         status: p.quality_status,
         score: null,
-        href: '/dashboard/video-package',
+        href: `/dashboard/video-package?id=${p.id}`,
         trend_status: trend?.trend_status ?? null,
         views_delta: trend?.views_delta ?? null,
       }
@@ -166,7 +166,7 @@ export async function GET() {
         date: a.created_at,
         status: a.decision || (a.overall_score != null ? `${a.overall_score} pont` : null),
         score: a.overall_score ?? null,
-        href: '/dashboard/video-audit',
+        href: `/dashboard/video-audit?id=${a.id}`,
         trend_status: trend?.trend_status ?? null,
         views_delta: trend?.views_delta ?? null,
       }

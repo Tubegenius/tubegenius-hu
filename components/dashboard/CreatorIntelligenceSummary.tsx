@@ -173,11 +173,11 @@ export default function CreatorIntelligenceSummary() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Legutóbbi elemzéseid — táblázat */}
+        {/* Legutóbbi történeted — táblázat */}
         <div className="md:col-span-2 p-5" style={PANEL_STYLE}>
           <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: '#F8FAFC' }}>
             <i className="ti ti-clock-hour-4" style={{ color: '#94A3B8' }} />
-            Legutóbbi elemzéseid
+            Legutóbbi történeted
           </h3>
           {recent_activity.length === 0 ? (
             <EmptyState text="Még nincs naplózott aktivitás." />
@@ -319,13 +319,13 @@ export default function CreatorIntelligenceSummary() {
                   {projects.map((p, i) => {
                     const meta = ACTIVITY_ICON[p.type]
                     return (
-                      <div key={i} className="flex items-center gap-2.5 py-1.5">
+                      <Link key={i} href={p.href} className="flex items-center gap-2.5 py-1.5 -mx-1 px-1 rounded-lg transition-colors hover:bg-white/[0.03]">
                         <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${meta.color}22` }}>
                           <i className={`ti ${meta.icon}`} style={{ color: meta.color, fontSize: '11px' }} />
                         </div>
                         <span className="text-xs flex-1 min-w-0 truncate" style={{ color: '#CBD5E1' }}>{p.title.replace(/^(Videócsomag készült: |Audit lefuttatva: )/, '')}</span>
                         <span className="text-xs flex-shrink-0" style={{ color: '#64748B' }}>{formatDate(p.date)}</span>
-                      </div>
+                      </Link>
                     )
                   })}
                 </div>
