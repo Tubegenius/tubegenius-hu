@@ -32,10 +32,12 @@ export async function GET() {
     .order('checked_at', { ascending: false })
     .limit(500)
 
+  // Legfeljebb 10 legutóbbi snapshot candidate-enként — a delta-hoz elég 2, de
+  // a sparkline-hoz (Sparkline.tsx) valódi, mért idősor kell.
   const snapshotsByCandidate = new Map<string, typeof snapshots>()
   for (const s of snapshots || []) {
     const arr = snapshotsByCandidate.get(s.tracked_candidate_id) || []
-    if (arr.length < 2) arr.push(s)
+    if (arr.length < 10) arr.push(s)
     snapshotsByCandidate.set(s.tracked_candidate_id, arr)
   }
 
@@ -46,6 +48,8 @@ export async function GET() {
     const engagementDelta = latest?.engagement_rate != null && previous?.engagement_rate != null
       ? Math.round((latest.engagement_rate - previous.engagement_rate) * 100) / 100
       : null
+    // Kronológiai sorrendbe (régi -> új) a sparkline-hoz
+    const viewHistory = [...snaps].reverse().map(s => s.total_views ?? 0)
 
     return {
       id: c.id,
@@ -60,13 +64,14 @@ export async function GET() {
       next_check_at: c.next_check_at,
       refresh_priority: c.refresh_priority,
       status: c.status,
-      snapshot_count: (snapshotsByCandidate.get(c.id) || []).length,
+      snapshot_count: snaps.length,
       total_views: latest?.total_views ?? null,
       views_delta: latest?.views_delta ?? null,
       trend_velocity: latest?.trend_velocity ?? null,
       trend_status: latest?.trend_status ?? null,
       engagement_rate: latest?.engagement_rate ?? null,
       engagement_delta: engagementDelta,
+      view_history: viewHistory,
     }
   })
 

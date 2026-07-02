@@ -45,26 +45,33 @@ export async function GET() {
   // ── Trend alakulás — a témák egy részéhez tartozik tracked_trend_candidate ──
   // (lásd lib/trend-tracking.ts). Ha van hozzá legutóbbi snapshot, azt a
   // trend_status-t (rising/stable/declining) mutatjuk a témák mellett.
-  const trackedTrendByTopic = new Map<string, { trend_status: string | null; views_delta: number | null }>()
+  type TrendInfo = { trend_status: string | null; views_delta: number | null; view_history: number[] }
+  const trackedTrendByTopic = new Map<string, TrendInfo>()
   if (tracked.length > 0) {
     const { data: snapshots } = await admin
       .from('trend_candidate_snapshots')
-      .select('tracked_candidate_id, trend_status, views_delta, checked_at')
+      .select('tracked_candidate_id, trend_status, views_delta, total_views, checked_at')
       .in('tracked_candidate_id', tracked.map(t => t.id))
       .order('checked_at', { ascending: false })
-    const latestByCandidate = new Map<string, { trend_status: string | null; views_delta: number | null }>()
+      .limit(500)
+    const byCandidate = new Map<string, typeof snapshots>()
     for (const s of snapshots || []) {
-      if (!latestByCandidate.has(s.tracked_candidate_id)) {
-        latestByCandidate.set(s.tracked_candidate_id, { trend_status: s.trend_status, views_delta: s.views_delta })
-      }
+      const arr = byCandidate.get(s.tracked_candidate_id) || []
+      if (arr.length < 10) arr.push(s)
+      byCandidate.set(s.tracked_candidate_id, arr)
     }
     for (const t of tracked) {
-      const latest = latestByCandidate.get(t.id)
-      if (latest) trackedTrendByTopic.set(t.candidate_topic.toLowerCase().trim(), latest)
+      const snaps = byCandidate.get(t.id) || []
+      if (snaps.length === 0) continue
+      trackedTrendByTopic.set(t.candidate_topic.toLowerCase().trim(), {
+        trend_status: snaps[0].trend_status,
+        views_delta: snaps[0].views_delta,
+        view_history: [...snaps].reverse().map(s => s.total_views ?? 0),
+      })
     }
   }
 
-  function findTrend(topic: string | null | undefined): { trend_status: string | null; views_delta: number | null } | null {
+  function findTrend(topic: string | null | undefined): TrendInfo | null {
     if (!topic) return null
     const key = topic.toLowerCase().trim()
     if (trackedTrendByTopic.has(key)) return trackedTrendByTopic.get(key)!
@@ -127,6 +134,7 @@ export async function GET() {
     href: string
     trend_status: string | null
     views_delta: number | null
+    view_history: number[]
   }
 
   // feature_name → { type, label, href } — csak azok a funkciók, amiknek NINCS
@@ -155,6 +163,7 @@ export async function GET() {
         href: `/dashboard/video-package?id=${p.id}`,
         trend_status: trend?.trend_status ?? null,
         views_delta: trend?.views_delta ?? null,
+        view_history: trend?.view_history ?? [],
       }
     }),
     ...audits.map(a => {
@@ -169,6 +178,7 @@ export async function GET() {
         href: `/dashboard/video-audit?id=${a.id}`,
         trend_status: trend?.trend_status ?? null,
         views_delta: trend?.views_delta ?? null,
+        view_history: trend?.view_history ?? [],
       }
     }),
     ...memory.map(m => {
@@ -183,6 +193,7 @@ export async function GET() {
         href: '/dashboard/memory',
         trend_status: trend?.trend_status ?? null,
         views_delta: trend?.views_delta ?? null,
+        view_history: trend?.view_history ?? [],
       }
     }),
     ...usageLogs
@@ -199,6 +210,7 @@ export async function GET() {
           href: meta.href,
           trend_status: null,
           views_delta: null,
+          view_history: [],
         }
       }),
   ]

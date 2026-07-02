@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Sparkline from '@/components/dashboard/Sparkline'
 
 interface TrackedTrend {
   id: string
@@ -22,6 +23,7 @@ interface TrackedTrend {
   trend_status: 'rising' | 'stable' | 'declining' | null
   engagement_rate: number | null
   engagement_delta: number | null
+  view_history: number[]
 }
 
 const PANEL_STYLE: React.CSSProperties = {
@@ -115,9 +117,12 @@ export default function TrackedTrendsPanel() {
             <div key={t.id} className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
               <div className="flex items-start justify-between gap-3 mb-2">
                 <p className="text-sm font-medium min-w-0 truncate" style={{ color: '#F8FAFC' }}>{t.candidate_topic}</p>
-                <span className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0" style={{ color: badge.color, background: badge.bg }}>
-                  {badge.label}
-                </span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <Sparkline values={t.view_history} color={t.trend_status === 'declining' ? '#F87171' : t.trend_status === 'rising' ? '#4ADE80' : '#FBBF24'} />
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: badge.color, background: badge.bg }}>
+                    {badge.label}
+                  </span>
+                </div>
               </div>
               <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>{insightText(t)}</p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">

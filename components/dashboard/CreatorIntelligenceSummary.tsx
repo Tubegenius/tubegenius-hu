@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { scoreColor } from '@/lib/score-utils'
+import Sparkline from '@/components/dashboard/Sparkline'
 
 interface ActivityItem {
   type: 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'viral_score'
@@ -14,6 +15,7 @@ interface ActivityItem {
   href: string
   trend_status: string | null
   views_delta: number | null
+  view_history: number[]
 }
 
 interface DashboardSummary {
@@ -221,10 +223,15 @@ export default function CreatorIntelligenceSummary() {
                           {item.trend_status && TREND_BADGE[item.trend_status] ? (() => {
                             const t = TREND_BADGE[item.trend_status]
                             return (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium" style={{ color: t.color, background: t.bg }}>
-                                <i className={`ti ${t.icon}`} style={{ fontSize: '10px' }} />
-                                {t.label}
-                              </span>
+                              <div className="flex items-center gap-1.5">
+                                {item.view_history.length >= 2 && (
+                                  <Sparkline values={item.view_history} width={40} height={16} color={t.color} />
+                                )}
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium flex-shrink-0" style={{ color: t.color, background: t.bg }}>
+                                  <i className={`ti ${t.icon}`} style={{ fontSize: '10px' }} />
+                                  {t.label}
+                                </span>
+                              </div>
                             )
                           })() : (
                             <span style={{ color: '#64748B' }}>—</span>
