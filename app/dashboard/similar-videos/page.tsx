@@ -238,8 +238,10 @@ export default function SimilarVideosPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchedRegions, setSearchedRegions] = useState<string[]>([])
   const [queriesUsed, setQueriesUsed] = useState<string[]>([])
+  const [fromCache, setFromCache] = useState(false)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
-  const [pendingSearch, setPendingSearch] = useState<{ topic: string; region: 'HU' | 'US'; allowFallback: boolean } | null>(null)
+  const [pendingSearch, setPendingSearch] = useState<{ topic: string; region: 'HU' | 'US'; allowFallback: boolean; forceRefresh?: boolean } | null>(null)
 
   // Keresési előzmény visszaállítása böngésző vissza gombhoz
   useEffect(() => {
@@ -302,16 +304,18 @@ export default function SimilarVideosPage() {
     if (initialTopic) await runSearchWithCreditCheck(initialTopic, initialRegion, true)
   }
 
-  async function loadVideos(t: string, r: 'HU' | 'US', allowFallback = false) {
+  async function loadVideos(t: string, r: 'HU' | 'US', allowFallback = false, forceRefresh = false) {
     setLoading(true)
     setError(null)
     setQueriesUsed([])
+    setFromCache(false)
+    setLastRefreshedAt(null)
 
     async function requestVideos(regionToTry: 'HU' | 'US') {
       const res = await fetch('/api/similar-videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: t, region: regionToTry, max_results: 9 }),
+        body: JSON.stringify({ topic: t, region: regionToTry, max_results: 9, force_refresh: forceRefresh }),
       })
       const data = await res.json()
       return { ok: res.ok, data }
@@ -322,6 +326,10 @@ export default function SimilarVideosPage() {
       const first = await requestVideos(r)
       let foundVideos = first.ok ? (first.data.videos || []) : []
       setQueriesUsed(first.data?.queries_used || [])
+      if (first.ok && first.data?.from_cache) {
+        setFromCache(true)
+        setLastRefreshedAt(first.data.last_refreshed_at || null)
+      }
 
       const shouldTryOtherRegion = foundVideos.length === 0 && (allowFallback || looksLikeEnglishTopic(t) || r === 'HU')
       if (shouldTryOtherRegion) {
@@ -362,9 +370,29 @@ export default function SimilarVideosPage() {
 
   // Közös kredit-ellenőrzés — kézi kereséshez ÉS az URL-ből jövő automatikus
   // kereséshez is. Soha ne fusson le fizetős keresés felugró megerősítés
-  // nélkül, akárhonnan indul.
+  // nélkül, akárhonnan indul. Előbb megnézzük, van-e mentett (ingyenes)
+  // eredmény ehhez a témához — ha van, azt mutatjuk, kredit-ellenőrzés
+  // és -levonás nélkül.
   async function runSearchWithCreditCheck(t: string, r: 'HU' | 'US', allowFallback: boolean) {
     if (!t.trim()) return
+
+    try {
+      const cacheRes = await fetch('/api/similar-videos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: t, region: r, max_results: 9, cache_only: true }),
+      })
+      const cacheData = await cacheRes.json()
+      if (cacheRes.ok && cacheData.from_cache) {
+        setSearchTopic(t)
+        setVideos(cacheData.videos || [])
+        setFromCache(true)
+        setLastRefreshedAt(cacheData.last_refreshed_at || null)
+        setSearchedRegions([r])
+        return
+      }
+    } catch {}
+
     try {
       const checkRes = await fetch('/api/credit-check', {
         method: 'POST',
@@ -397,8 +425,28 @@ export default function SimilarVideosPage() {
     if (!pendingSearch) return
     setCreditCheck(null)
     setSearchTopic(pendingSearch.topic)
-    loadVideos(pendingSearch.topic, pendingSearch.region, pendingSearch.allowFallback)
+    loadVideos(pendingSearch.topic, pendingSearch.region, pendingSearch.allowFallback, pendingSearch.forceRefresh || false)
     setPendingSearch(null)
+  }
+
+  // Explicit "Frissítés" — mindig új, fizetős keresést indít (kredit-
+  // megerősítéssel), a cache-t figyelmen kívül hagyja.
+  async function handleRefresh() {
+    try {
+      const checkRes = await fetch('/api/credit-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature: 'similar_videos' }),
+      })
+      const check = await checkRes.json() as UsageCheckResult
+      if (!check.canRun) { setCreditCheck(check); return }
+      if (check.requiresConfirmation) {
+        setPendingSearch({ topic: searchTopic || topic, region, allowFallback: false, forceRefresh: true })
+        setCreditCheck(check)
+        return
+      }
+    } catch {}
+    loadVideos(searchTopic || topic, region, false, true)
   }
 
   return (
@@ -446,6 +494,27 @@ export default function SimilarVideosPage() {
       </div>
 
       {error && <div className="bg-rose/10 border border-rose/20 rounded-xl px-5 py-4 text-rose text-sm mb-6">{error}</div>}
+
+      {!loading && fromCache && videos.length > 0 && (
+        <div className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3 flex-wrap"
+          style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
+              <i className="ti ti-database mr-1.5" />Mentett eredmény
+            </p>
+            <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+              Ezt a keresést már korábban lefuttattad. Nem vontunk le új kreditet.
+              {lastRefreshedAt && ` Utolsó frissítés: ${new Date(lastRefreshedAt).toLocaleDateString('hu-HU')}.`}
+            </p>
+          </div>
+          <button onClick={handleRefresh} disabled={loading}
+            className="text-xs px-3 py-2 rounded-lg font-semibold flex-shrink-0"
+            style={{ background: 'rgba(255,255,255,0.06)', color: '#F8FAFC' }}
+            title="A frissítés új keresést indít, ezért kreditet használ.">
+            Eredmény frissítése
+          </button>
+        </div>
+      )}
 
       {loading && (
         <div className="card">

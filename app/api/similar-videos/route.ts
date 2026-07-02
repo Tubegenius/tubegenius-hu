@@ -13,6 +13,7 @@ import { calculateNicheFit } from '@/lib/niche-fit'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature } from '@/lib/usage-protection'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
+import { normalizeTopic as normalizeTopicForHash, buildSearchContextHash, getCachedSearch, touchLastOpened, saveSearchResult } from '@/lib/similar-videos-cache'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MIN_SIMILAR_VIDEO_RELEVANCE = 60
@@ -415,7 +416,7 @@ async function hydrateStats(items: YouTubeSearchItem[]) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { topic, region, max_results = 9, user_niche } = await request.json()
+    const { topic, region, max_results = 9, user_niche, platform, language, cache_only, force_refresh } = await request.json()
     if (!topic) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
@@ -433,6 +434,32 @@ export async function POST(request: NextRequest) {
       effectiveNiche = prof?.niche || ''
     }
     console.log(`[SimilarVideos] niche_fit: effectiveNiche="${effectiveNiche}" topic="${topic}"`)
+
+    // ── Perzisztens eredmény-cache — újranyitás mindig ingyenes ──────
+    // Ha a user már egyszer kifizette ezt a keresést (ugyanaz a normalizált
+    // topic + régió/nyelv/platform), az eredményt az adatbázisból adjuk
+    // vissza: nincs új YouTube/Claude hívás, nincs új kreditlevonás.
+    // Csak force_refresh indít explicit, fizetős újrakeresést.
+    const searchHash = buildSearchContextHash({ userId, topic, region, language, platform })
+    if (!force_refresh) {
+      const cached = await getCachedSearch(searchHash, userId)
+      if (cached) {
+        await touchLastOpened(cached.id)
+        return NextResponse.json({
+          videos: cached.results,
+          from_cache: true,
+          cache_only: false,
+          last_refreshed_at: cached.last_refreshed_at,
+          created_at: cached.created_at,
+          warning: null,
+        })
+      }
+      if (cache_only) {
+        // Csak cache-ellenőrzés volt kérve (frontend előzetes próba) — nincs
+        // cache, nem indítunk fizetős keresést, nem vonunk le semmit.
+        return NextResponse.json({ videos: [], from_cache: false, cache_miss: true })
+      }
+    }
 
     // Backend-side usage ellenőrzés — kredit levonás CSAK ha tényleg YouTube search fut (nem cache)
     const usageCheck = await checkUsagePermission(userId, 'similar_videos')
@@ -659,11 +686,28 @@ export async function POST(request: NextRequest) {
         wasCached: false,
         planType: 'beta',
       }).catch(() => {})
+
+      // Perzisztens mentés — hogy az újranyitás (más session, más nap) ingyenes
+      // legyen. A user már fizetett ezért a keresésért (ha kredit kellett hozzá),
+      // ezért a mentés hibája KRITIKUS — logoljuk, de a választ így is visszaadjuk.
+      await saveSearchResult({
+        userId,
+        hash: searchHash,
+        normalizedTopic: normalizeTopicForHash(topic),
+        originalTopic: topic,
+        region: regionCode,
+        language: language || null,
+        platform: platform || null,
+        queryVariants: queries,
+        results: finalVideos,
+        creditCost: usageCheck.cost > 0 ? usageCheck.cost : 0,
+      })
     }
 
     return NextResponse.json({
       videos: finalVideos,
       queries_used: queries,
+      from_cache: false,
       interpreted_topic: haikuExpansion?.interpreted_topic || topic,
       global_adaptable: haikuExpansion?.global_adaptable ?? false,
       freshness_window_days,
