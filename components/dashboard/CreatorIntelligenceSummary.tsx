@@ -5,13 +5,15 @@ import Link from 'next/link'
 import { scoreColor } from '@/lib/score-utils'
 
 interface ActivityItem {
-  type: 'video_package' | 'video_audit' | 'memory' | 'credit_usage'
+  type: 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'viral_score'
   title: string
   topic: string
   date: string
   status: string | null
   score: number | null
   href: string
+  trend_status: string | null
+  views_delta: number | null
 }
 
 interface DashboardSummary {
@@ -49,14 +51,26 @@ const ACTIVITY_ICON: Record<ActivityItem['type'], { icon: string; color: string 
   video_package: { icon: 'ti-package', color: '#EC4899' },
   video_audit: { icon: 'ti-stethoscope', color: '#22C55E' },
   memory: { icon: 'ti-brain', color: '#3B82F6' },
-  credit_usage: { icon: 'ti-bolt', color: '#F59E0B' },
+  opportunity: { icon: 'ti-bulb', color: '#3B82F6' },
+  similar_videos: { icon: 'ti-player-play', color: '#8B5CF6' },
+  script_extract: { icon: 'ti-file-text', color: '#F59E0B' },
+  viral_score: { icon: 'ti-chart-bar', color: '#8B5CF6' },
 }
 
 const ACTIVITY_TYPE_LABEL: Record<ActivityItem['type'], string> = {
   video_package: 'Videócsomag',
   video_audit: 'Audit',
   memory: 'Téma',
-  credit_usage: 'Kredit',
+  opportunity: 'Opportunity',
+  similar_videos: 'Similar Videos',
+  script_extract: 'Script',
+  viral_score: 'Viral Score',
+}
+
+const TREND_BADGE: Record<string, { label: string; color: string; bg: string; icon: string }> = {
+  rising: { label: 'Erősödik', color: '#4ADE80', bg: 'rgba(34,197,94,0.12)', icon: 'ti-trending-up' },
+  stable: { label: 'Stabil', color: '#FBBF24', bg: 'rgba(245,158,11,0.12)', icon: 'ti-minus' },
+  declining: { label: 'Lassul', color: '#F87171', bg: 'rgba(239,68,68,0.12)', icon: 'ti-trending-down' },
 }
 
 function KpiCard({ icon, color, label, value, sub }: { icon: string; color: string; label: string; value: string | number; sub?: string }) {
@@ -175,6 +189,7 @@ export default function CreatorIntelligenceSummary() {
                     <th className="text-left font-medium px-1 pb-2">Téma</th>
                     <th className="text-left font-medium px-1 pb-2">Típus</th>
                     <th className="text-left font-medium px-1 pb-2">Állapot</th>
+                    <th className="text-left font-medium px-1 pb-2">Trend</th>
                     <th className="text-right font-medium px-1 pb-2">Dátum</th>
                     <th className="w-8"></th>
                   </tr>
@@ -199,6 +214,19 @@ export default function CreatorIntelligenceSummary() {
                           ) : item.status ? (
                             <StatusBadge status={item.status} />
                           ) : (
+                            <span style={{ color: '#64748B' }}>—</span>
+                          )}
+                        </td>
+                        <td className="px-1 py-2.5">
+                          {item.trend_status && TREND_BADGE[item.trend_status] ? (() => {
+                            const t = TREND_BADGE[item.trend_status]
+                            return (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium" style={{ color: t.color, background: t.bg }}>
+                                <i className={`ti ${t.icon}`} style={{ fontSize: '10px' }} />
+                                {t.label}
+                              </span>
+                            )
+                          })() : (
                             <span style={{ color: '#64748B' }}>—</span>
                           )}
                         </td>
