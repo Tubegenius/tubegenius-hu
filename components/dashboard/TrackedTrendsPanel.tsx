@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import Sparkline from '@/components/dashboard/Sparkline'
 
 interface TrackedTrend {
@@ -147,8 +148,8 @@ export default function TrackedTrendsPanel() {
                   <div className="font-semibold" style={{ color: '#CBD5E1' }}>{formatDate(t.next_check_at)}</div>
                 </div>
               </div>
-              {(t.confidence || t.trend_source_type) && (
-                <div className="flex items-center gap-2 mt-3 flex-wrap">
+              <div className="flex items-center justify-between gap-3 mt-3 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
                   {t.confidence && (
                     <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(59,130,246,0.1)', color: '#93C5FD' }}>{t.confidence}</span>
                   )}
@@ -156,7 +157,19 @@ export default function TrackedTrendsPanel() {
                     <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.05)', color: '#94A3B8' }}>{t.trend_source_type}</span>
                   )}
                 </div>
-              )}
+                <div className="flex items-center gap-2">
+                  <Link href={`/dashboard/similar-videos?topic=${encodeURIComponent(t.candidate_topic)}`}
+                    className="text-xs px-3 py-1.5 rounded-lg transition-colors"
+                    style={{ background: 'rgba(255,255,255,0.05)', color: '#CBD5E1' }}>
+                    Videók megnyitása
+                  </Link>
+                  <Link href={`/dashboard/video-package?topic=${encodeURIComponent(t.candidate_topic)}`}
+                    className="text-xs px-3 py-1.5 rounded-lg font-semibold"
+                    style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
+                    Videócsomag
+                  </Link>
+                </div>
+              </div>
             </div>
           )
         })}
