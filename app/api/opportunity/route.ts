@@ -14,6 +14,7 @@ import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion
 import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection } from '@/lib/broad-niche-discovery'
 import type { OpportunityTopic } from '@/types'
 import { logYouTubeSearch } from '@/lib/usage-protection'
+import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import {
   evaluateCandidate,
   applySafeOutput,
@@ -552,6 +553,25 @@ KRITIKUS JSON SZABÁLYOK:
       topics = [...topics, ...(fillers.slice(0, needed) as typeof topics)]
       poolTopics = [...poolTopics, ...(fillers.slice(needed) as typeof poolTopics)]
     }
+
+    // Magas confidence / magas score / friss trend topicokat limitáltan trackeljük
+    // (háttérfrissítés célra) — a gatekeeper (isTrackWorthy) dönti el, melyik éri meg.
+    // Hiba esetén nem törheti el a fő választ.
+    await Promise.all(
+      topics.map(t => promoteToTrackedCandidate({
+        userId: user.id,
+        candidateTopic: t.title,
+        niche,
+        region: effectiveRegion,
+        language,
+        trendSourceType: t.trend_source_type || null,
+        confidence: t.confidence || null,
+        opportunityScore: t.opportunity_score,
+        youtubeVideoIds: (t.evidence_videos || []).map(v => v.video_id).filter(Boolean),
+        webSourceIds: (t.web_sources || []).map(s => s.url).filter(Boolean),
+        generatedAt: t.generated_at,
+      }).catch(() => {}))
+    )
 
     // ── 8. Cache save ────────────────────────────────────────
     const now = new Date().toISOString()

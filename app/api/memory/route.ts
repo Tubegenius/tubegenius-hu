@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
+import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import type { TopicState } from '@/types'
 
 // GET: temak listazasa
@@ -80,6 +81,15 @@ export async function POST(request: NextRequest) {
     console.error('Memory POST error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  // Amit a user explicit ment, azt limitáltan trackeljük (háttérfrissítés célra) —
+  // hiba esetén nem törheti el a mentést.
+  await promoteToTrackedCandidate({
+    userId: user.id,
+    candidateTopic: topic,
+    opportunityScore: opportunity_score ?? null,
+    force: true,
+  }).catch(() => {})
 
   return NextResponse.json({ item: data })
 }

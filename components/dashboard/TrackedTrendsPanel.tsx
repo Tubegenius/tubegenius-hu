@@ -1,0 +1,161 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+
+interface TrackedTrend {
+  id: string
+  candidate_topic: string
+  niche: string | null
+  region: string | null
+  confidence: string | null
+  trend_source_type: string | null
+  opportunity_score: number | null
+  created_at: string
+  last_checked_at: string | null
+  next_check_at: string
+  refresh_priority: string
+  status: 'active' | 'stopped'
+  snapshot_count: number
+  total_views: number | null
+  views_delta: number | null
+  trend_velocity: number | null
+  trend_status: 'rising' | 'stable' | 'declining' | null
+  engagement_rate: number | null
+  engagement_delta: number | null
+}
+
+const PANEL_STYLE: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.045)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: '16px',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+  backdropFilter: 'blur(12px)',
+}
+
+function statusBadge(t: TrackedTrend): { label: string; color: string; bg: string } {
+  const overdue = t.status === 'active' && new Date(t.next_check_at).getTime() <= Date.now()
+  if (t.snapshot_count < 2 || !t.trend_status) {
+    return { label: 'Kevés adat', color: '#94A3B8', bg: 'rgba(148,163,184,0.12)' }
+  }
+  if (overdue) return { label: 'Frissítésre vár', color: '#94A3B8', bg: 'rgba(148,163,184,0.12)' }
+  if (t.trend_status === 'rising') return { label: 'Erősödik', color: '#4ADE80', bg: 'rgba(34,197,94,0.12)' }
+  if (t.trend_status === 'declining') return { label: 'Lassul', color: '#F87171', bg: 'rgba(239,68,68,0.12)' }
+  return { label: 'Stabil', color: '#FBBF24', bg: 'rgba(245,158,11,0.12)' }
+}
+
+function insightText(t: TrackedTrend): string {
+  if (t.snapshot_count < 2 || !t.trend_status) {
+    return 'Még kevés történelmi adat áll rendelkezésre. A rendszer az első mért trendjeleket mutatja.'
+  }
+  if (t.trend_status === 'rising') return 'Ez a téma az utolsó frissítés óta erősödik.'
+  if (t.trend_status === 'declining') return 'Ez a téma az utolsó frissítés óta lassul.'
+  return 'Ez a téma stabilan tartja a pozícióját.'
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const today = new Date()
+  const isToday = d.toDateString() === today.toDateString()
+  const time = d.toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit' })
+  if (isToday) return `ma ${time}`
+  return `${d.toLocaleDateString('hu-HU', { month: 'short', day: 'numeric' })} ${time}`
+}
+
+function formatNumber(n: number | null): string {
+  if (n == null) return '—'
+  return new Intl.NumberFormat('hu-HU').format(n)
+}
+
+export default function TrackedTrendsPanel() {
+  const [tracked, setTracked] = useState<TrackedTrend[] | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/dashboard/tracked-trends')
+      .then(r => r.json())
+      .then(d => setTracked(d.tracked || []))
+      .catch(() => setTracked([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) {
+    return <div className="rounded-2xl h-40 mt-4 animate-pulse" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }} />
+  }
+  if (!tracked) return null
+
+  if (tracked.length === 0) {
+    return (
+      <div className="mt-4 p-8 text-center" style={PANEL_STYLE}>
+        <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3" style={{ background: 'rgba(139,92,246,0.12)' }}>
+          <i className="ti ti-radar-2 text-xl" style={{ color: '#8B5CF6' }} />
+        </div>
+        <p className="text-sm font-medium" style={{ color: '#F8FAFC' }}>Még nincs követett trendtéma.</p>
+        <p className="text-xs mt-1" style={{ color: '#64748B' }}>
+          Ments el egy trendet vagy generálj videócsomagot egy Opportunity Engine találatból.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 p-5" style={PANEL_STYLE}>
+      <h3 className="text-sm font-semibold mb-1 flex items-center gap-2" style={{ color: '#F8FAFC' }}>
+        <i className="ti ti-radar-2" style={{ color: '#8B5CF6' }} />
+        Követett trendtémák
+      </h3>
+      <p className="text-xs mb-4" style={{ color: '#64748B' }}>
+        Limitáltan trackelt témák — mentett, videócsomaggá vált, vagy magas confidence/score/friss trend találatok.
+      </p>
+
+      <div className="space-y-2">
+        {tracked.map(t => {
+          const badge = statusBadge(t)
+          return (
+            <div key={t.id} className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <p className="text-sm font-medium min-w-0 truncate" style={{ color: '#F8FAFC' }}>{t.candidate_topic}</p>
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0" style={{ color: badge.color, background: badge.bg }}>
+                  {badge.label}
+                </span>
+              </div>
+              <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>{insightText(t)}</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                <div>
+                  <span style={{ color: '#64748B' }}>Views változás</span>
+                  <div className="font-semibold" style={{ color: (t.views_delta ?? 0) >= 0 ? '#4ADE80' : '#F87171' }}>
+                    {t.views_delta != null ? `${t.views_delta >= 0 ? '+' : ''}${formatNumber(t.views_delta)}` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <span style={{ color: '#64748B' }}>Engagement változás</span>
+                  <div className="font-semibold" style={{ color: (t.engagement_delta ?? 0) >= 0 ? '#4ADE80' : '#F87171' }}>
+                    {t.engagement_delta != null ? `${t.engagement_delta >= 0 ? '+' : ''}${t.engagement_delta}%` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <span style={{ color: '#64748B' }}>Utolsó ellenőrzés</span>
+                  <div className="font-semibold" style={{ color: '#CBD5E1' }}>{formatDate(t.last_checked_at)}</div>
+                </div>
+                <div>
+                  <span style={{ color: '#64748B' }}>Következő ellenőrzés</span>
+                  <div className="font-semibold" style={{ color: '#CBD5E1' }}>{formatDate(t.next_check_at)}</div>
+                </div>
+              </div>
+              {(t.confidence || t.trend_source_type) && (
+                <div className="flex items-center gap-2 mt-3 flex-wrap">
+                  {t.confidence && (
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(59,130,246,0.1)', color: '#93C5FD' }}>{t.confidence}</span>
+                  )}
+                  {t.trend_source_type && (
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.05)', color: '#94A3B8' }}>{t.trend_source_type}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

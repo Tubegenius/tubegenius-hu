@@ -13,6 +13,7 @@ interface SidebarProps {
 }
 
 const navItems = [
+  { label: 'Áttekintés', href: '/dashboard/overview', icon: 'ti-layout-dashboard' },
   { label: 'Trend Feed', href: '/dashboard', icon: 'ti-chart-dots-3' },
   { label: 'Opportunity Engine', href: '/dashboard/opportunities', icon: 'ti-bulb' },
   { label: 'Similar Videos', href: '/dashboard/similar-videos', icon: 'ti-player-play' },

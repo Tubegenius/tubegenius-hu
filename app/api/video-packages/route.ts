@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
+import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 
 // GET: lista vagy egy konkrét csomag (?id=...)
 export async function GET(request: NextRequest) {
@@ -88,6 +89,15 @@ export async function POST(request: NextRequest) {
     console.error('Video package save error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
+
+  // Amiből videócsomag készült, azt limitáltan trackeljük (háttérfrissítés célra) —
+  // hiba esetén nem törheti el a mentést.
+  await promoteToTrackedCandidate({
+    userId: user.id,
+    candidateTopic: body.topic,
+    region: body.region ?? null,
+    force: true,
+  }).catch(() => {})
 
   return NextResponse.json({ id: data.id })
 }

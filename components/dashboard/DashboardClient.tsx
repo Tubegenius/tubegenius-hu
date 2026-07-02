@@ -7,7 +7,6 @@ import type { CreatorProfile, CreatorMemoryItem, OpportunityTopic } from '@/type
 // ─── Score helpers ────────────────────────────────────────────
 import { scoreColor, scoreLabel, scoreLabelColor } from '@/lib/score-utils'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
-import { getDailyTip, getCategoryIcon, getCategoryColor } from '@/lib/viral-tips'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 
@@ -892,70 +891,6 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         </div>
       )}
 
-      {/* 3. Quick Actions */}
-      <div className="mb-6">
-        <h3 className="font-semibold text-sm mb-3" style={{ color: '#F8FAFC' }}>Gyors műveletek</h3>
-        <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
-          {[...quickActions,
-            { icon: 'ti-bulb', label: 'Opportunity', sub: 'Elemzés', href: '/dashboard/opportunities', color: '#3B82F6' },
-          ].map(action => (
-            <Link key={action.href} href={action.href}
-              className="rounded-xl p-3 text-center transition-all duration-150 hover:-translate-y-0.5"
-              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div className="w-9 h-9 rounded-lg flex items-center justify-center mx-auto mb-2" style={{ background: `${action.color}15` }}>
-                <i className={`ti ${action.icon}`} style={{ color: action.color, fontSize: '18px' }} />
-              </div>
-              <div className="text-xs font-semibold" style={{ color: '#F8FAFC' }}>{action.label}</div>
-              <div className="text-xs" style={{ color: '#64748B' }}>{action.sub}</div>
-            </Link>
-          ))}
-        </div>
-      </div>
-
-      {/* 4. Light Overview */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: 'Mentett témák', value: memoryItems.filter(i => i.state === 'saved').length, icon: 'ti-bookmark', color: '#3B82F6' },
-          { label: 'Elvégzett auditok', value: stats?.total_audits || 0, icon: 'ti-stethoscope', color: '#22C55E' },
-          { label: 'Videócsomagok', value: stats?.total_packages || 0, icon: 'ti-package', color: '#8B5CF6' },
-          { label: 'Felhasznált kredit', value: stats?.total_used?.toFixed(1) || '0', icon: 'ti-bolt', color: '#F59E0B' },
-        ].map(item => (
-          <div key={item.label} className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <div className="flex items-center gap-2 mb-1">
-              <i className={`ti ${item.icon}`} style={{ color: item.color, fontSize: '14px' }} />
-              <span className="text-xs" style={{ color: '#94A3B8' }}>{item.label}</span>
-            </div>
-            <span className="text-lg font-bold" style={{ color: '#F8FAFC' }}>{item.value}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* 5. Napi Creator Tipp */}
-      {(() => {
-        const tip = getDailyTip(profile?.platform)
-        const icon = getCategoryIcon(tip.category)
-        const color = getCategoryColor(tip.category)
-        return (
-          <div className="mt-6 rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${color}15` }}>
-                <i className={`ti ${icon}`} style={{ color, fontSize: '20px' }} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-semibold uppercase tracking-wider" style={{ color }}>Napi tipp</span>
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.04)', color: '#64748B' }}>{tip.category}</span>
-                </div>
-                <h4 className="text-sm font-semibold mb-1" style={{ color: '#F8FAFC' }}>{tip.title}</h4>
-                <p className="text-xs leading-relaxed mb-2" style={{ color: '#94A3B8' }}>{tip.body}</p>
-                <p className="text-xs font-medium" style={{ color }}>
-                  <i className="ti ti-arrow-right mr-1" style={{ fontSize: '12px' }} />{tip.action}
-                </p>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
     </div>
   )
 }
