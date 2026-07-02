@@ -773,7 +773,10 @@ export default function OpportunitiesPage() {
       }
 
       if (prof?.niche) {
-        await generate(prof)
+        // Mindig a kredit-ellenőrzésen (handleGenerateWithCreditCheck) keresztül —
+        // soha ne induljon automatikus generálás, ami esetleg kreditbe kerülne,
+        // felugró megerősítés nélkül.
+        await handleGenerateWithCreditCheck(prof)
       }
     }
     init()
@@ -797,7 +800,7 @@ export default function OpportunitiesPage() {
         return
       }
       if (check.requiresConfirmation) {
-        setPendingGenerate({ profile: p || undefined, options })
+        setPendingGenerate({ profile: p || undefined, options: { ...options, confirmed: true } })
         setCreditCheck(check)
         return
       }
@@ -806,7 +809,7 @@ export default function OpportunitiesPage() {
     generate(p, options)
   }
 
-  async function generate(p?: CreatorProfile, options?: { discoveryMode?: 'drilldown'; parentNiche?: string; skipCache?: boolean }) {
+  async function generate(p?: CreatorProfile, options?: { discoveryMode?: 'drilldown'; parentNiche?: string; skipCache?: boolean; confirmed?: boolean }) {
     const prof = p || profile
     const nicheToUse = p?.niche || niche
     if (!nicheToUse.trim()) return
@@ -824,10 +827,31 @@ export default function OpportunitiesPage() {
           creator_level: prof?.creator_level || 'growing',
           discovery_mode: options?.discoveryMode,
           parent_niche: options?.parentNiche,
+          // A user már jóváhagyta a levonást a CreditConfirmModalban — csak ekkor
+          // szabad a szervernek ténylegesen kreditet vonnia (force_refresh jelzi ezt).
+          force_refresh: options?.confirmed === true,
         }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
+
+      // Van elég kredit, de a user MÉG NEM erősítette meg — mutassuk a modalt,
+      // ne induljon el semmi kreditlevonás felugró jóváhagyás nélkül.
+      if (data.needs_confirmation) {
+        setLoading(false)
+        setPendingGenerate({ profile: prof || undefined, options: { ...options, confirmed: true } })
+        setCreditCheck({
+          feature: 'Opportunity Engine',
+          cost: data.confirmation_cost || 2,
+          currency: 'credit',
+          currentCredits: 0,
+          remainingCreditsAfterRun: 0,
+          requiresConfirmation: true,
+          canRun: true,
+          message: data.message || 'A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
+        })
+        return
+      }
       setMessage(data.message || null)
       setTopics(data.topics || [])
       setPoolTopics(data.pool_topics || [])
@@ -969,7 +993,7 @@ export default function OpportunitiesPage() {
         function handleDiscoverySearch(keyword: string) {
           setNiche(keyword)
           setActiveDrilldown(keyword)
-          generate(
+          handleGenerateWithCreditCheck(
             { ...profile!, niche: keyword },
             { discoveryMode: 'drilldown', parentNiche: profile?.niche || niche, skipCache: true },
           )
@@ -981,7 +1005,7 @@ export default function OpportunitiesPage() {
               <div className="rounded-xl px-4 py-3 text-sm flex items-center justify-between gap-3"
                 style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#BFDBFE' }}>
                 <span>Konkrét témakeresés ebben az irányban: <strong>{activeDrilldown}</strong></span>
-                <button onClick={() => { setActiveDrilldown(null); if (profile?.niche) { setNiche(profile.niche); generate(profile, { skipCache: true }) } }}
+                <button onClick={() => { setActiveDrilldown(null); if (profile?.niche) { setNiche(profile.niche); handleGenerateWithCreditCheck(profile, { skipCache: true }) } }}
                   className="text-xs px-3 py-1 rounded-lg"
                   style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#3B82F6' }}>
                   Vissza a niche-hez

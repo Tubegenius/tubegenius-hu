@@ -686,6 +686,26 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         setGenerated(true)
         return
       }
+
+      // A heti ingyenes Opportunity Engine keret elfogyott — a szerver NEM vont le
+      // kreditet, megerősítést kér. Soha nem töltünk le automatikusan kreditet
+      // felugró jóváhagyás nélkül, ezért itt megmutatjuk a modalt és megállunk.
+      if (data.needs_confirmation) {
+        setLoading(false)
+        setCreditCheck({
+          feature: 'Trend Feed frissites',
+          cost: data.confirmation_cost || 2,
+          currency: 'credit',
+          currentCredits: 0,
+          remainingCreditsAfterRun: 0,
+          requiresConfirmation: true,
+          canRun: true,
+          message: data.message || 'A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
+        })
+        setGenerated(true)
+        return
+      }
+
       const allTopics = (data.topics || []) as DashboardOpportunityTopic[]
       console.log(`[Dashboard] API response: ${allTopics.length} topics, cached: ${data.cached}, charged: ${data.charged}, credits: ${data.credits_charged}`)
 

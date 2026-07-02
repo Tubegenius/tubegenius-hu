@@ -14,7 +14,7 @@ import { generateSeedsForNiche } from '@/lib/seed-generator'
 import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion, recommendedFormatForExpansion, hookPatternForExpansion } from '@/lib/topic-expansion'
 import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection } from '@/lib/broad-niche-discovery'
 import type { OpportunityTopic } from '@/types'
-import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature } from '@/lib/usage-protection'
+import { logYouTubeSearch, checkUsagePermission } from '@/lib/usage-protection'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import {
@@ -320,8 +320,14 @@ export async function POST(request: NextRequest) {
     // betöltéskori) friss generálás semmilyen kvóta-ellenőrzést nem futtatott,
     // ezért sessionStorage törlésével korlátlanul lehetett ingyenes friss
     // Opportunity Engine futtatást indítani a heti 1 ingyenes keret megkerülésével.
-    // force_refresh-nél marad a meglévő "mindig 2 kredit" szabály változatlanul.
-    let mustChargeCreditOnSuccess = false
+    //
+    // KRITIKUS SZABÁLY: kreditlevonást soha nem kezdeményezünk user megerősítés
+    // nélkül. Ha a heti ingyenes keret elfogyott és a kérés nem force_refresh
+    // (vagyis nem egy már megerősítő modalon átment, explicit user akció),
+    // itt megállunk — nem indítunk drága Serper/YouTube munkát, és nem vonunk
+    // le semmit. A kliensnek ilyenkor meg kell jelenítenie a megerősítő modalt,
+    // és csak elfogadás után hívhatja újra force_refresh: true-val (ami a
+    // meglévő, változatlan "mindig 2 kredit" ágon fut le sikeres eredménynél).
     if (!force_refresh) {
       const usage = await checkUsagePermission(user.id, 'opportunity_engine')
       if (!usage.canRun) {
@@ -335,7 +341,20 @@ export async function POST(request: NextRequest) {
           message: usage.message || 'A heti ingyenes Opportunity Engine kereted elfogyott, és nincs elég kredited a folytatáshoz.',
         })
       }
-      mustChargeCreditOnSuccess = usage.currency === 'credit'
+      if (usage.currency === 'credit') {
+        // Van elég kredit, de a user MÉG NEM erősítette meg a levonást — kérjünk megerősítést,
+        // ne indítsunk drága munkát, és ne vonjunk le semmit.
+        return NextResponse.json({
+          topics: [],
+          pool_topics: [],
+          cached: false,
+          charged: false,
+          credits_charged: 0,
+          needs_confirmation: true,
+          confirmation_cost: usage.cost,
+          message: usage.message || `A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás ${usage.cost} kreditbe kerül.`,
+        })
+      }
     }
 
     // ── 2. Seed generation ───────────────────────────────────
@@ -673,19 +692,6 @@ KRITIKUS JSON SZABÁLYOK:
           user_id: user.id, feature_name: 'trend_feed_refresh', model: 'youtube_search',
           input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0, credits_charged: 2,
           metadata: { type: 'trend_feed_manual_refresh', niche, engine_version: ENGINE_VERSION },
-        })
-        charged = true
-        creditsCharged = 2
-      }
-    } else if (!force_refresh && mustChargeCreditOnSuccess && validCount > 0) {
-      // A heti ingyenes Opportunity Engine keret elfogyott ennél a usernél —
-      // success-based: csak akkor vonunk le kreditet, ha tényleg lett valid eredmény.
-      const result = await chargeProtectedFeature(user.id, 'opportunity_engine')
-      if (result.success) {
-        await admin.from('ai_usage_logs').insert({
-          user_id: user.id, feature_name: 'opportunity_engine', model: 'youtube_search',
-          input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0, credits_charged: 2,
-          metadata: { type: 'opportunity_engine_weekly_exhausted', niche, engine_version: ENGINE_VERSION },
         })
         charged = true
         creditsCharged = 2
