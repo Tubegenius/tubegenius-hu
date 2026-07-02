@@ -3,8 +3,9 @@
 import Link from 'next/link'
 import CreatorIntelligenceSummary from '@/components/dashboard/CreatorIntelligenceSummary'
 import TrackedTrendsPanel from '@/components/dashboard/TrackedTrendsPanel'
+import TopOpportunitiesRow from '@/components/dashboard/TopOpportunitiesRow'
 import { getDailyTip, getCategoryIcon, getCategoryColor } from '@/lib/viral-tips'
-import type { Platform } from '@/types'
+import type { CreatorProfile } from '@/types'
 
 function getGreeting(): string {
   const hour = new Date().getHours()
@@ -25,17 +26,19 @@ const quickActions = [
   { icon: 'ti-brain', label: 'Creator Memory', sub: 'Témák', href: '/dashboard/memory', color: '#3B82F6' },
 ]
 
-export default function OverviewClient({ displayName, platform }: { displayName: string; platform: Platform }) {
-  const tip = getDailyTip(platform)
+export default function OverviewClient({ displayName, profile }: { displayName: string; profile: CreatorProfile | null }) {
+  const tip = getDailyTip(profile?.platform)
   const tipIcon = getCategoryIcon(tip.category)
   const tipColor = getCategoryColor(tip.category)
 
   return (
-    <div className="max-w-5xl mx-auto animate-fade-in">
+    <div className="max-w-6xl mx-auto animate-fade-in">
       <div className="mb-6">
         <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{getGreeting()}, {displayName}!</h1>
         <p className="text-sm" style={{ color: '#94A3B8' }}>Így halad a saját aktivitásod alapján a tartalomgyártásod.</p>
       </div>
+
+      <TopOpportunitiesRow profile={profile} />
 
       <CreatorIntelligenceSummary />
 

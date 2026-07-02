@@ -10,5 +10,5 @@ export default async function OverviewPage() {
 
   const displayName = profile?.channel_name || user!.email?.split('@')[0] || 'Creator'
 
-  return <OverviewClient displayName={displayName} platform={profile?.platform || 'youtube'} />
+  return <OverviewClient displayName={displayName} profile={profile} />
 }

@@ -24,7 +24,7 @@ export async function GET() {
     snapshotsCountRes,
   ] = await Promise.all([
     admin.from('user_credits').select('balance, total_used, plan').eq('user_id', userId).single(),
-    admin.from('creator_memory').select('id, topic, state, platform, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
+    admin.from('creator_memory').select('id, topic, state, platform, opportunity_score, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
     admin.from('video_packages').select('id, topic, platform, video_length, quality_status, strict_fact_mode, fact_strictness_level, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
     admin.from('video_audits').select('id, video_title, topic, platform, overall_score, decision, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
     admin.from('ai_usage_logs').select('feature_name, credits_charged, metadata, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
@@ -47,7 +47,11 @@ export async function GET() {
   }
 
   // ── 2. Auditok ──
-  const auditsSummary = { total: audits.length }
+  const auditScores = audits.map(a => a.overall_score).filter((s): s is number => s != null)
+  const auditsSummary = {
+    total: audits.length,
+    avg_score: auditScores.length > 0 ? Math.round(auditScores.reduce((s, v) => s + v, 0) / auditScores.length) : null,
+  }
 
   // ── 3. Kreditek ──
   const creditsSummary = {
@@ -76,36 +80,51 @@ export async function GET() {
   type ActivityItem = {
     type: 'video_package' | 'video_audit' | 'memory' | 'credit_usage'
     title: string
+    topic: string
     date: string
     status: string | null
+    score: number | null
+    href: string
   }
 
   const activity: ActivityItem[] = [
     ...packages.map(p => ({
       type: 'video_package' as const,
       title: `Videócsomag készült: ${p.topic || 'Cím nélkül'}`,
+      topic: p.topic || 'Cím nélkül',
       date: p.created_at,
       status: p.quality_status,
+      score: null,
+      href: '/dashboard/video-package',
     })),
     ...audits.map(a => ({
       type: 'video_audit' as const,
       title: `Audit lefuttatva: ${a.video_title || a.topic || 'Cím nélkül'}`,
+      topic: a.video_title || a.topic || 'Cím nélkül',
       date: a.created_at,
       status: a.decision || (a.overall_score != null ? `${a.overall_score} pont` : null),
+      score: a.overall_score ?? null,
+      href: '/dashboard/video-audit',
     })),
     ...memory.map(m => ({
       type: 'memory' as const,
       title: `Téma ${m.state === 'saved' ? 'mentve' : m.state === 'completed' ? 'lezárva' : m.state === 'rejected' ? 'elutasítva' : 'folyamatban'}: ${m.topic}`,
+      topic: m.topic,
       date: m.updated_at,
       status: m.state,
+      score: m.opportunity_score ?? null,
+      href: '/dashboard/memory',
     })),
     ...usageLogs
       .filter(l => (l.credits_charged || 0) > 0)
       .map(l => ({
         type: 'credit_usage' as const,
         title: `Kredit felhasználva: ${l.feature_name}`,
+        topic: l.feature_name,
         date: l.created_at,
         status: `${l.credits_charged} kredit`,
+        score: null,
+        href: '/dashboard/credits',
       })),
   ]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())

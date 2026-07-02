@@ -1,18 +1,23 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { scoreColor } from '@/lib/score-utils'
 
 interface ActivityItem {
   type: 'video_package' | 'video_audit' | 'memory' | 'credit_usage'
   title: string
+  topic: string
   date: string
   status: string | null
+  score: number | null
+  href: string
 }
 
 interface DashboardSummary {
   has_data: boolean
   packages: { total: number; shorts: number; long: number }
-  audits: { total: number }
+  audits: { total: number; avg_score: number | null }
   credits: { balance: number; used_total: number }
   memory: { saved: number; in_progress: number; completed: number; rejected: number }
   fact_safety: {
@@ -45,6 +50,13 @@ const ACTIVITY_ICON: Record<ActivityItem['type'], { icon: string; color: string 
   video_audit: { icon: 'ti-stethoscope', color: '#22C55E' },
   memory: { icon: 'ti-brain', color: '#3B82F6' },
   credit_usage: { icon: 'ti-bolt', color: '#F59E0B' },
+}
+
+const ACTIVITY_TYPE_LABEL: Record<ActivityItem['type'], string> = {
+  video_package: 'Videócsomag',
+  video_audit: 'Audit',
+  memory: 'Téma',
+  credit_usage: 'Kredit',
 }
 
 function KpiCard({ icon, color, label, value, sub }: { icon: string; color: string; label: string; value: string | number; sub?: string }) {
@@ -138,7 +150,8 @@ export default function CreatorIntelligenceSummary() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <KpiCard icon="ti-package" color="#EC4899" label="Videócsomagok"
           value={packages.total} sub={packages.total > 0 ? `${packages.shorts} short · ${packages.long} long` : undefined} />
-        <KpiCard icon="ti-stethoscope" color="#22C55E" label="Auditok" value={audits.total} />
+        <KpiCard icon="ti-stethoscope" color="#22C55E" label="Auditok"
+          value={audits.total} sub={audits.avg_score != null ? `${audits.avg_score} átlag pontszám` : undefined} />
         <KpiCard icon="ti-bolt" color="#F59E0B" label="Kredit egyenleg"
           value={Math.round(credits.balance)} sub={`${Math.round(credits.used_total)} felhasználva összesen`} />
         <KpiCard icon="ti-brain" color="#3B82F6" label="Mentett témák"
@@ -146,36 +159,88 @@ export default function CreatorIntelligenceSummary() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Legutóbbi aktivitás */}
+        {/* Legutóbbi elemzéseid — táblázat */}
         <div className="md:col-span-2 p-5" style={PANEL_STYLE}>
           <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: '#F8FAFC' }}>
             <i className="ti ti-clock-hour-4" style={{ color: '#94A3B8' }} />
-            Legutóbbi aktivitás
+            Legutóbbi elemzéseid
           </h3>
           {recent_activity.length === 0 ? (
             <EmptyState text="Még nincs naplózott aktivitás." />
           ) : (
-            <div className="space-y-1.5">
-              {recent_activity.map((item, i) => {
-                const meta = ACTIVITY_ICON[item.type]
-                return (
-                  <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all"
-                    style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${meta.color}22` }}>
-                      <i className={`ti ${meta.icon} text-xs`} style={{ color: meta.color }} />
-                    </div>
-                    <span className="text-xs flex-1 min-w-0 truncate" style={{ color: '#CBD5E1' }}>{item.title}</span>
-                    {item.status && <StatusBadge status={item.status} />}
-                    <span className="text-xs flex-shrink-0 w-16 text-right" style={{ color: '#64748B' }}>{formatDate(item.date)}</span>
-                  </div>
-                )
-              })}
+            <div className="overflow-x-auto -mx-1">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr style={{ color: '#64748B' }}>
+                    <th className="text-left font-medium px-1 pb-2">Téma</th>
+                    <th className="text-left font-medium px-1 pb-2">Típus</th>
+                    <th className="text-left font-medium px-1 pb-2">Állapot</th>
+                    <th className="text-right font-medium px-1 pb-2">Dátum</th>
+                    <th className="w-8"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent_activity.map((item, i) => {
+                    const meta = ACTIVITY_ICON[item.type]
+                    return (
+                      <tr key={i} className="transition-colors hover:bg-white/[0.02]" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                        <td className="px-1 py-2.5 max-w-[180px]">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${meta.color}22` }}>
+                              <i className={`ti ${meta.icon}`} style={{ color: meta.color, fontSize: '11px' }} />
+                            </div>
+                            <span className="truncate" style={{ color: '#F8FAFC' }}>{item.topic}</span>
+                          </div>
+                        </td>
+                        <td className="px-1 py-2.5" style={{ color: '#94A3B8' }}>{ACTIVITY_TYPE_LABEL[item.type]}</td>
+                        <td className="px-1 py-2.5">
+                          {item.score != null ? (
+                            <span className="font-semibold" style={{ color: scoreColor(item.score) }}>{item.score}</span>
+                          ) : item.status ? (
+                            <StatusBadge status={item.status} />
+                          ) : (
+                            <span style={{ color: '#64748B' }}>—</span>
+                          )}
+                        </td>
+                        <td className="px-1 py-2.5 text-right whitespace-nowrap" style={{ color: '#64748B' }}>{formatDate(item.date)}</td>
+                        <td className="px-1 py-2.5 text-right">
+                          <Link href={item.href} style={{ color: '#3B82F6' }}>
+                            <i className="ti ti-arrow-up-right" />
+                          </Link>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
 
-        {/* Jobb oldali panel: tartalomirány + fact safety */}
+        {/* Jobb oldali panel: minőség gauge + tartalomirány + fact safety */}
         <div className="flex flex-col gap-4">
+          {audits.avg_score != null && (
+            <div className="p-5 text-center" style={PANEL_STYLE}>
+              <h3 className="text-sm font-semibold mb-3 flex items-center justify-center gap-2" style={{ color: '#F8FAFC' }}>
+                <i className="ti ti-gauge" style={{ color: scoreColor(audits.avg_score) }} />
+                Audit átlagpontszám
+              </h3>
+              <div className="relative w-24 h-24 mx-auto mb-1">
+                <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+                  <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="7" />
+                  <circle cx="50" cy="50" r="42" fill="none" stroke={scoreColor(audits.avg_score)} strokeWidth="7"
+                    strokeDasharray={`${audits.avg_score * 2.64} 264`} strokeLinecap="round"
+                    style={{ transition: 'stroke-dasharray 1s ease' }} />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-xl font-bold" style={{ color: scoreColor(audits.avg_score) }}>{audits.avg_score}</span>
+                  <span className="text-xs" style={{ color: '#94A3B8' }}>/100</span>
+                </div>
+              </div>
+              <p className="text-xs" style={{ color: '#64748B' }}>{audits.total} lefuttatott audit alapján</p>
+            </div>
+          )}
+
           <div className="p-5" style={PANEL_STYLE}>
             <h3 className="text-sm font-semibold mb-2 flex items-center gap-2" style={{ color: '#F8FAFC' }}>
               <i className="ti ti-compass" style={{ color: '#8B5CF6' }} />
@@ -211,6 +276,38 @@ export default function CreatorIntelligenceSummary() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="p-5" style={PANEL_STYLE}>
+            <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: '#F8FAFC' }}>
+              <i className="ti ti-folder" style={{ color: '#F59E0B' }} />
+              Legutóbbi projektjeid
+            </h3>
+            {(() => {
+              const projects = recent_activity.filter(a => a.type === 'video_package' || a.type === 'video_audit').slice(0, 4)
+              if (projects.length === 0) return <EmptyState text="Még nincs videócsomag vagy audit." />
+              return (
+                <div className="space-y-1.5 mb-3">
+                  {projects.map((p, i) => {
+                    const meta = ACTIVITY_ICON[p.type]
+                    return (
+                      <div key={i} className="flex items-center gap-2.5 py-1.5">
+                        <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: `${meta.color}22` }}>
+                          <i className={`ti ${meta.icon}`} style={{ color: meta.color, fontSize: '11px' }} />
+                        </div>
+                        <span className="text-xs flex-1 min-w-0 truncate" style={{ color: '#CBD5E1' }}>{p.title.replace(/^(Videócsomag készült: |Audit lefuttatva: )/, '')}</span>
+                        <span className="text-xs flex-shrink-0" style={{ color: '#64748B' }}>{formatDate(p.date)}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
+            <Link href="/dashboard/opportunities"
+              className="block w-full text-center text-xs font-semibold py-2.5 rounded-xl transition-all hover:-translate-y-0.5"
+              style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff', boxShadow: '0 0 20px rgba(59,130,246,0.25)' }}>
+              Új lehetőség keresése
+            </Link>
           </div>
         </div>
       </div>
