@@ -239,7 +239,7 @@ export default function SimilarVideosPage() {
   const [searchedRegions, setSearchedRegions] = useState<string[]>([])
   const [queriesUsed, setQueriesUsed] = useState<string[]>([])
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
-  const [pendingSearch, setPendingSearch] = useState<{ topic: string; region: 'HU' | 'US' } | null>(null)
+  const [pendingSearch, setPendingSearch] = useState<{ topic: string; region: 'HU' | 'US'; allowFallback: boolean } | null>(null)
 
   // Keresési előzmény visszaállítása böngésző vissza gombhoz
   useEffect(() => {
@@ -296,7 +296,10 @@ export default function SimilarVideosPage() {
     if (looksLikeEnglishTopic(initialTopic)) initialRegion = 'US'
 
     setRegion(initialRegion)
-    if (initialTopic) await loadVideos(initialTopic, initialRegion, true)
+    // FONTOS: még automatikus (URL-ből jövő topic) keresésnél sem szabad
+    // kreditet levonni felugró megerősítés nélkül — ugyanazon a kredit-
+    // ellenőrzésen megy át, mint a kézi keresés gomb.
+    if (initialTopic) await runSearchWithCreditCheck(initialTopic, initialRegion, true)
   }
 
   async function loadVideos(t: string, r: 'HU' | 'US', allowFallback = false) {
@@ -357,11 +360,11 @@ export default function SimilarVideosPage() {
     }
   }
 
-  async function handleSearch(e: React.FormEvent) {
-    e.preventDefault()
-    if (!topic.trim()) return
-
-    // Credit check — ingyenes keret ellenőrzés
+  // Közös kredit-ellenőrzés — kézi kereséshez ÉS az URL-ből jövő automatikus
+  // kereséshez is. Soha ne fusson le fizetős keresés felugró megerősítés
+  // nélkül, akárhonnan indul.
+  async function runSearchWithCreditCheck(t: string, r: 'HU' | 'US', allowFallback: boolean) {
+    if (!t.trim()) return
     try {
       const checkRes = await fetch('/api/credit-check', {
         method: 'POST',
@@ -375,21 +378,26 @@ export default function SimilarVideosPage() {
         return
       }
       if (check.requiresConfirmation) {
-        setPendingSearch({ topic, region })
+        setPendingSearch({ topic: t, region: r, allowFallback })
         setCreditCheck(check)
         return
       }
     } catch {}
 
-    setSearchTopic(topic)
-    loadVideos(topic, region, false)
+    setSearchTopic(t)
+    loadVideos(t, r, allowFallback)
+  }
+
+  async function handleSearch(e: React.FormEvent) {
+    e.preventDefault()
+    await runSearchWithCreditCheck(topic, region, false)
   }
 
   async function handleConfirmedSearch() {
     if (!pendingSearch) return
     setCreditCheck(null)
     setSearchTopic(pendingSearch.topic)
-    loadVideos(pendingSearch.topic, pendingSearch.region, false)
+    loadVideos(pendingSearch.topic, pendingSearch.region, pendingSearch.allowFallback)
     setPendingSearch(null)
   }
 
