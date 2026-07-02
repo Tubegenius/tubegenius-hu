@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
       channel_title: v.channel_title,
       published_at: v.published_at,
       url: `https://youtube.com/watch?v=${v.video_id}`,
+      thumbnail_url: `https://i.ytimg.com/vi/${v.video_id}/mqdefault.jpg`,
       view_count: snap?.view_count ?? null,
       like_count: snap?.like_count ?? null,
       comment_count: snap?.comment_count ?? null,

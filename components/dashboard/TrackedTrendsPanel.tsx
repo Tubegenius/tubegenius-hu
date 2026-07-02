@@ -75,6 +75,7 @@ interface TrackedVideo {
   title: string
   channel_title: string | null
   url: string
+  thumbnail_url: string
   view_count: number | null
   like_count: number | null
   last_checked_at: string | null
@@ -219,7 +220,10 @@ export default function TrackedTrendsPanel() {
                       {(videosByCandidate[t.id] || []).map(v => (
                         <a key={v.video_id} href={v.url} target="_blank" rel="noopener noreferrer"
                           className="flex items-center gap-2.5 py-1.5 px-1 rounded-lg transition-colors hover:bg-white/[0.03]">
-                          <i className="ti ti-brand-youtube flex-shrink-0" style={{ color: '#EF4444', fontSize: '14px' }} />
+                          <div className="w-16 h-9 rounded-md overflow-hidden flex-shrink-0" style={{ background: '#121826' }}>
+                            <img src={v.thumbnail_url} alt="" className="w-full h-full object-cover"
+                              onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+                          </div>
                           <span className="text-xs flex-1 min-w-0 truncate" style={{ color: '#CBD5E1' }}>{v.title}</span>
                           <span className="text-xs flex-shrink-0" style={{ color: '#64748B' }}>{formatNumber(v.view_count)} megtekintés</span>
                         </a>
