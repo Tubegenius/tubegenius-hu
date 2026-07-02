@@ -668,6 +668,10 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           niche: profile.niche, platform: profile.platform,
           language: profile.language, region: profile.region,
           creator_level: profile.creator_level,
+          main_category: profile.main_category,
+          specific_focus: profile.specific_focus,
+          audience: profile.audience,
+          avoid_topics: profile.avoid_topics,
           cache_only: cacheOnly,
           force_refresh: forceRefresh,
           // Force refresh-nél kizárjuk a jelenleg látott témákat, hogy ne fizess
@@ -873,7 +877,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         <div className="card text-center py-10 mb-6">
           <h3 className="font-semibold mb-2" style={{ color: '#F8FAFC' }}>Most nincs elég erős téma</h3>
           <p className="text-sm mb-4" style={{ color: '#94A3B8' }}>
-            Tölts be új ajánlást vagy pontosítsd a niche-ed a Profil oldalon.
+            {opportunityMessage || opportunityError || 'Tölts be új ajánlást vagy pontosítsd a niche-ed a Profil oldalon.'}
           </p>
           <div className="flex gap-3 justify-center">
             <button onClick={handleManualRefresh} disabled={loading} className="btn-primary text-sm">

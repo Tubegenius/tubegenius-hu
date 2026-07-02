@@ -45,6 +45,10 @@ export interface CreatorProfile {
   platform: Platform
   language: Language
   niche: string
+  main_category: string | null
+  specific_focus: string | null
+  audience: string | null
+  avoid_topics: string | null
   video_length: VideoLength
   creator_level: CreatorLevel
   youtube_channel_id: string | null

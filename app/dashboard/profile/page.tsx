@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import { NARRATION_STYLES } from '@/types'
 import type { Platform, Language, CreatorLevel, VideoLength, Region, NarrationStyle } from '@/types'
+import { MAIN_CATEGORIES, type MainCategory } from '@/lib/search/search-context'
+import { validateSpecificFocus } from '@/lib/search/validate-focus'
 
 const platforms: { value: Platform; label: string; icon: string }[] = [
   { value: 'youtube', label: 'YouTube', icon: '▶️' },
@@ -38,6 +40,10 @@ export default function ProfilePage() {
   const [platform, setPlatform] = useState<Platform>('youtube')
   const [language, setLanguage] = useState<Language>('hu')
   const [niche, setNiche] = useState('')
+  const [mainCategory, setMainCategory] = useState<MainCategory>('other')
+  const [specificFocus, setSpecificFocus] = useState('')
+  const [audience, setAudience] = useState('')
+  const [avoidTopics, setAvoidTopics] = useState('')
   const [videoLength, setVideoLength] = useState<VideoLength>('medium')
   const [creatorLevel, setCreatorLevel] = useState<CreatorLevel>('growing')
   const [region, setRegion] = useState<Region>('HU')
@@ -62,6 +68,10 @@ export default function ProfilePage() {
       setPlatform(data.platform || 'youtube')
       setLanguage(data.language || 'hu')
       setNiche(data.niche || '')
+      setMainCategory((data.main_category as MainCategory) || 'other')
+      setSpecificFocus(data.specific_focus || data.niche || '')
+      setAudience(data.audience || '')
+      setAvoidTopics(data.avoid_topics || '')
       setVideoLength(data.video_length || 'medium')
       setCreatorLevel(data.creator_level || 'growing')
       setRegion(data.region || 'HU')
@@ -74,6 +84,10 @@ export default function ProfilePage() {
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
+    if (!specificFocus.trim()) {
+      alert('A specifikus fókusz mező kötelező.')
+      return
+    }
     setSaving(true)
 
     const res = await fetch('/api/profile', {
@@ -83,7 +97,14 @@ export default function ProfilePage() {
         channel_name: channelName,
         platform,
         language,
-        niche,
+        // A niche pipeline (decomposeNicheToLanes stb.) vesszőt/perjelet
+        // kategória-elválasztónak értelmez — a kategória címke ("Tech / AI")
+        // ezért SOHA nem kerülhet bele a niche stringbe, csak a tiszta fókusz.
+        niche: specificFocus.trim(),
+        main_category: mainCategory,
+        specific_focus: specificFocus,
+        audience: audience || null,
+        avoid_topics: avoidTopics || null,
         video_length: videoLength,
         creator_level: creatorLevel,
         region,
@@ -137,11 +158,55 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Niche */}
+        {/* Tartalomirány — strukturált niche input */}
         <div className="card">
-          <label className="block text-sm font-medium text-text-secondary mb-1.5">Niche / téma</label>
-          <input value={niche} onChange={e => setNiche(e.target.value)} placeholder="pl. hírek, egészség, tudomány, tech, pénzügy..." className="input" required />
-          <p className="text-text-muted text-xs mt-2">Minél pontosabb, annál jobb az Opportunity Engine ajánlása.</p>
+          <p className="text-sm font-medium text-text-secondary mb-1">Milyen tartalomirányban keressünk lehetőséget?</p>
+          <p className="text-text-muted text-xs mb-4">Minél konkrétabb a fókusz, annál pontosabb trendtémákat kapsz.</p>
+
+          {/* Fő kategória */}
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Fő kategória</label>
+          <p className="text-text-muted text-xs mb-2">Válassz egy nagy témakört.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-5">
+            {MAIN_CATEGORIES.map(c => (
+              <button key={c.value} type="button" onClick={() => setMainCategory(c.value)}
+                className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all duration-150 ${mainCategory === c.value ? 'bg-violet/10 border-violet/40 text-violet' : 'bg-surface-2 border-border text-text-secondary hover:border-border-2'}`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Specifikus fókusz */}
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Specifikus fókusz</label>
+          <p className="text-text-muted text-xs mb-2">Ne általános kategóriát írj. Egy konkrét tartalomirányt adj meg.</p>
+          <input value={specificFocus} onChange={e => setSpecificFocus(e.target.value)}
+            placeholder="Pl. AI-alapú rákdiagnózis, alvás és agy, James Webb felfedezések" className="input" required />
+          {specificFocus.trim() && (() => {
+            const v = validateSpecificFocus(specificFocus)
+            return (
+              <p className="text-xs mt-2" style={{ color: v.status === 'too_broad' ? '#F59E0B' : '#22C55E' }}>
+                {v.message}
+              </p>
+            )
+          })()}
+          <div className="mt-3 text-xs text-text-muted space-y-1">
+            <p><span style={{ color: '#EF4444' }}>Túl tág:</span> „tudomány, hírek, egészség”</p>
+            <p><span style={{ color: '#F59E0B' }}>Jó:</span> „AI az orvoslásban”</p>
+            <p><span style={{ color: '#22C55E' }}>Még jobb:</span> „AI-alapú rákdiagnózis magyar nézőknek”</p>
+          </div>
+
+          {/* Közönség */}
+          <div className="mt-5">
+            <label className="block text-sm font-medium text-text-secondary mb-1.5">Közönség (opcionális)</label>
+            <input value={audience} onChange={e => setAudience(e.target.value)}
+              placeholder="Pl. laikus magyar nézők, kezdő vállalkozók, fiatal TikTok-közönség" className="input" />
+          </div>
+
+          {/* Kerülendő témák */}
+          <div className="mt-5">
+            <label className="block text-sm font-medium text-text-secondary mb-1.5">Kerülendő témák (opcionális)</label>
+            <input value={avoidTopics} onChange={e => setAvoidTopics(e.target.value)}
+              placeholder="Pl. politika, bulvár, egészségügyi tanácsadás" className="input" />
+          </div>
         </div>
 
         {/* Narrációs stílus */}
@@ -209,13 +274,21 @@ export default function ProfilePage() {
               { value: 'US', label: '🌍 Globális', desc: 'EN piac' },
               { value: 'BOTH', label: '🌐 Mindkettő', desc: 'Hamarosan', disabled: true },
             ].map(r => (
-              <button key={r.value} type="button" onClick={() => setRegion(r.value as Region)}
+              <button key={r.value} type="button" onClick={() => {
+                setRegion(r.value as Region)
+                // A régió és a keresési nyelv legyen mindig konzisztens —
+                // eltérő régió/nyelv kombináció gyengítette a Serper/YouTube
+                // találatok minőségét (US régió + hu nyelv keveredés).
+                if (r.value === 'US') setLanguage('en')
+                if (r.value === 'HU') setLanguage('hu')
+              }}
                 className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${region === r.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
                 <span className={`font-medium ${region === r.value ? 'text-violet' : 'text-text-primary'}`}>{r.label}</span>
                 <span className="text-text-muted text-xs">{r.desc}</span>
               </button>
             ))}
           </div>
+          <p className="text-text-muted text-xs mt-3">A régió automatikusan beállítja a keresési nyelvet is (Magyar → hu, Globális → en).</p>
         </div>
 
         {/* Feliratkozók */}

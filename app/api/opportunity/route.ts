@@ -7,6 +7,7 @@ import { MODELS } from '@/lib/models'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import {
   buildTrendCandidates,
+  getSerperHealthStatus,
   type TrendCandidate,
 } from '@/lib/trend-radar'
 import { generateSeedsForNiche } from '@/lib/seed-generator'
@@ -15,6 +16,7 @@ import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsFo
 import type { OpportunityTopic } from '@/types'
 import { logYouTubeSearch } from '@/lib/usage-protection'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
+import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import {
   evaluateCandidate,
   applySafeOutput,
@@ -227,11 +229,26 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const niche = (body.niche || '').replace(/[,;\s]+$/, '').trim()
-    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles } = body
+    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles, main_category, specific_focus, audience, avoid_topics } = body
     const excludeTitles: string[] = Array.isArray(exclude_titles)
       ? exclude_titles.map((t: string) => String(t).toLowerCase().trim()).filter(Boolean)
       : []
     if (!niche) return NextResponse.json({ error: 'Niche megadása kötelező' }, { status: 400 })
+
+    // Strukturált search context logolása (lib/search/search-context.ts) — a niche
+    // pipeline egyelőre a kompatibilis `niche` stringgel dolgozik tovább, hogy ne
+    // törjük el a meglévő, finomhangolt Opportunity Engine flow-t. A strukturált
+    // mezők itt már elérhetők a következő iterációhoz (Trend Radar / Similar
+    // Videos / Video Package források átállításához).
+    if (main_category || specific_focus) {
+      console.log('[Opportunity] SearchContext:', {
+        main_category: main_category || null,
+        specific_focus: specific_focus || null,
+        audience: audience || null,
+        avoid_topics: avoid_topics || null,
+        region, language,
+      })
+    }
 
     const supabase = createServerSupabaseClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -241,7 +258,14 @@ export async function POST(request: NextRequest) {
 
     const effectiveRegion: 'HU' | 'US' = region === 'HU' ? 'HU' : 'US'
     const isDrilldown = discovery_mode === 'drilldown'
-    const nicheIntent = isDrilldown ? 'specific_topic' : detectNicheIntent(niche)
+    // Ha a niche a strukturált, validált "specifikus fókusz" mezőből jön
+    // (lib/search/validate-focus.ts már ellenőrizte), ne találgassa újra a
+    // szándékot a detectNicheIntent() törékeny heurisztikája (pl. "nincs
+    // nagybetűs entitás a szövegben" tévesen broad_niche-nek jelölt rövid,
+    // teljesen valid magyar fókuszmondatokat).
+    const isFromStructuredFocus = Boolean(specific_focus) && specific_focus.trim() === niche
+    const isValidatedFocus = isFromStructuredFocus && validateSpecificFocus(niche).status === 'ok'
+    const nicheIntent = isDrilldown || isValidatedFocus ? 'specific_topic' : detectNicheIntent(niche)
     const broadDiscoveryPacks = !isDrilldown && nicheIntent === 'broad_niche'
       ? buildBroadNicheDiscoveryPacks(niche, effectiveRegion)
       : []
@@ -350,6 +374,9 @@ export async function POST(request: NextRequest) {
             freshnessWindowDays: pack.freshnessWindowDays,
             maxCandidates: 4,
             discoveryMode: 'evergreen_fact',
+            mainCategory: main_category || '',
+            specificFocus: specific_focus || '',
+            language: language || 'hu',
           })
         ))
         trendCandidates = broadResults
@@ -367,6 +394,9 @@ export async function POST(request: NextRequest) {
           freshnessWindowDays: freshness_window_days,
           maxCandidates: isDrilldown ? 8 : 6,
           discoveryMode: isDrilldown ? 'evergreen_fact' : 'trend',
+          mainCategory: main_category || '',
+          specificFocus: specific_focus || '',
+          language: language || 'hu',
         })
       }
 
@@ -393,19 +423,28 @@ export async function POST(request: NextRequest) {
         ? buildBroadDiscoveryFallbackTopics({ niche, platform, effectiveRegion, packs: broadDiscoveryPacks })
         : buildResearchFallbackTopics({ niche, platform, effectiveRegion, seeds, category })
 
+      // Ha a Serper web-evidence forrás teljesen elérhetetlen volt (pl. elfogyott
+      // kredit, API hiba), ne "túl tág niche"-t írjunk — az félrevezető. Ez nem a
+      // niche minőségének a hibája, hanem ideiglenes szolgáltatás-kimaradás.
+      const serperHealth = getSerperHealthStatus()
+      if (serperHealth.unavailable) {
+        console.error(`[Opportunity] Serper unavailable (${serperHealth.failures}/${serperHealth.attempts} kérés hibázott): ${serperHealth.lastError}`)
+      }
+
       return NextResponse.json({
         topics: fallbackTopics,
         pool_topics: [],
         cached: false,
         charged: false,
         credits_charged: 0,
-        message: force_refresh
+        service_status: serperHealth.unavailable ? 'web_evidence_unavailable' : 'ok',
+        message: serperHealth.unavailable
+          ? 'Ideiglenes szolgáltatás-kimaradás a web-forrás ellenőrzésénél. Ez nem a niche-ed hibája — próbáld újra néhány perc múlva.'
+          : force_refresh
           ? 'Most nem találtunk elég erős új témát. Kreditet nem vontunk le.'
           : nicheIntent === 'broad_niche'
           ? 'Ez egy tág csatorna-niche, ezért konkrét gyártható témát kerestünk benne több kategóriában. Most csak kutatási irányt találtunk.'
-          : niche.includes(',')
-          ? 'Ez a niche túl tág ahhoz, hogy egyetlen pontos témát ajánljunk. Bontottunk belőle néhány kutatási irányt.'
-          : 'Ehhez a niche-hez most nem találtunk elég friss, ellenőrzött trendet.',
+          : 'Ehhez a niche-hez most nem találtunk elég friss, ellenőrzött trendet. Próbáld újra pár perc múlva, vagy válassz más megfogalmazást.',
         trend_summary: {
           category,
           freshness_window_days,
