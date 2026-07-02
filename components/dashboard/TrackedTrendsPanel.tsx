@@ -70,9 +70,44 @@ function formatNumber(n: number | null): string {
   return new Intl.NumberFormat('hu-HU').format(n)
 }
 
+interface TrackedVideo {
+  video_id: string
+  title: string
+  channel_title: string | null
+  url: string
+  view_count: number | null
+  like_count: number | null
+  last_checked_at: string | null
+}
+
 export default function TrackedTrendsPanel() {
   const [tracked, setTracked] = useState<TrackedTrend[] | null>(null)
   const [loading, setLoading] = useState(true)
+  const [openVideosFor, setOpenVideosFor] = useState<string | null>(null)
+  const [videosByCandidate, setVideosByCandidate] = useState<Record<string, TrackedVideo[]>>({})
+  const [videosLoading, setVideosLoading] = useState<string | null>(null)
+
+  // Ingyenes — a már ismert (passzívan gyűjtött) youtube_video_ids adatot
+  // olvassa ki, NEM indít új Similar Videos keresést, NEM von le kreditet.
+  async function toggleVideos(candidateId: string) {
+    if (openVideosFor === candidateId) {
+      setOpenVideosFor(null)
+      return
+    }
+    setOpenVideosFor(candidateId)
+    if (!videosByCandidate[candidateId]) {
+      setVideosLoading(candidateId)
+      try {
+        const res = await fetch(`/api/dashboard/tracked-trends/videos?id=${candidateId}`)
+        const data = await res.json()
+        setVideosByCandidate(prev => ({ ...prev, [candidateId]: data.videos || [] }))
+      } catch {
+        setVideosByCandidate(prev => ({ ...prev, [candidateId]: [] }))
+      } finally {
+        setVideosLoading(null)
+      }
+    }
+  }
 
   useEffect(() => {
     fetch('/api/dashboard/tracked-trends')
@@ -158,11 +193,11 @@ export default function TrackedTrendsPanel() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Link href={`/dashboard/similar-videos?topic=${encodeURIComponent(t.candidate_topic)}`}
+                  <button onClick={() => toggleVideos(t.id)}
                     className="text-xs px-3 py-1.5 rounded-lg transition-colors"
                     style={{ background: 'rgba(255,255,255,0.05)', color: '#CBD5E1' }}>
-                    Videók megnyitása
-                  </Link>
+                    {openVideosFor === t.id ? 'Videók elrejtése' : 'Videók megnyitása'}
+                  </button>
                   <Link href={`/dashboard/video-package?topic=${encodeURIComponent(t.candidate_topic)}`}
                     className="text-xs px-3 py-1.5 rounded-lg font-semibold"
                     style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
@@ -170,6 +205,29 @@ export default function TrackedTrendsPanel() {
                   </Link>
                 </div>
               </div>
+
+              {openVideosFor === t.id && (
+                <div className="mt-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  {videosLoading === t.id ? (
+                    <p className="text-xs" style={{ color: '#64748B' }}>Betöltés...</p>
+                  ) : (videosByCandidate[t.id] || []).length === 0 ? (
+                    <p className="text-xs" style={{ color: '#64748B' }}>
+                      Ehhez a témához még nincs mentett videójel. A követés során gyűjtött adat majd itt jelenik meg.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {(videosByCandidate[t.id] || []).map(v => (
+                        <a key={v.video_id} href={v.url} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center gap-2.5 py-1.5 px-1 rounded-lg transition-colors hover:bg-white/[0.03]">
+                          <i className="ti ti-brand-youtube flex-shrink-0" style={{ color: '#EF4444', fontSize: '14px' }} />
+                          <span className="text-xs flex-1 min-w-0 truncate" style={{ color: '#CBD5E1' }}>{v.title}</span>
+                          <span className="text-xs flex-shrink-0" style={{ color: '#64748B' }}>{formatNumber(v.view_count)} megtekintés</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )
         })}
