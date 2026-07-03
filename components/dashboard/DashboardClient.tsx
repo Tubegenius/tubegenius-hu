@@ -9,6 +9,7 @@ import { scoreColor, scoreLabel, scoreLabelColor } from '@/lib/score-utils'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import TrendFeedHistory from '@/components/dashboard/TrendFeedHistory'
 
 function getGreeting(): string {
   const hour = new Date().getHours()
@@ -700,7 +701,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           remainingCreditsAfterRun: 0,
           requiresConfirmation: true,
           canRun: true,
-          message: data.message || 'A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
+          message: data.message || 'A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
         })
         setGenerated(true)
         return
@@ -777,6 +778,8 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{getGreeting()}, {displayName}!</h1>
         <p className="text-sm" style={{ color: '#94A3B8' }}>Készen állsz a következő sikeres videódra?</p>
       </div>
+
+      <TrendFeedHistory />
 
       {/* 2. Main Recommendation Card */}
       {loading && (

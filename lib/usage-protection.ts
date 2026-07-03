@@ -4,7 +4,11 @@ import { createServerClient } from '@supabase/ssr'
 
 export const FREE_LIMITS = {
   similar_videos: { daily: 3, weekly: 0, hardLimitDaily: 50, creditCost: 1 },
-  opportunity_engine: { daily: 0, weekly: 1, hardLimitDaily: 20, creditCost: 2 },
+  // Napi 1 ingyenes Opportunity Engine / Trend Feed futtatás — ez a
+  // termékszabály (DashboardClient.tsx "Napi 1 ingyenes auto-frissítés"),
+  // NEM heti. (Korábban tévesen weekly:1 volt beállítva, ami miatt a heti
+  // keret gyorsan elfogyott és a napi ingyenes ajánlás fizetőssé vált.)
+  opportunity_engine: { daily: 1, weekly: 0, hardLimitDaily: 20, creditCost: 2 },
 } as const
 
 export type ProtectedFeature = keyof typeof FREE_LIMITS
@@ -63,18 +67,6 @@ async function getTodayUsageCount(userId: string, feature: string): Promise<numb
   return count || 0
 }
 
-async function getWeekUsageCount(userId: string, feature: string): Promise<number> {
-  const admin = adminClient()
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  const { count } = await admin
-    .from('youtube_search_logs')
-    .select('*', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('feature_name', feature)
-    .gte('created_at', weekAgo)
-  return count || 0
-}
-
 // ── Fő check: futtathat-e a user? ────────────────────────────
 
 export async function checkUsagePermission(
@@ -126,8 +118,7 @@ export async function checkUsagePermission(
   }
 
   if (feature === 'opportunity_engine') {
-    const weekCount = await getWeekUsageCount(userId, feature)
-    const freeLeft = Math.max(0, (limits.weekly || 0) - weekCount)
+    const freeLeft = Math.max(0, limits.daily - todayCount)
     if (freeLeft > 0) {
       return {
         feature,
@@ -135,7 +126,7 @@ export async function checkUsagePermission(
         currency: 'free',
         currentCredits: balance,
         remainingCreditsAfterRun: balance,
-        freeRunsLeftThisWeek: freeLeft,
+        freeRunsLeftToday: freeLeft,
         requiresConfirmation: false,
         canRun: true,
       }
@@ -170,7 +161,7 @@ export async function checkUsagePermission(
     canRun: true,
     message: feature === 'similar_videos'
       ? `A napi 3 ingyenes Similar Videos keresesed elfogyott. Ez a futtatas ${limits.creditCost} kreditbe kerul.`
-      : `A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatas ${limits.creditCost} kreditbe kerul.`,
+      : `A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatas ${limits.creditCost} kreditbe kerul.`,
   }
 }
 

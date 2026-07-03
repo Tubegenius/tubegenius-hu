@@ -338,7 +338,7 @@ export async function POST(request: NextRequest) {
           charged: false,
           credits_charged: 0,
           usage_blocked: true,
-          message: usage.message || 'A heti ingyenes Opportunity Engine kereted elfogyott, és nincs elég kredited a folytatáshoz.',
+          message: usage.message || 'A napi ingyenes Opportunity Engine kereted elfogyott, és nincs elég kredited a folytatáshoz.',
         })
       }
       if (usage.currency === 'credit') {
@@ -352,7 +352,7 @@ export async function POST(request: NextRequest) {
           credits_charged: 0,
           needs_confirmation: true,
           confirmation_cost: usage.cost,
-          message: usage.message || `A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás ${usage.cost} kreditbe kerül.`,
+          message: usage.message || `A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás ${usage.cost} kreditbe kerül.`,
         })
       }
     }
@@ -650,7 +650,13 @@ KRITIKUS JSON SZABÁLYOK:
         confidence: t.confidence || null,
         opportunityScore: t.opportunity_score,
         youtubeVideoIds: (t.evidence_videos || []).map(v => v.video_id).filter(Boolean),
-        webSourceIds: (t.web_sources || []).map(s => s.url).filter(Boolean),
+        webSourceIds: (t.web_sources || []).map(s => ({
+          title: s.title,
+          url: s.url,
+          snippet: s.snippet,
+          source: s.source,
+          date: s.date,
+        })).filter(s => !!s.url),
         generatedAt: t.generated_at,
       }).catch(() => {}))
     )
@@ -696,6 +702,20 @@ KRITIKUS JSON SZABÁLYOK:
         charged = true
         creditsCharged = 2
       }
+    }
+
+    // Napi Trend Feed snapshot mentése — hogy a user vissza tudja nézni a
+    // tegnapi (vagy korábbi napi) ajánlást is, ne csak a mai/legutóbbi cache-t.
+    if (!isDrilldown && validCount > 0) {
+      const todayDate = new Date().toISOString().slice(0, 10)
+      await admin.from('trend_feed_daily_snapshots').upsert({
+        user_id: user.id,
+        snapshot_date: todayDate,
+        niche,
+        topics,
+      }, { onConflict: 'user_id,snapshot_date' }).then(({ error }) => {
+        if (error) console.warn('[Opportunity] trend_feed_daily_snapshots mentés hiba (non-blocking):', error)
+      })
     }
 
     const messageText = isDrilldown

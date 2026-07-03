@@ -848,7 +848,7 @@ export default function OpportunitiesPage() {
           remainingCreditsAfterRun: 0,
           requiresConfirmation: true,
           canRun: true,
-          message: data.message || 'A heti ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
+          message: data.message || 'A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
         })
         return
       }
