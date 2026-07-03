@@ -140,6 +140,7 @@ export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfi
                 </div>
                 <div className="flex gap-1.5">
                   <Link href={`/dashboard/opportunities?highlight=${encodeURIComponent(topic.id)}`}
+                    onClick={() => sessionStorage.setItem('willviral_highlight_candidate', JSON.stringify(topic))}
                     className="flex-1 text-center text-xs py-1.5 rounded-lg"
                     style={{ background: 'rgba(255,255,255,0.05)', color: '#CBD5E1' }}>
                     Részletek
