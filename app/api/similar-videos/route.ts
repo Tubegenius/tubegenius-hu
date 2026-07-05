@@ -10,10 +10,11 @@ import { decideSimilarVideo } from '@/lib/scoring/willviral-decision-engine'
 import { youtubeSearch, youtubeStats, getEffectiveBudget, quotaSummary, startNewRequest, type YouTubeSearchItem as YTSearchItem, type YouTubeStatsItem as YTStatsItem } from '@/lib/youtube-service'
 import { generateSimilarVideoQueries } from '@/lib/similar-query-expansion'
 import { calculateNicheFit } from '@/lib/niche-fit'
-import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature } from '@/lib/usage-protection'
+import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { normalizeTopic as normalizeTopicForHash, buildSearchContextHash, getCachedSearch, touchLastOpened, saveSearchResult } from '@/lib/similar-videos-cache'
+import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MIN_SIMILAR_VIDEO_RELEVANCE = 60
@@ -399,7 +400,7 @@ function calcNicheFit(video: { title: string; description?: string; channelTitle
   if (score >= 70) return { score, label: 'Eros niche fit', reason: `Kozvetlenul kapcsolodik: ${niche}` }
   if (score >= 40) return { score, label: 'Kozepes niche fit', reason: `Reszben kapcsolodik: ${niche}` }
   if (score > 0) return { score, label: 'Gyenge niche fit', reason: `Tavolabb all a niche-edtol, de adaptalhato` }
-  return { score: 0, label: 'Nem niche-specifikus', reason: `Nem kapcsolodik kozvetlenul: ${niche}. Globalisan erdekes, de adaptalni kell.` }
+  return { score: 0, label: 'Nem niche-specifikus', reason: `Nem kapcsolódik közvetlenül: ${niche}. Globálisan érdekes, de adaptálni kell.` }
 }
 
 async function fetchYouTube(query: string, region: Region, publishedAfterDays: number, maxResults: number) {
@@ -416,7 +417,7 @@ async function hydrateStats(items: YouTubeSearchItem[]) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { topic, region, max_results = 9, user_niche, platform, language, cache_only, force_refresh } = await request.json()
+    const { topic, region, max_results = 9, user_niche, use_profile_niche, platform, language, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
     if (!topic) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
@@ -428,7 +429,7 @@ export async function POST(request: NextRequest) {
     const userId = user.id
 
     let effectiveNiche = user_niche || ''
-    if (!effectiveNiche) {
+    if (!effectiveNiche && use_profile_niche === true) {
       const admin = createAdminClient()
       const { data: prof } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
       effectiveNiche = prof?.niche || ''
@@ -441,7 +442,26 @@ export async function POST(request: NextRequest) {
     // vissza: nincs új YouTube/Claude hívás, nincs új kreditlevonás.
     // Csak force_refresh indít explicit, fizetős újrakeresést.
     const searchHash = buildSearchContextHash({ userId, topic, region, language, platform })
+    const paidNormalizedInput = normalizePaidResultInput(topic)
+    const paidInputHash = buildPaidResultHash({
+      userId,
+      toolType: 'similar_videos',
+      normalizedInput: paidNormalizedInput,
+      region: region || 'HU',
+      language: language || null,
+      platform: platform || 'youtube',
+    })
     if (!force_refresh) {
+      const paidById = await getPaidResultById(userId, paidResultId || paid_result_id)
+      const paid = paidById || await getPaidResultByHash({ userId, toolType: 'similar_videos', inputHash: paidInputHash })
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({
+          ...(opened.result_json as object),
+          from_cache: true,
+          ...paidResultResponseMeta(opened),
+        })
+      }
       const cached = await getCachedSearch(searchHash, userId)
       if (cached) {
         await touchLastOpened(cached.id)
@@ -480,7 +500,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           videos: [],
           queries_used: [],
-          warning: 'Nincs eleg kredited ehhez a muvelethez.',
+          warning: 'Nincs elég kredited ehhez a művelethez.',
           usage_blocked: true,
           credits_remaining: usageCheck.currentCredits,
         })
@@ -673,10 +693,18 @@ export async function POST(request: NextRequest) {
 
     // Kredit levonás + usage log — CSAK ha tényleg volt keresés (nem üres eredmény cache-ből)
     const hadRealSearch = finalVideos.length > 0
+    let savedPaidResultId: string | null = null
     if (userId && hadRealSearch) {
       if (usageCheck.cost > 0 && !creditCharged) {
-        const charge = await chargeProtectedFeature(userId, 'similar_videos')
+        const charge = await chargeProtectedFeature(userId, 'similar_videos', { topic })
         creditCharged = charge.success
+        if (!charge.success) {
+          return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a kereséshez.' }, { status: 402 })
+        }
+      } else if (usageCheck.cost === 0) {
+        // Ingyenes napi kvótából futott — nincs kredit levonás, de a
+        // "Legutóbbi történeted" panelen meg kell jelennie a keresésnek.
+        await logFreeProductUse(userId, 'similar_videos', { topic }).catch(() => {})
       }
       await logYouTubeSearch({
         userId,
@@ -690,6 +718,41 @@ export async function POST(request: NextRequest) {
       // Perzisztens mentés — hogy az újranyitás (más session, más nap) ingyenes
       // legyen. A user már fizetett ezért a keresésért (ha kredit kellett hozzá),
       // ezért a mentés hibája KRITIKUS — logoljuk, de a választ így is visszaadjuk.
+      const responsePayload = {
+        videos: finalVideos,
+        queries_used: queries,
+        interpreted_topic: haikuExpansion?.interpreted_topic || topic,
+        global_adaptable: haikuExpansion?.global_adaptable ?? false,
+        freshness_window_days,
+        region_used: regionCode,
+        min_relevance: MIN_SIMILAR_VIDEO_RELEVANCE,
+        quota: quotaSummary(),
+        warning: finalVideos.length === 0
+          ? (quotaSummary().is_exhausted
+              ? 'YouTube API kvóta kimerült. A keresés holnap újra elérhető, vagy próbáld cache-ből.'
+              : 'Nem találtunk elég erős Similar Videos találatot erre a témára.')
+          : null,
+      }
+
+      const paidSave = await savePaidResult({
+        userId,
+        toolType: 'similar_videos',
+        inputHash: paidInputHash,
+        normalizedInput: paidNormalizedInput,
+        originalInput: topic,
+        region: regionCode,
+        language: language || null,
+        platform: platform || null,
+        resultJson: responsePayload,
+        summaryJson: { result_count: finalVideos.length, topic },
+        creditCost: usageCheck.cost > 0 ? usageCheck.cost : 0,
+        freshForHours: 6,
+      })
+      if (!paidSave.success) {
+        console.error('[SimilarVideos] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      }
+      savedPaidResultId = paidSave.record?.id || null
+
       await saveSearchResult({
         userId,
         hash: searchHash,
@@ -716,9 +779,13 @@ export async function POST(request: NextRequest) {
       quota: quotaSummary(),
       warning: finalVideos.length === 0
         ? (quotaSummary().is_exhausted
-            ? 'YouTube API kvota kimerult. A kereses holnap ujra elerheto, vagy probald cache-bol.'
-            : 'Nem talaltunk eleg eros Similar Videos talalatot erre a temara.')
+            ? 'YouTube API kvóta kimerült. A keresés holnap újra elérhető, vagy próbáld cache-ből.'
+            : 'Nem találtunk elég erős Similar Videos találatot erre a témára.')
         : null,
+      from_paid_result: false,
+      cache_status: 'fresh',
+      requires_credit: usageCheck.cost > 0,
+      paid_result_id: savedPaidResultId,
     })
   } catch (error) {
     console.error('Similar Videos error:', error)

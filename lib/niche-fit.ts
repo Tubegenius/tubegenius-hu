@@ -119,19 +119,19 @@ export function calculateNicheFit(
   let reason: string
 
   if (score >= 80) {
-    label = 'Erosen niche-relevans'
-    reason = `Kapcsolodik a profilodhoz: ${matchedCategories.join(', ')}.`
+    label = 'Erősen niche-releváns'
+    reason = `Kapcsolódik a profilodhoz: ${matchedCategories.join(', ')}.`
   } else if (score >= 60) {
-    label = 'Niche-relevans'
-    reason = `Kapcsolodik: ${matchedCategories.join(', ')}.`
+    label = 'Niche-releváns'
+    reason = `Kapcsolódik: ${matchedCategories.join(', ')}.`
   } else if (score >= 40) {
-    label = 'Adaptalhato inspiracio'
+    label = 'Adaptálható inspiráció'
     reason = matchedCategories.length > 0
-      ? `Reszben illeszkedik: ${matchedCategories.join(', ')}. A formatum adaptalhato.`
-      : 'Nem kozvetlen niche-talalat, de a formatum adaptalhato.'
+      ? `Részben illeszkedik: ${matchedCategories.join(', ')}. A formátum adaptálható.`
+      : 'Nem közvetlen niche-találat, de a formátum adaptálható.'
   } else {
     label = 'Nem niche-specifikus'
-    reason = 'Globalisan erdekes, de nem kapcsolodik kozvetlenul a niche-edhez.'
+    reason = 'Globálisan érdekes, de nem kapcsolódik közvetlenül a niche-edhez.'
   }
 
   return { score, matchedCategories, matchedTerms, label, reason }

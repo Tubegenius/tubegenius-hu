@@ -106,7 +106,7 @@ export interface TrendCandidate {
 
 // ── Serper API hívások ────────────────────────────────────────
 
-async function fetchSerperNews(query: string, region: string): Promise<SerperResult[]> {
+export async function fetchSerperNews(query: string, region: string): Promise<SerperResult[]> {
   if (!SERPER_API_KEY) return []
   recordSerperAttempt()
   try {
@@ -827,7 +827,7 @@ function validateTrendSource(
   }
 }
 
-function computeSerperFreshness(results: SerperResult[], windowDays: number): number {
+export function computeSerperFreshness(results: SerperResult[], windowDays: number): number {
   if (results.length === 0) return 0
   let freshCount = 0
   for (const r of results) {

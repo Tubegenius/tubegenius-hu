@@ -242,6 +242,36 @@ export interface YouTubeStatsItem {
   contentDetails?: { duration?: string }
 }
 
+// ── HTML entity decode ───────────────────────────────────────
+// A YouTube API néha HTML-entitásokkal kódolt címet/leírást ad vissza
+// (pl. "&quot;", "&amp;", "&#39;") — ezeket egy központi helyen dekódoljuk,
+// hogy minden hívó (Opportunity Engine, Similar Videos, Viral Score, stb.)
+// már tiszta szöveget kapjon, ne kelljen oldalanként külön javítani.
+function decodeHtmlEntities(text: string): string {
+  if (!text) return text
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+function decodeSearchItems(items: YouTubeSearchItem[]): YouTubeSearchItem[] {
+  return items.map(item => ({
+    ...item,
+    snippet: {
+      ...item.snippet,
+      title: decodeHtmlEntities(item.snippet.title),
+      description: item.snippet.description ? decodeHtmlEntities(item.snippet.description) : item.snippet.description,
+      channelTitle: decodeHtmlEntities(item.snippet.channelTitle),
+    },
+  }))
+}
+
 // ── Core YouTube API calls ───────────────────────────────────
 
 async function rawYouTubeSearch(
@@ -266,7 +296,7 @@ async function rawYouTubeSearch(
       console.warn('[YouTube] Search error:', reason, data.error.message)
       return { items: [], quotaExceeded: false }
     }
-    return { items: (data.items || []) as YouTubeSearchItem[], quotaExceeded: false }
+    return { items: decodeSearchItems((data.items || []) as YouTubeSearchItem[]), quotaExceeded: false }
   } catch (e) {
     console.warn('[YouTube] Search fetch error:', e)
     return { items: [], quotaExceeded: false }

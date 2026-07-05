@@ -42,9 +42,19 @@ function buildPackageUrl(topic: OpportunityTopic) {
   return `/dashboard/video-package?${params.toString()}`
 }
 
+function formatGeneratedAt(iso: string): string {
+  const d = new Date(iso)
+  const today = new Date()
+  if (d.toDateString() === today.toDateString()) return 'ma frissítve'
+  const days = Math.round((today.getTime() - d.getTime()) / 86400000)
+  if (days <= 1) return 'tegnap frissítve'
+  return `${days} napja frissítve`
+}
+
 export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfile | null }) {
   const [topics, setTopics] = useState<OpportunityTopic[] | null>(null)
   const [loading, setLoading] = useState(true)
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null)
 
   useEffect(() => {
     if (!profile?.niche) { setLoading(false); return }
@@ -65,6 +75,7 @@ export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfi
         const all = (data.topics || []) as OpportunityTopic[]
         const production = all.filter(isProductionCandidate)
         setTopics((production.length > 0 ? production : all).slice(0, 4))
+        setGeneratedAt(data.generated_at || null)
       })
       .catch(() => setTopics([]))
       .finally(() => setLoading(false))
@@ -100,6 +111,9 @@ export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfi
         <h3 className="text-sm font-semibold flex items-center gap-1.5" style={{ color: '#F8FAFC' }}>
           <i className="ti ti-flame" style={{ color: '#F59E0B' }} />
           Top lehetőségek most
+          {generatedAt && (
+            <span className="text-xs font-normal" style={{ color: '#64748B' }}>· {formatGeneratedAt(generatedAt)}</span>
+          )}
         </h3>
         <Link href="/dashboard/opportunities" className="text-xs font-medium" style={{ color: '#3B82F6' }}>
           Több megtekintése →

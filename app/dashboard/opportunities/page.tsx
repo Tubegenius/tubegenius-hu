@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase'
@@ -176,6 +176,10 @@ type ExtendedTopic = OpportunityTopic & {
   hook_pattern?: string
   web_sources?: WebSource[]
   ready_to_produce_status?: ReadyStatus
+  evidence_strength?: 'strong' | 'medium' | 'weak' | 'none'
+  validation_reason?: string
+  recommended_next_action?: 'generate_package' | 'deep_refresh' | 'open_similar_videos' | 'refine_topic' | 'reject'
+  data_limitations?: string[]
   evidence_match_score?: number
   decision_score?: number
   risk_flags?: string[]
@@ -189,11 +193,30 @@ type ExtendedTopic = OpportunityTopic & {
     final_decision: string
     explanation: string
     label: string
+    evidence_strength?: 'strong' | 'medium' | 'weak' | 'none'
+    validation_reason?: string
+    recommended_next_action?: 'generate_package' | 'deep_refresh' | 'open_similar_videos' | 'refine_topic' | 'reject'
+    data_limitations?: string[]
     cta_primary: { text: string; action: string }
     cta_secondary?: { text: string; action: string }
   }
 }
 
+function evidenceStrengthMeta(strength?: string): { label: string; color: string; bg: string } {
+  if (strength === 'strong') return { label: 'Erős bizonyíték', color: '#22C55E', bg: 'rgba(34,197,94,0.1)' }
+  if (strength === 'medium') return { label: 'Közepes bizonyíték', color: '#3B82F6', bg: 'rgba(59,130,246,0.1)' }
+  if (strength === 'weak') return { label: 'Gyenge jel', color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' }
+  return { label: 'Nincs elég bizonyíték', color: '#94A3B8', bg: 'rgba(148,163,184,0.1)' }
+}
+
+function nextActionLabel(action?: string): string {
+  if (action === 'generate_package') return 'Következő lépés: videócsomag'
+  if (action === 'deep_refresh') return 'Következő lépés: mély frissítés'
+  if (action === 'open_similar_videos') return 'Következő lépés: hasonló videók'
+  if (action === 'refine_topic') return 'Következő lépés: téma szűkítése'
+  if (action === 'reject') return 'Következő lépés: elutasítás'
+  return 'Következő lépés: ellenőrzés'
+}
 function getReadyStatus(topic: ExtendedTopic): { status: ReadyStatus; label: string; color: string; bg: string } {
   const backendStatus = topic.ready_to_produce_status
   if (backendStatus === 'ready') {
@@ -409,6 +432,31 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
                   </span>
                 </div>
                 <p className="text-xs mb-2" style={{ color: '#CBD5E1' }}>{topic.validation_summary.explanation}</p>
+                {(() => {
+                  const strength = topic.evidence_strength || topic.validation_summary.evidence_strength
+                  const meta = evidenceStrengthMeta(strength)
+                  const reason = topic.validation_reason || topic.validation_summary.validation_reason
+                  const action = topic.recommended_next_action || topic.validation_summary.recommended_next_action
+                  const limitations = topic.data_limitations || topic.validation_summary.data_limitations || []
+                  return (
+                    <div className="mb-2 rounded-lg px-2.5 py-2" style={{ background: 'rgba(8,13,24,0.5)', border: `1px solid ${meta.color}22` }}>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                        <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ color: meta.color, background: meta.bg, border: `1px solid ${meta.color}30` }}>
+                          {meta.label}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ color: '#CBD5E1', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                          {nextActionLabel(action)}
+                        </span>
+                      </div>
+                      {reason && <p className="text-xs leading-relaxed" style={{ color: '#CBD5E1' }}>{reason}</p>}
+                      {limitations.length > 0 && (
+                        <p className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>
+                          Korlát: {limitations.slice(0, 2).join(' · ')}
+                        </p>
+                      )}
+                    </div>
+                  )
+                })()}
                 <div className="flex flex-wrap gap-1.5 text-xs">
                   <span className="px-2 py-0.5 rounded-full" style={{
                     background: topic.validation_summary.web_validation_score >= 70 ? 'rgba(34,197,94,0.08)' : topic.validation_summary.web_validation_score >= 35 ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.04)',
@@ -451,7 +499,7 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
               style={{ background: readyStatus.bg, border: `1px solid ${readyStatus.color}30` }}>
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs font-semibold" style={{ color: readyStatus.color }}>
-                  WillViral dontes: {readyStatus.label}
+                  WillViral döntés: {readyStatus.label}
                 </p>
                 {decisionScore !== undefined && (
                   <span className="text-xs font-mono" style={{ color: readyStatus.color }}>
@@ -461,12 +509,12 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
               </div>
               {readyStatus.status === 'ready' && (
                 <p className="text-xs mt-1" style={{ color: '#CBD5E1' }}>
-                  Van eleg jel ahhoz, hogy ebbol kozvetlenul videocsomag keszuljon.
+                  Van elég jel ahhoz, hogy ebből közvetlenül videócsomag készüljön.
                 </p>
               )}
               {readyStatus.status === 'watch' && (
                 <p className="text-xs mt-1" style={{ color: '#CBD5E1' }}>
-                  Igeretes korai lehetoseg.
+                  Ígéretes korai lehetőség.
                 </p>
               )}
               {(readyStatus.status === 'research' || readyStatus.status === 'rejected') && (
@@ -601,13 +649,13 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
                 <a href={packageUrl} onClick={() => storeOpportunityPackageContext(topic, displayTitle)}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all"
                   style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', color: '#3B82F6' }}>
-                  Videocsomag
+                  Videócsomag
                 </a>
               ) : (
                 <a href={`/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || displayTitle)}`}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all"
                   style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#F59E0B' }}>
-                  Validacio megnyitasa
+                  Validáció megnyitása
                 </a>
               )}
               <button onClick={handleShowSimilar} disabled={similarLoading}
@@ -662,10 +710,18 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
 // ── Discovery Lane helper ────────────────────────────────────
 
 function isDiscoveryLane(topic: ExtendedTopic): boolean {
+  const hasWebSources = !!topic.web_sources?.length
+  const hasEvidenceVideos = !!topic.evidence_videos?.length
+  const hasEvidence = hasWebSources || hasEvidenceVideos
+  const readyStatus = getReadyStatus(topic).status
+  const score = topic.opportunity_score || 0
+  const lowConfidence = topic.confidence === 'alacsony' || topic.confidence === 'nagyon_alacsony'
+
   return (
     topic.trend_source_type === 'broad_niche_discovery' ||
     topic.trend_source_type === 'research_fallback' ||
-    (!topic.web_sources?.length && !topic.evidence_videos?.length && topic.opportunity_score === 0)
+    topic.ready_to_produce_status === 'research' ||
+    (!hasEvidence && (score < 60 || readyStatus === 'research' || lowConfidence))
   )
 }
 
@@ -673,15 +729,43 @@ function DiscoveryLaneCard({ topic, onSearch }: {
   topic: ExtendedTopic
   onSearch: (keyword: string) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
+  const strength = topic.evidence_strength || topic.validation_summary?.evidence_strength
+  const meta = evidenceStrengthMeta(strength)
+  const reason = topic.validation_reason || topic.validation_summary?.validation_reason
+  const limitations = topic.data_limitations || topic.validation_summary?.data_limitations || []
+  const webSources = topic.web_sources || []
+  const videos = topic.evidence_videos || []
+  const hasDetails = webSources.length > 0 || videos.length > 0 || !!reason || limitations.length > 0
+  const displayTitle = topic.title
+  const packageUrl = buildOpportunityPackageUrl(topic, displayTitle)
+  const decisionScore = topic.decision_score || topic.evidence_match_score || topic.opportunity_score || 0
+  const scoreColorVal = getScoreColor(decisionScore)
+
   return (
     <div className="rounded-xl p-4" style={{ background: 'rgba(139,155,180,0.05)', border: '1px solid rgba(139,155,180,0.12)' }}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm" style={{ color: '#CBD5E1' }}>🔍</span>
             <h3 className="font-medium text-sm" style={{ color: '#F8FAFC' }}>{topic.title}</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ color: meta.color, background: meta.bg, border: `1px solid ${meta.color}30` }}>
+              {meta.label}
+            </span>
           </div>
           <p className="text-xs leading-relaxed mb-3" style={{ color: '#94A3B8' }}>{topic.description}</p>
+
+          {(reason || limitations.length > 0) && (
+            <div className="rounded-lg px-3 py-2 mb-3" style={{ background: 'rgba(8,13,24,0.45)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              {reason && <p className="text-xs leading-relaxed" style={{ color: '#CBD5E1' }}>{reason}</p>}
+              {limitations.length > 0 && (
+                <p className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>
+                  Korlát: {limitations.slice(0, 3).join(' · ')}
+                </p>
+              )}
+            </div>
+          )}
+
           {topic.risk_flags && topic.risk_flags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-3">
               {topic.risk_flags.map((flag, i) => (
@@ -692,30 +776,77 @@ function DiscoveryLaneCard({ topic, onSearch }: {
               ))}
             </div>
           )}
+
           <div className="flex gap-2 flex-wrap">
+            {hasDetails && (
+              <button onClick={() => setExpanded(!expanded)}
+                className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all hover:opacity-80"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
+                {expanded ? 'Részletek elrejtése' : `Részletek (${webSources.length} forrás · ${videos.length} videó)`}
+              </button>
+            )}
+            <a href={`/dashboard/viral-score?topic=${encodeURIComponent(topic.keyword || displayTitle)}`}
+              className="text-xs px-3 py-1.5 rounded-lg transition-all"
+              style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.25)', color: '#A78BFA' }}>
+              Viral Score
+            </a>
+            <a href={packageUrl} onClick={() => storeOpportunityPackageContext(topic, displayTitle)}
+              className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all"
+              style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', color: '#3B82F6' }}>
+              Videócsomag
+            </a>
             <button onClick={() => onSearch(topic.keyword || topic.title)}
               className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all hover:opacity-80"
-              style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', color: '#3B82F6' }}>
-              🔎 Konkrét témák keresése
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
+              Konkrétabb témák keresése
             </button>
             <a href={`/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || topic.title)}`}
               className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
-              🎬 Similar Videos keresése
+              Similar Videos
             </a>
+          </div>
+
+          {expanded && (
+            <div className="mt-3 pt-3 space-y-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+              {webSources.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-widest mb-1.5" style={{ color: '#64748B' }}>Webes források ({webSources.length})</p>
+                  <div className="space-y-1.5">
+                    {webSources.map((source, i) => <WebSourceItem key={`${source.url}-${i}`} source={source} />)}
+                  </div>
+                </div>
+              )}
+              {videos.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-widest mb-1.5" style={{ color: '#64748B' }}>Videójelek ({videos.length})</p>
+                  <div className="space-y-1.5">
+                    {videos.map(video => <EvidenceVideo key={video.video_id} video={video} />)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="text-right flex-shrink-0 min-w-[64px]">
+          <span className="text-2xl font-bold" style={{ color: scoreColorVal }}>{decisionScore}</span>
+          <div className="text-xs font-medium mt-0.5" style={{ color: scoreLabelColor(decisionScore) }}>
+            {scoreLabel(decisionScore)}
           </div>
         </div>
       </div>
     </div>
   )
 }
-
 // ── Fő oldal ──────────────────────────────────────────────────
 
 export default function OpportunitiesPage() {
   const supabase = createClient()
   const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
+  const nicheParam = searchParams.get('niche')
+  const paidResultId = searchParams.get('paidResultId') || ''
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [highlightTopic, setHighlightTopic] = useState<ExtendedTopic | null>(null)
   const [niche, setNiche] = useState('')
@@ -752,6 +883,35 @@ export default function OpportunitiesPage() {
             return
           }
         } catch {}
+      }
+
+      // Ha a "Legutóbbi történeted" panelről érkezünk egy korábbi niche-szel,
+      // előbb ingyenesen megnézzük, van-e még érvényes mentett eredmény —
+      // ha van, azt mutatjuk kredit-ellenőrzés és megerősítő modal nélkül.
+      // Csak akkor megy a normál, kredit-gated útra, ha nincs cache.
+      if (nicheParam) {
+        setNiche(nicheParam)
+        try {
+          const cacheRes = await fetch('/api/opportunity', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              niche: nicheParam, platform: prof?.platform || 'youtube',
+              language: prof?.language || 'hu', region: prof?.region || 'HU',
+              main_category: prof?.main_category, specific_focus: prof?.specific_focus,
+              cache_only: true,
+              paidResultId: paidResultId || undefined,
+            }),
+          })
+          const cacheData = await cacheRes.json()
+          if (cacheRes.ok && (cacheData.cached || cacheData.from_paid_result) && (cacheData.topics?.length > 0 || cacheData.pool_topics?.length > 0)) {
+            setTopics(cacheData.topics || [])
+            setPoolTopics(cacheData.pool_topics || [])
+            setCached(true)
+            return
+          }
+        } catch {}
+        if (prof) await handleGenerateWithCreditCheck({ ...prof, niche: nicheParam })
+        return
       }
 
       const saved = sessionStorage.getItem('willviral_opportunities_state')
@@ -830,6 +990,7 @@ export default function OpportunitiesPage() {
           // A user már jóváhagyta a levonást a CreditConfirmModalban — csak ekkor
           // szabad a szervernek ténylegesen kreditet vonnia (force_refresh jelzi ezt).
           force_refresh: options?.confirmed === true,
+          paidResultId: paidResultId || undefined,
         }),
       })
       const data = await res.json()
@@ -848,7 +1009,7 @@ export default function OpportunitiesPage() {
           remainingCreditsAfterRun: 0,
           requiresConfirmation: true,
           canRun: true,
-          message: data.message || 'A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
+          message: data.message || 'A heti ingyenes Top Opportunity ajánlásod már megvan. Ez az extra keresés kreditbe kerül.',
         })
         return
       }
@@ -928,7 +1089,7 @@ export default function OpportunitiesPage() {
       )}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-text-primary mb-1">Opportunity Engine</h1>
-        <p className="text-text-secondary text-sm">YouTube-adatok + backend scoring alapjan — nem AI talalgatas.</p>
+        <p className="text-text-secondary text-sm">Forrásokkal és YouTube-jelekkel validált creator témaajánlások.</p>
       </div>
 
       {profile && (
@@ -949,13 +1110,13 @@ export default function OpportunitiesPage() {
           <input value={niche} onChange={e => setNiche(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerateWithCreditCheck()}
             placeholder="pl. egészség, tech, pénzügy, sport..." className="input flex-1" />
           <button onClick={() => handleGenerateWithCreditCheck()} disabled={loading || !niche.trim()} className="btn-primary px-6 whitespace-nowrap">
-            {loading ? 'Keresés...' : 'Lehetőségek'}
+            {loading ? 'Keresés...' : 'Témák keresése'}
           </button>
         </div>
         {cached && (
           <div className="flex items-center justify-between mt-2">
             <p className="text-text-muted text-xs flex items-center gap-1">
-              <span>⚡</span> Gyors betöltés — cache (24 óra)
+              <span>⚡</span> Mentett eredmény betöltve
             </p>
             <button onClick={() => {
               Object.keys(sessionStorage)
@@ -964,7 +1125,7 @@ export default function OpportunitiesPage() {
               setCached(false)
               handleGenerateWithCreditCheck()
             }} className="text-xs" style={{ color: '#3B82F6' }}>
-              ↻ Friss adatok kérése
+              ↻ Extra friss keresés
             </button>
           </div>
         )}
@@ -982,7 +1143,7 @@ export default function OpportunitiesPage() {
 
       {loading && (
         <div className="card">
-          <LoadingScreen steps={LOADING_STEPS.opportunity} message="10-20 masodperc — valos videostatisztikak alapjan" />
+          <LoadingScreen steps={LOADING_STEPS.opportunity} message="Forrásokat, YouTube-jeleket és piaci rést ellenőrzünk" />
         </div>
       )}
 
@@ -1015,11 +1176,11 @@ export default function OpportunitiesPage() {
 
             {validatedTopics.length > 0 && (
               <div>
-                <p className="section-label mb-4">{validatedTopics.length} validált lehetőség — valós YouTube adatok alapján</p>
+                <p className="section-label mb-4">{validatedTopics.length} gyártható vagy korai lehetőség - WillViral sorrendben</p>
                 {validatedTopics.every(t => t.confidence === 'alacsony' || t.confidence === 'nagyon_alacsony') && (
                   <div className="rounded-xl px-4 py-3 mb-4 text-sm"
                     style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#F59E0B' }}>
-                    ℹ️ Kevés friss adat alapján számolva. Kérhetsz friss adatokat, vagy módosíthatod a régiót / platformot a profilban.
+                    Kevés friss adat alapján számolva. Extra kereséssel vagy pontosabb niche-sel erősebb validáció kérhető.
                   </div>
                 )}
                 <div className="space-y-3">
@@ -1034,10 +1195,10 @@ export default function OpportunitiesPage() {
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-sm" style={{ color: '#CBD5E1' }}>🧭</span>
-                  <p className="section-label">Kutatási irányok a niche-en belül</p>
+                  <p className="section-label">Validálásra váró kutatási irányok</p>
                 </div>
                 <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>
-                  Ezek nem kész gyártási ajánlások — további validálást igényelnek. Kattints a keresésre, hogy ezen az irányon belül több konkrét, forrással ellenőrizhető témát keressünk.
+                  Ezek még nem kész gyártási ajánlások. A rendszer azért mutatja őket, mert a niche-en belül van témairány, de előbb konkrétabb forrásos témát kell keresni belőle.
                 </p>
                 <div className="space-y-2">
                   {discoveryTopics.map(topic => (
@@ -1050,7 +1211,7 @@ export default function OpportunitiesPage() {
             {validatedTopics.length === 0 && discoveryTopics.length > 0 && (
               <div className="rounded-xl px-4 py-3 text-sm"
                 style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#F59E0B' }}>
-                ℹ️ Most nem találtunk validált, gyártható témát, csak kutatási irányokat. Kattints egy irányra, hogy azon belül új, konkrét témakeresést indítsunk.
+                Ezen a keresésen most nincs elég erős gyártható téma. A kutatási irányokból egy kattintással konkrétabb, validálható témákat kereshetsz.
               </div>
             )}
           </div>

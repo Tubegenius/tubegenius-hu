@@ -9,46 +9,46 @@ interface LoadingScreenProps {
 }
 
 const DEFAULT_STEPS = [
-  'Rendszer inicializalasa...',
-  'Adatok betoltese...',
-  'Eredmenyek feldolgozasa...',
+  'Rendszer inicializálása...',
+  'Adatok betöltése...',
+  'Eredmények feldolgozása...',
 ]
 
 export const LOADING_STEPS = {
   opportunity: [
-    'Tema ertelmerze...',
-    'Trendjelek keresese...',
-    'YouTube evidence szurese...',
-    'Piaci score szamitasa...',
-    'Javasolt szogek keszitese...',
+    'Téma értelmezése...',
+    'Trendjelek keresése...',
+    'YouTube bizonyítékok szűrése...',
+    'Piaci score számítása...',
+    'Javasolt szögek készítése...',
   ],
   videoPackage: [
-    'Forrasok ellenorzese...',
-    'Hook felepitese...',
-    'Narracio generalasa...',
-    'Jelenetstruktura keszitese...',
-    'Csomag mentese...',
+    'Források ellenőrzése...',
+    'Hook felépítése...',
+    'Narráció generálása...',
+    'Jelenetstruktúra készítése...',
+    'Csomag mentése...',
   ],
   similarVideos: [
-    'Tema ertelmezese...',
-    'YouTube kereses...',
-    'Relevancia szures...',
-    'Viral score szamitas...',
+    'Téma értelmezése...',
+    'YouTube keresés...',
+    'Relevancia szűrés...',
+    'Viral score számítás...',
   ],
   viralScore: [
-    'YouTube adatok lekerese...',
-    'Piaci jelek elemzese...',
-    'Score szamitas...',
+    'YouTube adatok lekérése...',
+    'Piaci jelek elemzése...',
+    'Score számítás...',
   ],
   videoAudit: [
-    'Video adatok betoltese...',
-    'Dimenziok elemzese...',
-    'Dontes szamitas...',
+    'Videóadatok betöltése...',
+    'Dimenziók elemzése...',
+    'Döntés számítása...',
   ],
   scriptExtract: [
-    'Video betoltese...',
-    'Transcript kinyerese...',
-    'Struktura elemzese...',
+    'Videó betöltése...',
+    'Transcript kinyerése...',
+    'Struktúra elemzése...',
   ],
 }
 
@@ -69,7 +69,6 @@ export default function LoadingScreen({ steps, currentStep, message }: LoadingSc
 
   return (
     <div className="flex flex-col items-center justify-center py-16">
-      {/* Logo W animation */}
       <div className="relative mb-6">
         <svg viewBox="0 0 100 100" width="72" height="72" className="animate-pulse">
           <defs>
@@ -97,7 +96,6 @@ export default function LoadingScreen({ steps, currentStep, message }: LoadingSc
         </svg>
       </div>
 
-      {/* Steps */}
       <div className="space-y-2 mb-4 min-h-[100px]">
         {activeSteps.map((step, i) => {
           const isActive = i === visibleStep
@@ -127,9 +125,9 @@ export default function LoadingScreen({ steps, currentStep, message }: LoadingSc
         })}
       </div>
 
-      {message && (
-        <p className="text-xs" style={{ color: '#94A3B8' }}>{message}</p>
-      )}
+      <p className="text-xs text-center max-w-sm leading-relaxed" style={{ color: '#94A3B8' }}>
+        {message || 'A prémium elemzés több forrást és több lépést ellenőriz. Ez általában 30-90 másodpercig tarthat.'}
+      </p>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // WILLVIRAL — Type Definitions v2
 // ============================================================
 
@@ -103,6 +103,10 @@ export interface OpportunityTopic {
   hook_pattern?: string
   ready_to_produce_status?: 'ready' | 'watch' | 'research' | 'rejected'
   ready_to_produce_label?: string
+  evidence_strength?: 'strong' | 'medium' | 'weak' | 'none'
+  validation_reason?: string
+  recommended_next_action?: 'generate_package' | 'deep_refresh' | 'open_similar_videos' | 'refine_topic' | 'reject'
+  data_limitations?: string[]
   evidence_match_score?: number
   risk_flags?: string[]
   decision_score?: number
@@ -119,6 +123,10 @@ export interface OpportunityTopic {
     final_decision: string
     explanation: string
     label: string
+    evidence_strength?: 'strong' | 'medium' | 'weak' | 'none'
+    validation_reason?: string
+    recommended_next_action?: 'generate_package' | 'deep_refresh' | 'open_similar_videos' | 'refine_topic' | 'reject'
+    data_limitations?: string[]
     cta_primary: { text: string; action: string }
     cta_secondary?: { text: string; action: string }
   }
@@ -188,7 +196,17 @@ export interface ViralScoreResult {
   breakdown: ViralScoreBreakdown
   recommendation: string
   verdict: 'strong' | 'moderate' | 'weak' | 'avoid'
+  decision_status?: 'make_now' | 'test_angle' | 'research' | 'avoid'
+  decision_label?: string
+  decision_reason?: string
+  next_action?: string
+  risk_flags?: string[]
   videos?: SimilarVideo[]
+  web_sources?: { title: string; url: string; source?: string; date?: string }[]
+  from_cache?: boolean
+  cache_status?: 'fresh' | 'stale_saved' | 'miss'
+  last_analyzed_at?: string
+  requires_credit?: boolean
 }
 
 export interface ViralScoreBreakdown {
@@ -197,6 +215,9 @@ export interface ViralScoreBreakdown {
   avg_comments: number
   trend_momentum: number
   competition_level: number
+  // null = a Serper webes jel nem volt elérhető ehhez a futtatáshoz (API hiba/kulcs
+  // hiánya) — ilyenkor a score az eredeti, csak YouTube-alapú súlyozással készült.
+  web_buzz: number | null
 }
 
 export type ViralScoreConfidence = 'magas' | 'közepes' | 'alacsony' | 'nagyon_alacsony'

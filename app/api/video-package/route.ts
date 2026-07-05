@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   classifyContentType,
   isStrictFactMode,
@@ -74,10 +76,10 @@ function getLongTarget(length: string) {
 }
 
 function getUploadTimes(platform: string) {
-  if (platform === 'tiktok') return { primary: '19:00-21:00', secondary: '11:00-13:00', reason: 'Altalanos ajanlasok. Sajat analytics alapjan pontosithato.' }
+  if (platform === 'tiktok') return { primary: '19:00-21:00', secondary: '11:00-13:00', reason: 'Általános ajánlások. Saját analytics alapján pontosítható.' }
   const isShorts = ['youtube_shorts', 'instagram_reels', 'facebook_reels'].includes(platform)
-  if (isShorts) return { primary: '18:00-21:00', secondary: '11:30-13:00', reason: 'Altalanos ajanlasok. Sajat analytics alapjan pontosithato.' }
-  return { primary: '18:00-21:00', secondary: '16:00-18:00', reason: 'Altalanos ajanlasok. Pontosabb idoziteshez sajat csatorna teljesitmenyadat szukseges.' }
+  if (isShorts) return { primary: '18:00-21:00', secondary: '11:30-13:00', reason: 'Általános ajánlások. Saját analytics alapján pontosítható.' }
+  return { primary: '18:00-21:00', secondary: '16:00-18:00', reason: 'Általános ajánlások. Pontosabb időzítéshez saját csatorna teljesítményadat szükséges.' }
 }
 
 function getHashtagGuide(platform: string) {
@@ -303,12 +305,12 @@ export async function POST(request: NextRequest) {
       web_sources, youtube_sources, source_video, opportunity_context,
     } = await request.json()
 
-    if (!topic) return NextResponse.json({ error: 'Tema megadasa kotelezo' }, { status: 400 })
+    if (!topic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
 
     if (opportunity_context?.ready_to_produce_status === 'rejected') {
       return NextResponse.json({
         error: 'opportunity_rejected',
-        message: 'Ez az Opportunity tema nem ajanlott gyartasra. Valassz masik temat vagy futtass uj validalast.',
+        message: 'Ez az Opportunity téma nem ajánlott gyártásra. Válassz másik témát vagy futtass új validálást.',
       }, { status: 422 })
     }
 
@@ -320,7 +322,7 @@ export async function POST(request: NextRequest) {
 
     const enoughCredits = await hasEnoughCredits(userId, feature)
     if (!enoughCredits) {
-      return NextResponse.json({ error: `Nincs eleg kredited. Ehhez ${CREDIT_COSTS[feature]} kredit szukseges.` }, { status: 402 })
+      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS[feature]} kredit szükséges.` }, { status: 402 })
     }
 
     // ── 1. FACT SAFETY LAYER ──────────────────────────────────
@@ -437,6 +439,10 @@ export async function POST(request: NextRequest) {
       niche, uploadTimes, strictFactMode, qualityStatus,
     })
 
+    const polishedCore = polishHungarianOutput(coreResult.parsed) as Record<string, unknown>
+    const polishedPackaging = polishHungarianOutput(packagingResult.parsed) as Record<string, unknown>
+    const polishedUploadTimes = polishHungarianOutput(uploadTimes)
+
     const result = {
       topic, platform, video_length, narration_style,
       intensity_original: intensity,
@@ -450,19 +456,19 @@ export async function POST(request: NextRequest) {
       estimated_word_count: `${t.words} szo`,
       estimated_duration: isShorts ? `${t.seconds} mp` : `${t.minutes} perc`,
       scene_count: t.scenes,
-      hook: coreResult.parsed.hook,
-      narration: coreResult.parsed.narration,
-      scene_structure: coreResult.parsed.scene_structure,
-      broll_ideas: coreResult.parsed.broll_ideas,
-      timestamps: coreResult.parsed.timestamps,
-      thumbnail_texts: packagingResult.parsed.thumbnail_texts,
-      title_variations: packagingResult.parsed.title_variations,
-      caption: packagingResult.parsed.caption,
-      description: packagingResult.parsed.description,
-      hashtags: packagingResult.parsed.hashtags,
-      upload_times: uploadTimes,
-      cta: coreResult.parsed.cta,
-      sources_used: coreResult.parsed.sources_used || sources || [],
+      hook: polishedCore.hook,
+      narration: polishedCore.narration,
+      scene_structure: polishedCore.scene_structure,
+      broll_ideas: polishedCore.broll_ideas,
+      timestamps: polishedCore.timestamps,
+      thumbnail_texts: polishedPackaging.thumbnail_texts,
+      title_variations: polishedPackaging.title_variations,
+      caption: polishedPackaging.caption,
+      description: polishedPackaging.description,
+      hashtags: polishedPackaging.hashtags,
+      upload_times: polishedUploadTimes,
+      cta: polishedCore.cta,
+      sources_used: polishedCore.sources_used || sources || [],
       verified_fact_block: factBlock,
       forbidden_claims: factBlock.forbidden_claims,
       opportunity_context: opportunity_context || null,
@@ -472,10 +478,41 @@ export async function POST(request: NextRequest) {
     await logUsage(userId, feature, MODELS.fast, packagingResult.inputTokens, packagingResult.outputTokens, { topic, platform, video_length, sub_step: 'packaging' })
 
     const chargeResult = await chargeFeature(userId, feature, { topic, platform, video_length })
+    if (!chargeResult.success) {
+      return NextResponse.json({ error: chargeResult.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+    }
 
-    return NextResponse.json({ ...result, _credits_remaining: chargeResult.new_balance })
+    const responsePayload = { ...result, _credits_remaining: chargeResult.new_balance }
+    const normalizedInput = normalizePaidResultInput({ topic, platform, video_length, narration_style, source_video_id: source_video?.video_id || null })
+    const inputHash = buildPaidResultHash({
+      userId,
+      toolType: 'video_package',
+      normalizedInput,
+      region: language || null,
+      language: language || null,
+      platform: platform || null,
+    })
+    const paidSave = await savePaidResult({
+      userId,
+      toolType: 'video_package',
+      inputHash,
+      normalizedInput,
+      originalInput: topic,
+      region: language || null,
+      language: language || null,
+      platform: platform || null,
+      resultJson: responsePayload,
+      summaryJson: { topic, platform, video_length, quality_status: qualityStatus },
+      creditCost: CREDIT_COSTS[feature],
+      freshForHours: 24,
+    })
+    if (!paidSave.success) {
+      console.error('[VideoPackage] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+    }
+
+    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
   } catch (error) {
     console.error('Video Package error:', error)
-    return NextResponse.json({ error: 'Generalas sikertelen. Probald ujra.' }, { status: 500 })
+    return NextResponse.json({ error: 'Generálás sikertelen. Próbáld újra.' }, { status: 500 })
   }
 }

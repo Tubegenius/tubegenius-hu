@@ -4,11 +4,9 @@ import { createServerClient } from '@supabase/ssr'
 
 export const FREE_LIMITS = {
   similar_videos: { daily: 3, weekly: 0, hardLimitDaily: 50, creditCost: 1 },
-  // Napi 1 ingyenes Opportunity Engine / Trend Feed futtatás — ez a
-  // termékszabály (DashboardClient.tsx "Napi 1 ingyenes auto-frissítés"),
-  // NEM heti. (Korábban tévesen weekly:1 volt beállítva, ami miatt a heti
-  // keret gyorsan elfogyott és a napi ingyenes ajánlás fizetőssé vált.)
-  opportunity_engine: { daily: 1, weekly: 0, hardLimitDaily: 20, creditCost: 2 },
+  // Heti 1 ingyenes Opportunity Engine / Trend Feed futtatas.
+  // Ez heti strategiai ajanlas; az extra kereses kredites.
+  opportunity_engine: { daily: 0, weekly: 1, hardLimitDaily: 20, creditCost: 2 },
 } as const
 
 export type ProtectedFeature = keyof typeof FREE_LIMITS
@@ -67,16 +65,36 @@ async function getTodayUsageCount(userId: string, feature: string): Promise<numb
   return count || 0
 }
 
+function getStartOfWeekUtc(): string {
+  const now = new Date()
+  const day = now.getUTCDay() || 7
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  start.setUTCDate(start.getUTCDate() - day + 1)
+  return start.toISOString()
+}
+
+async function getWeekUsageCount(userId: string, feature: string): Promise<number> {
+  const admin = adminClient()
+  const { count } = await admin
+    .from('youtube_search_logs')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('feature_name', feature)
+    .gte('created_at', getStartOfWeekUtc())
+  return count || 0
+}
+
 // ── Fő check: futtathat-e a user? ────────────────────────────
 
 export async function checkUsagePermission(
   userId: string,
   feature: ProtectedFeature,
 ): Promise<UsageCheckResult> {
-  const [plan, balance, todayCount] = await Promise.all([
+  const [plan, balance, todayCount, weekCount] = await Promise.all([
     getUserPlan(userId),
     getCreditBalance(userId),
     getTodayUsageCount(userId, feature),
+    getWeekUsageCount(userId, feature),
   ])
 
   const limits = FREE_LIMITS[feature]
@@ -96,7 +114,7 @@ export async function checkUsagePermission(
       reason: 'hard_limit',
       message: feature === 'similar_videos'
         ? `A napi maximum ${limits.hardLimitDaily} Similar Videos futtatast elereted. Probald ujra holnap.`
-        : `A napi maximum ${limits.hardLimitDaily} Opportunity Engine futtatast elereted. Probald ujra holnap.`,
+        : `A napi maximum ${limits.hardLimitDaily} Opportunity Engine futtatast elerted. Probald ujra holnap.`,
     }
   }
 
@@ -118,7 +136,7 @@ export async function checkUsagePermission(
   }
 
   if (feature === 'opportunity_engine') {
-    const freeLeft = Math.max(0, limits.daily - todayCount)
+    const freeLeft = Math.max(0, limits.weekly - weekCount)
     if (freeLeft > 0) {
       return {
         feature,
@@ -126,7 +144,8 @@ export async function checkUsagePermission(
         currency: 'free',
         currentCredits: balance,
         remainingCreditsAfterRun: balance,
-        freeRunsLeftToday: freeLeft,
+        freeRunsLeftToday: 0,
+        freeRunsLeftThisWeek: freeLeft,
         requiresConfirmation: false,
         canRun: true,
       }
@@ -146,7 +165,7 @@ export async function checkUsagePermission(
       requiresConfirmation: true,
       canRun: false,
       reason: 'insufficient_credits',
-      message: `Nincs eleg kredited ehhez a muvelethez. ${limits.creditCost} kredit szukseges, neked ${balance} van.`,
+      message: `Nincs elég kredited ehhez a művelethez. ${limits.creditCost} kredit szükséges, neked ${balance} van.`,
     }
   }
 
@@ -160,8 +179,8 @@ export async function checkUsagePermission(
     requiresConfirmation: true,
     canRun: true,
     message: feature === 'similar_videos'
-      ? `A napi 3 ingyenes Similar Videos keresesed elfogyott. Ez a futtatas ${limits.creditCost} kreditbe kerul.`
-      : `A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatas ${limits.creditCost} kreditbe kerul.`,
+      ? `A napi 3 ingyenes Similar Videos keresésed elfogyott. Ez a futtatás ${limits.creditCost} kreditbe kerül.`
+      : `A heti ingyenes Top Opportunity ajánlásod már megvan. Az extra keresés ${limits.creditCost} kreditbe kerül.`,
   }
 }
 
@@ -187,34 +206,68 @@ export async function logYouTubeSearch(params: {
   })
 }
 
+// ── Ingyenes kvótás használat naplózása ─────────────────────
+// Kredit nem kerül levonásra, de a "Legutóbbi történeted" panelnek
+// tudnia kell erről a futtatásról is, különben az ingyenes használat
+// nyomtalanul eltűnik a felhasználó előtt.
+export async function logFreeProductUse(
+  userId: string,
+  feature: ProtectedFeature,
+  extraMetadata: Record<string, unknown> = {},
+) {
+  const admin = adminClient()
+  await admin.from('ai_usage_logs').insert({
+    user_id: userId,
+    feature_name: feature,
+    model: 'youtube_search',
+    input_tokens: 0,
+    output_tokens: 0,
+    estimated_cost_usd: 0,
+    credits_charged: 0,
+    metadata: { type: 'free_quota_use', feature, ...extraMetadata },
+  })
+}
+
 // ── Kredit levonás (protected feature) ───────────────────────
 
 export async function chargeProtectedFeature(
   userId: string,
   feature: ProtectedFeature,
+  extraMetadata: Record<string, unknown> = {},
 ): Promise<{ success: boolean; newBalance: number; error?: string }> {
   const admin = adminClient()
   const cost = FREE_LIMITS[feature].creditCost
 
-  const { data: current } = await admin
+  const { data: current, error: fetchError } = await admin
     .from('user_credits')
     .select('balance, total_used')
     .eq('user_id', userId)
     .single()
 
-  if (!current || Number(current.balance) < cost) {
-    return { success: false, newBalance: Number(current?.balance ?? 0), error: 'Nincs eleg kredit' }
+  const currentBalance = Number(current?.balance ?? 0)
+  if (fetchError || !current || currentBalance < cost) {
+    return { success: false, newBalance: currentBalance, error: 'Nincs elég kredit' }
   }
 
-  const newBalance = Number(current.balance) - cost
-  const newTotalUsed = Number(current.total_used) + cost
+  const newBalance = currentBalance - cost
+  const newTotalUsed = Number(current.total_used ?? 0) + cost
 
-  const { error } = await admin
+  const { data: updated, error } = await admin
     .from('user_credits')
     .update({ balance: newBalance, total_used: newTotalUsed })
     .eq('user_id', userId)
+    .eq('balance', currentBalance)
+    .gte('balance', cost)
+    .select('balance')
+    .single()
 
-  if (error) return { success: false, newBalance: Number(current.balance), error: error.message }
+  if (error || !updated) {
+    return {
+      success: false,
+      newBalance: currentBalance,
+      error: error?.message || 'A kredit levonás nem sikerült. Próbáld újra.',
+    }
+  }
 
   await admin.from('ai_usage_logs').insert({
     user_id: userId,
@@ -224,14 +277,11 @@ export async function chargeProtectedFeature(
     output_tokens: 0,
     estimated_cost_usd: 0,
     credits_charged: cost,
-    metadata: { type: 'protected_feature_charge', feature },
+    metadata: { type: 'protected_feature_charge', feature, ...extraMetadata },
   })
 
-  return { success: true, newBalance }
+  return { success: true, newBalance: Number(updated.balance) }
 }
-
-// ── Globális YouTube quota check ─────────────────────────────
-
 export function getGlobalQuotaLevel(): 'normal' | 'throttled' | 'critical' | 'exhausted' {
   const { getQuotaState } = require('./youtube-service')
   const state = getQuotaState()
@@ -249,21 +299,21 @@ export function canUserSearch(isPaid: boolean): { allowed: boolean; cacheOnly: b
     return {
       allowed: false,
       cacheOnly: true,
-      message: 'A friss keresesek jelenleg nem erhetoek el. Probald ujra kesobb.',
+      message: 'A friss keresések jelenleg nem érhetőek el. Próbáld újra később.',
     }
   }
   if (level === 'critical' && !isPaid) {
     return {
       allowed: false,
       cacheOnly: true,
-      message: 'A friss keresesek jelenleg korlatozva vannak. Most cache-bol mutatjuk az elerheto talalatokat.',
+      message: 'A friss keresések jelenleg korlátozva vannak. Most cache-ből mutatjuk az elérhető találatokat.',
     }
   }
   if (level === 'throttled' && !isPaid) {
     return {
       allowed: false,
       cacheOnly: true,
-      message: 'A friss keresesek jelenleg korlatozva vannak. Most cache-bol mutatjuk az elerheto talalatokat. Probald ujra kesobb.',
+      message: 'A friss keresések jelenleg korlátozva vannak. Most cache-ből mutatjuk az elérhető találatokat. Próbáld újra később.',
     }
   }
 

@@ -2,7 +2,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
-import { chargeFeature } from '@/lib/credits'
+import { chargeFeature, hasEnoughCredits, CREDIT_COSTS } from '@/lib/credits'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   Platform,
   scoreYouTubeBackend,
@@ -92,6 +94,11 @@ Video adatok:
 - Backend platform fit score: ${backendScores.platform_fit?.score}
 - Backend csomagolas score: ${backendScores.packaging_quality?.score}
 
+MAGYAR NYELVI MINŐSÉG - KÖTELEZŐ:
+- Minden magyar szöveg helyes magyar ékezetekkel készüljön.
+- Ne írj ilyeneket: passszív, szoveg, fo problema, uj cim, ajanlas.
+- Használj természetes, prémium magyar megfogalmazást, ne gépies fordítást.
+
 KRITIKUS JSON SZABÁLYOK:
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
 - Minden string érték egy soros legyen, sortörés nélkül.
@@ -163,6 +170,11 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+    const enoughCredits = await hasEnoughCredits(user.id, 'video_audit')
+    if (!enoughCredits) {
+      return NextResponse.json({ error: 'Nincs elég kredited. Ehhez ' + CREDIT_COSTS.video_audit + ' kredit szükséges.' }, { status: 402 })
+    }
+
     // Admin kliens: RLS bypass a mentéshez
     const admin = createAdminClient()
 
@@ -173,7 +185,7 @@ export async function POST(req: NextRequest) {
       manual_data?: ManualPlatformData
     }
 
-    if (!platform) return NextResponse.json({ error: 'Platform kotelezo' }, { status: 400 })
+    if (!platform) return NextResponse.json({ error: 'Platform kötelező' }, { status: 400 })
 
     const isYouTube = platform === 'youtube_long' || platform === 'youtube_shorts'
 
@@ -183,9 +195,9 @@ export async function POST(req: NextRequest) {
 
     if (isYouTube && video_url) {
       const videoId = extractVideoId(video_url)
-      if (!videoId) return NextResponse.json({ error: 'Ervénytelen YouTube URL' }, { status: 400 })
+      if (!videoId) return NextResponse.json({ error: 'Érvénytelen YouTube URL' }, { status: 400 })
       const ytData = await fetchYouTubeData(videoId)
-      if (!ytData) return NextResponse.json({ error: 'YouTube video nem talalhato' }, { status: 404 })
+      if (!ytData) return NextResponse.json({ error: 'YouTube videó nem található' }, { status: 404 })
       inputData = ytData
       backendScores = scoreYouTubeBackend(ytData, platform)
       hasApiData = true
@@ -193,11 +205,11 @@ export async function POST(req: NextRequest) {
       inputData = manual_data
       backendScores = scoreManualBackend(manual_data)
     } else {
-      return NextResponse.json({ error: 'Hianyzo video adat' }, { status: 400 })
+      return NextResponse.json({ error: 'Hiányzó videóadat' }, { status: 400 })
     }
 
     // Claude interpretáció
-    const claudeInterpretation = await getClaudeInterpretation(platform, inputData, backendScores)
+    const claudeInterpretation = polishHungarianOutput(await getClaudeInterpretation(platform, inputData, backendScores)) as Record<string, unknown>
 
     // Final scores
     const finalScores = computeFinalScores(
@@ -214,7 +226,9 @@ export async function POST(req: NextRequest) {
 
     // Kredit levonás — csak sikeres elemzés után
     const chargeResult = await chargeFeature(user.id, 'video_audit')
-    if (!chargeResult.success) return NextResponse.json({ error: 'Nincs eleg kredited' }, { status: 402 })
+    if (!chargeResult.success) {
+      return NextResponse.json({ error: chargeResult.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+    }
 
     // Confidence
     const views = 'views' in inputData ? inputData.views : 0
@@ -274,7 +288,7 @@ export async function POST(req: NextRequest) {
       }, { onConflict: 'user_id,topic' })
     }
 
-    return NextResponse.json({
+    const responsePayload = {
       audit_id: savedAudit?.id,
       platform,
       video_title: title,
@@ -299,10 +313,36 @@ export async function POST(req: NextRequest) {
         upload_time: claudeInterpretation.upload_time_suggestion,
         platform_tip: claudeInterpretation.platform_specific_tip,
       },
+    }
+
+    const normalizedInput = normalizePaidResultInput({ platform, video_url: video_url || null, topic })
+    const inputHash = buildPaidResultHash({
+      userId: user.id,
+      toolType: 'video_audit',
+      normalizedInput,
+      platform,
     })
+    const paidSave = await savePaidResult({
+      userId: user.id,
+      toolType: 'video_audit',
+      inputHash,
+      normalizedInput,
+      originalInput: title || topic || video_url || 'Video audit',
+      platform,
+      resultJson: responsePayload,
+      summaryJson: { title, topic, platform, overall_score: finalScores.overall, decision },
+      creditCost: CREDIT_COSTS.video_audit,
+      freshForHours: 24,
+      sourceRunId: savedAudit?.id || null,
+    })
+    if (!paidSave.success) {
+      console.error('[VideoAudit] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+    }
+
+    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
   } catch (err) {
     console.error('Video audit error:', err)
-    return NextResponse.json({ error: 'Szerver hiba' }, { status: 500 })
+    return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })
   }
 }
 
@@ -315,7 +355,7 @@ export async function GET(req: NextRequest) {
 
     const admin = createAdminClient()
     const id = req.nextUrl.searchParams.get('id')
-    if (!id) return NextResponse.json({ error: 'id kotelezo' }, { status: 400 })
+    if (!id) return NextResponse.json({ error: 'id kötelező' }, { status: 400 })
 
     const { data, error } = await admin
       .from('video_audits')
@@ -324,9 +364,9 @@ export async function GET(req: NextRequest) {
       .eq('user_id', user.id)
       .single()
 
-    if (error || !data) return NextResponse.json({ error: 'Audit nem talalhato' }, { status: 404 })
+    if (error || !data) return NextResponse.json({ error: 'Audit nem található' }, { status: 404 })
     return NextResponse.json(data)
   } catch (err) {
-    return NextResponse.json({ error: 'Szerver hiba' }, { status: 500 })
+    return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })
   }
 }

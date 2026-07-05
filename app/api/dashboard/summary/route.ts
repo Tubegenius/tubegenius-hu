@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
+import { polishStatusLabel } from '@/lib/hungarian-output-polish'
 
 // GET /api/dashboard/summary
 // Creator Intelligence Dashboard — kizárólag a user saját, meglévő adataiból
@@ -23,6 +24,7 @@ export async function GET() {
     videosSeenRes,
     snapshotsCountRes,
     trackedRes,
+    paidResultsRes,
   ] = await Promise.all([
     admin.from('user_credits').select('balance, total_used, plan').eq('user_id', userId).single(),
     admin.from('creator_memory').select('id, topic, state, platform, opportunity_score, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
@@ -32,6 +34,7 @@ export async function GET() {
     admin.from('youtube_videos').select('*', { count: 'exact', head: true }),
     admin.from('youtube_video_snapshots').select('*', { count: 'exact', head: true }),
     admin.from('tracked_trend_candidates').select('id, candidate_topic').eq('user_id', userId).eq('status', 'active'),
+    admin.from('paid_results').select('id, tool_type, original_input, created_at, last_opened_at, credit_cost, status').eq('user_id', userId).eq('status', 'completed').order('last_opened_at', { ascending: false, nullsFirst: false }).limit(30),
   ])
 
   const memory = memoryRes.data || []
@@ -39,8 +42,35 @@ export async function GET() {
   const audits = auditsRes.data || []
   const usageLogs = usageLogsRes.data || []
   const tracked = trackedRes.data || []
-
-  const hasAnyActivity = memory.length > 0 || packages.length > 0 || audits.length > 0 || usageLogs.length > 0
+  const paidResults = paidResultsRes.data || []
+  function normalizeActivityKey(value: string | null | undefined): string {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+  const paidActivityKeys = new Set(
+    paidResults.map(p => `${p.tool_type}:${normalizeActivityKey(p.original_input)}`)
+  )
+  const hasPaidResultForTopic = (toolTypes: string[], value: string | null | undefined): boolean => {
+    const key = normalizeActivityKey(value)
+    if (!key) return false
+    return paidResults.some(p => toolTypes.includes(p.tool_type) && normalizeActivityKey(p.original_input) === key)
+  }
+  const hasNearbyPaidResult = (toolType: string, date: string | null | undefined): boolean => {
+    if (!date) return false
+    const t = new Date(date).getTime()
+    if (!Number.isFinite(t)) return false
+    return paidResults.some(p => {
+      if (p.tool_type !== toolType) return false
+      const paidTime = new Date(p.last_opened_at || p.created_at).getTime()
+      return Number.isFinite(paidTime) && Math.abs(paidTime - t) <= 10 * 60 * 1000
+    })
+  }
+  const hasAnyActivity = memory.length > 0 || packages.length > 0 || audits.length > 0 || usageLogs.length > 0 || paidResults.length > 0
 
   // ── Trend alakulás — a témák egy részéhez tartozik tracked_trend_candidate ──
   // (lásd lib/trend-tracking.ts). Ha van hozzá legutóbbi snapshot, azt a
@@ -85,8 +115,8 @@ export async function GET() {
   // ── 1. Videócsomagok ──
   const packagesSummary = {
     total: packages.length,
-    shorts: packages.filter(p => p.video_length === 'short').length,
-    long: packages.filter(p => p.video_length === 'long' || p.video_length === 'medium').length,
+    shorts: packages.filter(p => ['short', '30sec', '45sec', '60sec'].includes(String(p.video_length))).length,
+    long: packages.filter(p => ['long', 'medium', '3-5min', '6-10min'].includes(String(p.video_length))).length,
   }
 
   // ── 2. Auditok ──
@@ -151,14 +181,14 @@ export async function GET() {
   }
 
   const activity: ActivityItem[] = [
-    ...packages.map(p => {
+    ...packages.filter(p => !hasPaidResultForTopic(['video_package'], p.topic)).map(p => {
       const trend = findTrend(p.topic)
       return {
         type: 'video_package' as const,
         title: `Videócsomag készült: ${p.topic || 'Cím nélkül'}`,
         topic: p.topic || 'Cím nélkül',
         date: p.created_at,
-        status: p.quality_status,
+        status: polishStatusLabel(p.quality_status),
         score: null,
         href: `/dashboard/video-package?id=${p.id}`,
         trend_status: trend?.trend_status ?? null,
@@ -166,7 +196,7 @@ export async function GET() {
         view_history: trend?.view_history ?? [],
       }
     }),
-    ...audits.map(a => {
+    ...audits.filter(a => !hasPaidResultForTopic(['video_audit'], a.video_title || a.topic)).map(a => {
       const trend = findTrend(a.video_title || a.topic)
       return {
         type: 'video_audit' as const,
@@ -181,14 +211,14 @@ export async function GET() {
         view_history: trend?.view_history ?? [],
       }
     }),
-    ...memory.map(m => {
+    ...memory.filter(m => !hasPaidResultForTopic(['video_package', 'video_audit'], m.topic)).map(m => {
       const trend = findTrend(m.topic)
       return {
         type: 'memory' as const,
         title: `Téma ${m.state === 'saved' ? 'mentve' : m.state === 'completed' ? 'lezárva' : m.state === 'rejected' ? 'elutasítva' : 'folyamatban'}: ${m.topic}`,
         topic: m.topic,
         date: m.updated_at,
-        status: m.state,
+        status: polishStatusLabel(m.state),
         score: m.opportunity_score ?? null,
         href: '/dashboard/memory',
         trend_status: trend?.trend_status ?? null,
@@ -196,18 +226,97 @@ export async function GET() {
         view_history: trend?.view_history ?? [],
       }
     }),
+    ...paidResults.map(p => {
+      const toolHref: Record<string, string> = {
+        viral_score: '/dashboard/viral-score',
+        similar_videos: '/dashboard/similar-videos',
+        opportunity_engine: '/dashboard/opportunities',
+        video_audit: '/dashboard/video-audit',
+        video_package: '/dashboard/video-package',
+        content_gap: '/dashboard',
+        script_extract: '/dashboard/script-extractor',
+        analyzer: '/dashboard',
+      }
+      const toolTypeMap: Record<string, ActivityItem['type']> = {
+        viral_score: 'viral_score',
+        similar_videos: 'similar_videos',
+        opportunity_engine: 'opportunity',
+        video_audit: 'video_audit',
+        video_package: 'video_package',
+        content_gap: 'opportunity',
+        script_extract: 'script_extract',
+        analyzer: 'script_extract',
+      }
+      const labelMap: Record<string, string> = {
+        viral_score: 'Viral Score elemzés',
+        similar_videos: 'Similar Videos keresés',
+        opportunity_engine: 'Opportunity Engine keresés',
+        video_audit: 'Videó audit',
+        video_package: 'Videócsomag',
+        script_extract: 'Script Extractor',
+        content_gap: 'Content Gap',
+        analyzer: 'Elemzés',
+      }
+      const paidParams = new URLSearchParams({ paidResultId: p.id })
+      const inputParam = p.tool_type === 'opportunity_engine' ? 'niche' : 'topic'
+      if (p.original_input && ['viral_score', 'similar_videos', 'opportunity_engine'].includes(p.tool_type)) {
+        paidParams.set(inputParam, p.original_input)
+      }
+      return {
+        type: toolTypeMap[p.tool_type] || 'memory',
+        title: `${labelMap[p.tool_type] || p.tool_type}: ${p.original_input}`,
+        topic: p.original_input,
+        date: p.last_opened_at || p.created_at,
+        status: p.credit_cost > 0 ? polishStatusLabel('completed_paid') : polishStatusLabel('completed_free'),
+        score: null,
+        href: `${toolHref[p.tool_type] || '/dashboard'}?${paidParams.toString()}`,
+        trend_status: null,
+        views_delta: null,
+        view_history: [],
+      }
+    }),
     ...usageLogs
-      .filter(l => (l.credits_charged || 0) > 0 && FEATURE_MAP[l.feature_name])
+      .filter(l => {
+        if (!FEATURE_MAP[l.feature_name]) return false
+        if (!((l.credits_charged || 0) > 0 || (l.metadata as { type?: string } | null)?.type === 'free_quota_use')) return false
+        const metadata = l.metadata as { topic?: string; niche?: string } | null
+        const searchTopic = metadata?.topic || metadata?.niche
+        const paidToolType = l.feature_name === 'opportunity_engine' || l.feature_name === 'opportunity_explain'
+          ? 'opportunity_engine'
+          : l.feature_name
+        const paidResultOnlyFeatures = new Set(['script_extract', 'source_video_extract'])
+        if (paidResultOnlyFeatures.has(l.feature_name)) {
+          return false
+        }
+        const meta = FEATURE_MAP[l.feature_name]
+        const paidUsageLogOnlyFeatures = new Set(['opportunity_engine', 'opportunity_explain'])
+        if ((paidUsageLogOnlyFeatures.has(l.feature_name) || meta.type === 'opportunity') && (l.credits_charged || 0) > 0) {
+          return false
+        }
+        if ((l.credits_charged || 0) > 0 && hasNearbyPaidResult(paidToolType, l.created_at)) {
+          return false
+        }
+        return !paidActivityKeys.has(paidToolType + ':' + normalizeActivityKey(searchTopic))
+      })
       .map(l => {
         const meta = FEATURE_MAP[l.feature_name]
+        const metadata = l.metadata as { topic?: string; niche?: string } | null
+        const searchTopic = metadata?.topic || metadata?.niche
+        // Similar Videos és Viral Score ?topic= paraméterből, az Opportunity
+        // Engine ?niche= paraméterből tud ingyenesen (cache-first) visszanyitni
+        // egy korábbi eredményt — a többi eszköz oldala egyelőre nem támogatja ezt.
+        const deepLinkParam: string | null =
+          l.feature_name === 'similar_videos' || l.feature_name === 'viral_score' ? 'topic'
+          : l.feature_name === 'opportunity_engine' || l.feature_name === 'opportunity_explain' ? 'niche'
+          : null
         return {
           type: meta.type,
-          title: meta.label,
-          topic: meta.label,
+          title: searchTopic ? `${meta.label}: ${searchTopic}` : meta.label,
+          topic: searchTopic || meta.label,
           date: l.created_at,
-          status: `${l.credits_charged} kredit`,
+          status: (l.credits_charged || 0) > 0 ? `${l.credits_charged} kredit` : 'Ingyenes',
           score: null,
-          href: meta.href,
+          href: searchTopic && deepLinkParam ? `${meta.href}?${deepLinkParam}=${encodeURIComponent(searchTopic)}` : meta.href,
           trend_status: null,
           views_delta: null,
           view_history: [],
@@ -215,6 +324,10 @@ export async function GET() {
       }),
   ]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .filter((item, index, arr) => {
+      const key = `${item.type}:${normalizeActivityKey(item.topic)}`
+      return arr.findIndex(other => `${other.type}:${normalizeActivityKey(other.topic)}` === key) === index
+    })
     .slice(0, 10)
 
   // ── Tartalomirány insight — egyszerű szabályalapú logika ──

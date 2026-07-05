@@ -35,6 +35,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const [channelName, setChannelName] = useState('')
   const [platform, setPlatform] = useState<Platform>('youtube')
@@ -85,9 +86,10 @@ export default function ProfilePage() {
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
     if (!specificFocus.trim()) {
-      alert('A specifikus fókusz mező kötelező.')
+      setError('A specifikus fókusz mező kötelező.')
       return
     }
+    setError(null)
     setSaving(true)
 
     const res = await fetch('/api/profile', {
@@ -114,7 +116,7 @@ export default function ProfilePage() {
       }),
     })
     const data = await res.json()
-    if (!res.ok) { alert('Hiba: ' + data.error); setSaving(false); return; }
+    if (!res.ok) { setError(data.error || 'Nem sikerült menteni a profilt.'); setSaving(false); return }
 
     setSaving(false)
     setSaved(true)
@@ -137,6 +139,13 @@ export default function ProfilePage() {
           Ezek alapján személyre szabjuk az összes elemzést és generálást.
         </p>
       </div>
+
+      {error && (
+        <div className="mb-5 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5' }}>
+          <i className="ti ti-alert-circle" />
+          <span>{error}</span>
+        </div>
+      )}
 
       <form onSubmit={handleSave} className="space-y-6">
         {/* Csatorna neve */}

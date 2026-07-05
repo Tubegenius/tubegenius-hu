@@ -109,6 +109,15 @@ const STATUS_BADGE: Record<string, { color: string; bg: string }> = {
   in_progress: { color: '#FBBF24', bg: 'rgba(245,158,11,0.12)' },
   completed: { color: '#4ADE80', bg: 'rgba(34,197,94,0.12)' },
   rejected: { color: '#F87171', bg: 'rgba(239,68,68,0.12)' },
+  'Ellenőrzött': { color: '#4ADE80', bg: 'rgba(34,197,94,0.12)' },
+  'Ellenőrzött, korlátokkal': { color: '#FBBF24', bg: 'rgba(245,158,11,0.12)' },
+  'Kevés forrás': { color: '#F87171', bg: 'rgba(239,68,68,0.12)' },
+  'Mentett': { color: '#93C5FD', bg: 'rgba(59,130,246,0.12)' },
+  'Folyamatban': { color: '#FBBF24', bg: 'rgba(245,158,11,0.12)' },
+  'Lezárva': { color: '#4ADE80', bg: 'rgba(34,197,94,0.12)' },
+  'Elutasítva': { color: '#F87171', bg: 'rgba(239,68,68,0.12)' },
+  'Megvett eredmény': { color: '#4ADE80', bg: 'rgba(34,197,94,0.12)' },
+  'Mentett eredmény': { color: '#93C5FD', bg: 'rgba(59,130,246,0.12)' },
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -294,11 +303,11 @@ export default function CreatorIntelligenceSummary() {
             ) : (
               <div className="space-y-2 text-xs">
                 <div className="flex items-center justify-between">
-                  <span style={{ color: '#94A3B8' }}>Verified</span>
+                  <span style={{ color: '#94A3B8' }}>Ellenőrzött</span>
                   <span className="font-semibold" style={{ color: '#4ADE80' }}>{fact_safety.verified}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span style={{ color: '#94A3B8' }}>Verified (limitált)</span>
+                  <span style={{ color: '#94A3B8' }}>Ellenőrzött, korlátokkal</span>
                   <span className="font-semibold" style={{ color: '#FBBF24' }}>{fact_safety.verified_with_limits}</span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -306,7 +315,7 @@ export default function CreatorIntelligenceSummary() {
                   <span className="font-semibold" style={{ color: '#F87171' }}>{fact_safety.insufficient_sources}</span>
                 </div>
                 <div className="flex items-center justify-between pt-2 mt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-                  <span style={{ color: '#94A3B8' }}>Standard hír / High risk</span>
+                  <span style={{ color: '#94A3B8' }}>Standard hír / magas kockázat</span>
                   <span className="font-semibold" style={{ color: '#CBD5E1' }}>{fact_safety.standard_news} / {fact_safety.high_risk}</span>
                 </div>
               </div>

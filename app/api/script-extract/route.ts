@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, logUsage, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult } from '@/lib/paid-results/paid-results-service'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 import { getActiveApiKey } from '@/lib/youtube-service'
@@ -56,17 +57,17 @@ function extractJson(text: string): unknown {
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json()
-    if (!url) return NextResponse.json({ error: 'URL megadasa kotelezo' }, { status: 400 })
+    if (!url) return NextResponse.json({ error: 'URL megadása kötelező' }, { status: 400 })
 
     const videoId = extractVideoId(url)
-    if (!videoId) return NextResponse.json({ error: 'Ervenytelen YouTube URL' }, { status: 400 })
+    if (!videoId) return NextResponse.json({ error: 'Érvénytelen YouTube URL' }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const enoughCredits = await hasEnoughCredits(userId, 'script_extract')
     if (!enoughCredits) {
-      return NextResponse.json({ error: `Nincs eleg kredited. Ehhez ${CREDIT_COSTS.script_extract} kredit szukseges.` }, { status: 402 })
+      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.script_extract} kredit szükséges.` }, { status: 402 })
     }
 
     // 1. YouTube metaadatok lekerese
@@ -76,7 +77,7 @@ export async function POST(request: NextRequest) {
     const videoData = await videoRes.json()
 
     if (!videoData.items || videoData.items.length === 0) {
-      return NextResponse.json({ error: 'Video nem talalhato vagy nem publikus' }, { status: 404 })
+      return NextResponse.json({ error: 'Videó nem található vagy nem publikus' }, { status: 404 })
     }
 
     const item = videoData.items[0]
@@ -169,10 +170,13 @@ Valaszolj KIZAROLAG valid JSON-ban:
 
     await logUsage(userId, 'script_extract', MODELS.primary, message.usage.input_tokens, message.usage.output_tokens, { videoId, transcript_available: transcriptResult.available })
     const charge = await chargeFeature(userId, 'script_extract', { videoId })
+    if (!charge.success) {
+      return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+    }
 
     const wordCount = transcriptResult.text ? transcriptResult.text.split(/\s+/).length : 0
 
-    return NextResponse.json({
+    const responsePayload = {
       video_id: videoId,
       title: snippet.title,
       channel: snippet.channelTitle,
@@ -192,9 +196,34 @@ Valaszolj KIZAROLAG valid JSON-ban:
       transcript_source: transcriptResult.available ? 'transcript' : 'metadata',
       raw_transcript: transcriptResult.available && transcriptResult.text ? transcriptResult.text.slice(0, 12000) : null,
       _credits_remaining: charge.new_balance,
+    }
+
+    const normalizedInput = normalizePaidResultInput({ videoId, url })
+    const inputHash = buildPaidResultHash({
+      userId,
+      toolType: 'script_extract',
+      normalizedInput,
+      platform: 'youtube',
     })
+    const paidSave = await savePaidResult({
+      userId,
+      toolType: 'script_extract',
+      inputHash,
+      normalizedInput,
+      originalInput: snippet.title || url,
+      platform: 'youtube',
+      resultJson: responsePayload,
+      summaryJson: { title: snippet.title, videoId, transcript_available: transcriptResult.available },
+      creditCost: CREDIT_COSTS.script_extract,
+      freshForHours: 24,
+    })
+    if (!paidSave.success) {
+      console.error('[ScriptExtract] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+    }
+
+    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
   } catch (error) {
     console.error('Script extract error:', error)
-    return NextResponse.json({ error: 'Elemzes sikertelen. Probald ujra.' }, { status: 500 })
+    return NextResponse.json({ error: 'Elemzés sikertelen. Próbáld újra.' }, { status: 500 })
   }
 }

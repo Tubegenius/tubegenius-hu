@@ -56,7 +56,7 @@ export interface TrackCandidateInput {
   confidence?: string | null
   opportunityScore?: number | null
   youtubeVideoIds?: string[]
-  webSourceIds?: string[]
+  webSourceIds?: Array<string | { title?: string; url?: string; link?: string; snippet?: string; source?: string; date?: string }>
   generatedAt?: string | null
   // ha true, mindig trackeljük (explicit user akció: mentés / videócsomag)
   force?: boolean
@@ -114,11 +114,11 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
   const result: RefreshResult = { processed: 0, updated: 0, failed: 0, skipped: 0 }
   const admin = adminClient()
 
-  let due: { id: string; candidate_topic: string; youtube_video_ids: string[]; created_at: string; opportunity_score: number | null; confidence: string | null }[] = []
+  let due: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null }[] = []
   try {
     const { data } = await admin
       .from('tracked_trend_candidates')
-      .select('id, candidate_topic, youtube_video_ids, created_at, opportunity_score, confidence')
+      .select('id, candidate_topic, youtube_video_ids, web_source_ids, created_at, opportunity_score, confidence')
       .eq('status', 'active')
       .lte('next_check_at', new Date().toISOString())
       .order('refresh_priority', { ascending: true })
@@ -151,7 +151,7 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
 
 async function refreshOneCandidate(
   admin: ReturnType<typeof adminClient>,
-  candidate: { id: string; candidate_topic: string; youtube_video_ids: string[]; created_at: string; opportunity_score: number | null; confidence: string | null }
+  candidate: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null }
 ) {
   const videoIds = (candidate.youtube_video_ids || []).filter(Boolean)
 
@@ -216,4 +216,19 @@ async function refreshOneCandidate(
     refresh_priority,
     status,
   }).eq('id', candidate.id)
+}
+
+export async function refreshTrackedCandidateNow(candidateId: string): Promise<void> {
+  const admin = adminClient()
+  const { data: candidate, error } = await admin
+    .from('tracked_trend_candidates')
+    .select('id, candidate_topic, youtube_video_ids, web_source_ids, created_at, opportunity_score, confidence')
+    .eq('id', candidateId)
+    .single()
+
+  if (error || !candidate) {
+    throw new Error('Tracked candidate not found')
+  }
+
+  await refreshOneCandidate(admin, candidate)
 }

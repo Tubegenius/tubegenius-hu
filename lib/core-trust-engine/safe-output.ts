@@ -34,6 +34,29 @@ export function evidenceMatchesTitle(displayTitle: string, evidenceTitle: string
   return matches >= 2 || ratio >= 0.35
 }
 
+function formatCompactViews(value: number): string {
+  if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}M`
+  if (value >= 1_000) return `${Math.round(value / 100) / 10}K`
+  return String(value)
+}
+
+function buildEvidenceBoundExplanation(baseExplanation: string, validation: ValidationResult): string {
+  const webCount = validation.valid_web_sources.length
+  const videos = validation.valid_video_sources
+  const strongVideos = videos.filter(v => v.is_strong)
+  const webPart = webCount > 0
+    ? `${webCount} webes forrás alapján aktuális jel látszik.`
+    : 'Nincs elég konkrét webes forrás.'
+
+  const videoPart = strongVideos.length > 0
+    ? `A validált videók tényleges nézettségi sávja: ${formatCompactViews(Math.min(...strongVideos.map(v => v.viewCount)))}-${formatCompactViews(Math.max(...strongVideos.map(v => v.viewCount)))} megtekintés (${strongVideos.length} erősebb videó).`
+    : videos.length > 0
+      ? `Van ${videos.length} kapcsolódó videójel, de ezek nem elég erősek ahhoz, hogy erős videós bizonyítéknak számítsanak.`
+      : 'Nincs erős videós bizonyíték.'
+
+  return `${baseExplanation} ${webPart} ${videoPart}`
+}
+
 export function buildSafeOutput(params: {
   candidate_topic: string
   decision: TrustDecision
@@ -54,9 +77,9 @@ export function buildSafeOutput(params: {
     }
   }
 
-  let explanation = decision.explanation
-  if (claude_description && !contradicts(claude_description, validation)) {
-    explanation = claude_description
+  let explanation = buildEvidenceBoundExplanation(decision.explanation, validation)
+  if (claude_description && !contradicts(claude_description, validation) && !hasUnsupportedEvidenceNumbers(claude_description)) {
+    explanation = buildEvidenceBoundExplanation(claude_description, validation)
   }
 
   let hook: string | null = null
@@ -101,6 +124,11 @@ export function buildSafeOutput(params: {
     ctas,
     risk_flags: decision.warnings,
   }
+}
+
+function hasUnsupportedEvidenceNumbers(claudeDescription: string): boolean {
+  const desc = claudeDescription.toLowerCase()
+  return /\d+\s*[kme]|\d+[.,]\d+\s*[kme]|\d+\s*-\s*\d+/.test(desc) || desc.includes('megtekintés') || desc.includes('views')
 }
 
 function contradicts(claudeDescription: string, validation: ValidationResult): boolean {

@@ -1,7 +1,7 @@
 import type { TrendCandidate } from '@/lib/trend-radar'
 import type { ConsistencyResult } from '@/lib/candidate-consistency'
 
-export const ENGINE_VERSION = 'core-trust-v1'
+export const ENGINE_VERSION = 'core-trust-v2'
 
 export type TrustDecisionType =
   | 'hybrid_validated_trend'
@@ -11,6 +11,8 @@ export type TrustDecisionType =
   | 'polluted_candidate'
 
 export type FinalDecision = 'make_now' | 'early_opportunity' | 'validate_more' | 'reject'
+export type EvidenceStrength = 'strong' | 'medium' | 'weak' | 'none'
+export type RecommendedNextAction = 'generate_package' | 'deep_refresh' | 'open_similar_videos' | 'refine_topic' | 'reject'
 
 export interface TrustScores {
   web_validation: number
@@ -30,6 +32,10 @@ export interface TrustDecision {
   explanation: string
   reasons: string[]
   warnings: string[]
+  evidence_strength: EvidenceStrength
+  validation_reason: string
+  recommended_next_action: RecommendedNextAction
+  data_limitations: string[]
   cta_primary: { text: string; action: string }
   cta_secondary?: { text: string; action: string }
 }

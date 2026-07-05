@@ -286,25 +286,25 @@ export function scoreStoryPotentialFromText(value: string, expansionType?: Expan
 export function recommendedAngleForExpansion(expansionType: ExpansionType | undefined, topic: string) {
   switch (expansionType) {
     case 'current':
-      return 'Friss fejlemeny vagy uj kutatas szoge'
+      return 'Friss fejlemény vagy új kutatás szöge'
     case 'scientific':
-      return 'Tudomanyos magyarazo szog'
+      return 'Tudományos magyarázó szög'
     case 'storytelling':
-      return 'Rejtelyre vagy fordulatra epitett sztori'
+      return 'Rejtélyre vagy fordulatra épített sztori'
     case 'youtube_creator':
-      return 'Creator-kompatibilis magyarazo feldolgozas'
+      return 'Creator-kompatibilis magyarázó feldolgozás'
     case 'hungarian_market':
-      return 'Magyar kozonsegre szabott feldolgozas'
+      return 'Magyar közönségre szabott feldolgozás'
     case 'global_adaptable':
-      return 'Globalis, magyarithato trend'
+      return 'Globális, magyarítható trend'
     default:
-      return `Konkret, bizonyitekkal tamasztott feldolgozas: ${topic}`
+      return `Konkrét, bizonyítékkal támasztott feldolgozás: ${topic}`
   }
 }
 
 export function recommendedFormatForExpansion(expansionType: ExpansionType | undefined, storyScore = 50) {
   if (expansionType === 'storytelling' && storyScore >= 65) return 'storytelling long'
-  if (expansionType === 'current') return 'shorts / gyors magyarazo'
+  if (expansionType === 'current') return 'shorts / gyors magyarázó'
   if (expansionType === 'scientific') return 'magyarázó long'
   if (expansionType === 'youtube_creator') return 'shorts / explainer'
   if (expansionType === 'hungarian_market') return 'magyar piacra szabott explainer'
@@ -312,11 +312,11 @@ export function recommendedFormatForExpansion(expansionType: ExpansionType | und
 }
 
 export function hookPatternForExpansion(expansionType: ExpansionType | undefined, topic: string) {
-  if (expansionType === 'storytelling') return `Mi van, ha a(z) ${topic} mogott nem az van, amit eddig hittunk?`
-  if (expansionType === 'current') return `Most derult ki valami a(z) ${topic} temaban, ami sok mindent megvaltoztathat.`
-  if (expansionType === 'scientific') return `A(z) ${topic} elsore egyszerunek tunik, de a tudomany szerint van benne egy csavar.`
-  if (expansionType === 'youtube_creator') return `Ez az a(z) ${topic} kerdes, amit rengetegen felreertenek.`
-  return `Kezdd egy konkret, meglepo peldaval: ${topic}.`
+  if (expansionType === 'storytelling') return `Mi van, ha a(z) ${topic} mögött nem az van, amit eddig hittünk?`
+  if (expansionType === 'current') return `Most derült ki valami a(z) ${topic} témában, ami sok mindent megváltoztathat.`
+  if (expansionType === 'scientific') return `A(z) ${topic} elsőre egyszerűnek tűnik, de a tudomány szerint van benne egy csavar.`
+  if (expansionType === 'youtube_creator') return `Ez az a(z) ${topic} kérdés, amit rengetegen félreértenek.`
+  return `Kezdd egy konkrét, meglepő példával: ${topic}.`
 }
 
 export function findExpansionForSeed(seed: string, expansion?: TopicExpansionResult): TopicExpansionQuery | undefined {

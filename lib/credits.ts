@@ -16,6 +16,7 @@ export type FeatureName =
   | 'script_extract'
   | 'video_audit'
   | 'hashtag_caption'
+  | 'trend_deep_refresh'
 
 // Credit költségek funkciónként (a spec szerint)
 export const CREDIT_COSTS: Record<FeatureName, number> = {
@@ -24,6 +25,7 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
   viral_score: 1,
   video_package_shorts: 2,
   script_extract: 3,
+  trend_deep_refresh: 1,
   video_audit: 4,
   video_package_long: 6,
 }
@@ -118,19 +120,33 @@ export async function chargeFeature(
     return { success: false, error: 'Kredit egyenleg nem található' }
   }
 
-  const newBalance = Number(current.balance) - cost
-  const newTotalUsed = Number(current.total_used) + cost
+  const currentBalance = Number(current.balance)
+  const currentTotalUsed = Number(current.total_used ?? 0)
 
-  const { error: updateErr } = await admin
+  if (currentBalance < cost) {
+    return { success: false, new_balance: currentBalance, error: 'Nincs elég kredit' }
+  }
+
+  const newBalance = currentBalance - cost
+  const newTotalUsed = currentTotalUsed + cost
+
+  const { data: updated, error: updateErr } = await admin
     .from('user_credits')
     .update({ balance: newBalance, total_used: newTotalUsed })
     .eq('user_id', userId)
+    .eq('balance', currentBalance)
+    .gte('balance', cost)
+    .select('balance')
+    .single()
 
-  if (updateErr) {
-    return { success: false, error: updateErr.message }
+  if (updateErr || !updated) {
+    return {
+      success: false,
+      new_balance: currentBalance,
+      error: updateErr?.message || 'A kredit levonás nem sikerült. Próbáld újra.',
+    }
   }
 
-  // Összesítő log a charge-ról
   await admin.from('ai_usage_logs').insert({
     user_id: userId,
     feature_name: feature,
@@ -142,5 +158,5 @@ export async function chargeFeature(
     metadata: { ...metadata, type: 'charge' },
   })
 
-  return { success: true, new_balance: newBalance }
+  return { success: true, new_balance: Number(updated.balance) }
 }

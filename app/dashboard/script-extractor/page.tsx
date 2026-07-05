@@ -101,7 +101,7 @@ export default function ScriptExtractorPage() {
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs eleg kredited. ${cost} kredit szukseges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
         })
         return
       }
@@ -115,7 +115,7 @@ export default function ScriptExtractorPage() {
         remainingCreditsAfterRun: Math.round(balance - cost),
         requiresConfirmation: true,
         canRun: true,
-        message: `Ez a muvelet ${cost} kreditbe kerul.`,
+        message: `Ez a művelet ${cost} kreditbe kerül.`,
       })
     } catch {
       onConfirm()

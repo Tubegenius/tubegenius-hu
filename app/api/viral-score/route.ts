@@ -1,29 +1,77 @@
-import { NextRequest, NextResponse } from 'next/server'
+﻿import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
-import { createAdminClient } from '@/lib/supabase-server'
 import { calcEngagementRate, calcTrendVelocity, calcViewOutlierScore, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import type { SimilarVideo } from '@/types'
-import { getUserId, logUsage } from '@/lib/credits'
+import { getUserId, logUsage, chargeFeature, hasEnoughCredits } from '@/lib/credits'
 import type { ViralScoreResult, ViralScoreConfidence } from '@/types'
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
+import { fetchSerperNews, computeSerperFreshness, getSerperHealthStatus, type SerperResult } from '@/lib/trend-radar'
+import { buildViralScoreHash, normalizeTopic, cacheStatusFor, getCachedViralScore, touchLastOpened, saveViralScoreResult } from '@/lib/viral-score-cache'
+import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+// ── Téma-relevancia szűrés ────────────────────────────────────
+// A YouTube/Serper keresés önmagában fuzzy — pl. "AI botrányok"-ra simán
+// visszaadhat tisztán "botrány" témájú, AI-hoz semmilyen módon nem kötődő
+// találatokat is. Enélkül a score olyan videókból/forrásokból épülne fel,
+// amik valójában nem a keresett témáról szólnak — ez pont az ellentéte
+// annak, amit a Core Trust Engine ígér (valós validáció, nem álra hasonlító
+// zaj). Szándékosan NEM a megosztott lib/trend-radar.ts szűrőjét
+// használjuk — az a 3 karakternél rövidebb szavakat (pl. "AI") eldobja,
+// itt pedig pont ezek a rövid, de jelentéssel bíró szavak a lényegesek.
+const RELEVANCE_STOPWORDS = new Set([
+  'a', 'az', 'és', 'egy', 'de', 'hogy', 'mint', 'vagy', 'mert', 'amit', 'ami', 'ezt', 'azt', 'is', 'nem', 'meg', 'el', 'be', 'ki', 'fel', 'le', 'kis', 'nagy',
+  'the', 'and', 'for', 'with', 'this', 'that', 'from', 'are', 'was', 'were', 'new', 'why', 'how', 'of', 'in', 'on', 'at', 'to', 'an',
+])
+
+function normalizeForRelevance(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function topicRelevanceWords(topic: string): string[] {
+  return normalizeForRelevance(topic)
+    .split(' ')
+    .filter(w => w.length >= 2 && !RELEVANCE_STOPWORDS.has(w))
+}
+
+// Rövid témánál (≤3 kulcsszó) minden szónak egyeznie kell — enélkül pont
+// az történik, ami "AI botrányok"-nál: csak a "botrányok" egyezik, az "AI"
+// eltűnik, és a végeredmény tisztán "botrány" tartalom lesz. Hosszabb,
+// leíróbb témáknál 70%-os egyezést engedünk, hogy ne legyen túl szigorú.
+function isTopicRelevant(text: string, words: string[]): boolean {
+  if (words.length === 0) return true
+  const normalized = normalizeForRelevance(text)
+  const matchCount = words.filter(w => normalized.includes(w)).length
+  const requiredRatio = words.length <= 3 ? 1 : 0.7
+  return matchCount / words.length >= requiredRatio
+}
 
 async function fetchYouTubeData(topic: string, region: string) {
   const regionCode = region === 'HU' ? 'HU' : region === 'US' ? 'US' : 'HU'
   const language = region === 'HU' ? 'hu' : 'en'
 
-  const items = await youtubeSearch(topic, regionCode, language, 180, 20, 'manualTopicSearch')
+  const items = await youtubeSearch(topic, regionCode, language, 180, 40, 'manualTopicSearch')
   if (items.length === 0) return null
 
-  const videoIds = items.map(item => item.id.videoId)
+  const words = topicRelevanceWords(topic)
+  const relevantItems = items.filter(item => isTopicRelevant(`${item.snippet.title} ${item.snippet.description || ''}`, words))
+  if (relevantItems.length === 0) return null
+
+  const videoIds = relevantItems.map(item => item.id.videoId)
   const statsMap = await youtubeStats(videoIds)
 
   return {
-    videos: items,
+    videos: relevantItems,
     stats: Array.from(statsMap.values()),
-    total_results: items.length,
+    total_results: relevantItems.length,
   }
 }
 
@@ -34,9 +82,21 @@ function getConfidence(videoCount: number): ViralScoreConfidence {
   return 'nagyon_alacsony'
 }
 
+// Web visszhang — Serper hírkeresésből: mennyi és milyen friss a webes lefedettség.
+// Ugyanazt a freshness-logikát használja, mint a Trend Radar (lib/trend-radar.ts).
+function calcWebBuzzScore(results: SerperResult[]): number {
+  if (results.length === 0) return 0
+  const countScore = Math.min(100, (results.length / 10) * 100) // Serper hívás max 10 találatot ad
+  const freshnessScore = computeSerperFreshness(results, 30)
+  return Math.round(countScore * 0.4 + freshnessScore * 0.6)
+}
+
 // Backend score — Claude NEM ad score-t, csak a meglévő adatokból számolunk
-// Ugyanazokat a komponenseket használja, mint az Opportunity Engine (opportunity-scoring.ts)
-function calcBackendViralScore(videos: YouTubeVideoStats[], avgViews: number, totalResults: number): number {
+// Ugyanazokat a komponenseket használja, mint az Opportunity Engine (opportunity-scoring.ts).
+// A súlyozás magja (view/engagement/velocity = 75%) változatlan — ha a Serper webes jel
+// nem elérhető (API hiba/kulcs hiánya), a formula pontosan az eredeti 5-faktoros
+// súlyozásra esik vissza, hogy egy külső API-hiba se torzíthassa a pontszámot.
+function calcBackendViralScore(videos: YouTubeVideoStats[], avgViews: number, totalResults: number, webBuzzScore: number | null): number {
   // View-alapú alap pontszám (logaritmikus skála)
   const viewScore = Math.min(100, (Math.log10(avgViews + 1) / Math.log10(1_000_000)) * 100)
   // Engagement Rate — (likes + comments*3) / views, megosztott logikával
@@ -48,7 +108,10 @@ function calcBackendViralScore(videos: YouTubeVideoStats[], avgViews: number, to
   // Piaci méret — van-e elég tartalom a témában
   const marketScore = Math.min(100, (Math.log10(totalResults + 1) / Math.log10(100_000)) * 100)
 
-  const total = viewScore * 0.35 + engagementScore * 0.25 + velocityScore * 0.15 + outlierScore * 0.1 + marketScore * 0.15
+  const total = webBuzzScore === null
+    ? viewScore * 0.35 + engagementScore * 0.25 + velocityScore * 0.15 + outlierScore * 0.1 + marketScore * 0.15
+    : viewScore * 0.35 + engagementScore * 0.25 + velocityScore * 0.15 + outlierScore * 0.05 + marketScore * 0.1 + webBuzzScore * 0.1
+
   return Math.round(Math.max(0, Math.min(100, total)))
 }
 
@@ -59,26 +122,147 @@ function getVerdict(score: number): 'strong' | 'moderate' | 'weak' | 'avoid' {
   return 'avoid'
 }
 
+function buildViralDecisionSummary(input: {
+  score: number
+  confidence: ViralScoreConfidence
+  videoCount: number
+  webBuzzScore: number | null
+}): {
+  decision_status: 'make_now' | 'test_angle' | 'research' | 'avoid'
+  decision_label: string
+  decision_reason: string
+  next_action: string
+  risk_flags: string[]
+} {
+  const risk_flags: string[] = []
+  if (input.confidence === 'nagyon_alacsony' || input.videoCount < 5) risk_flags.push('Kevés videós adat')
+  if (input.webBuzzScore === null) risk_flags.push('Webes visszhang nem mérhető')
+  else if (input.webBuzzScore < 30) risk_flags.push('Gyenge webes visszhang')
+
+  if (input.score >= 70 && input.videoCount >= 5) {
+    return {
+      decision_status: 'make_now',
+      decision_label: 'Gyártható téma',
+      decision_reason: 'A YouTube-jelek alapján van mérhető kereslet és elég adat a témához.',
+      next_action: 'Készíts videócsomagot, majd válassz erős hookot és címváltozatot.',
+      risk_flags,
+    }
+  }
+
+  if (input.score >= 45) {
+    return {
+      decision_status: 'test_angle',
+      decision_label: 'Tesztelhető szög',
+      decision_reason: 'Látszik piaci jel, de nem elég erős ahhoz, hogy vakon erre építs.',
+      next_action: 'Keress Similar Videos példákat, majd készíts egy szűkebb, konkrétabb angle-t.',
+      risk_flags,
+    }
+  }
+
+  if (input.score >= 20 || input.videoCount >= 3) {
+    return {
+      decision_status: 'research',
+      decision_label: 'Kutatás kell',
+      decision_reason: 'Van némi adat, de a jel gyenge vagy bizonytalan.',
+      next_action: 'Szűkítsd a témát, ellenőrizd webes forrással, és futtass Similar Videos keresést.',
+      risk_flags,
+    }
+  }
+
+  return {
+    decision_status: 'avoid',
+    decision_label: 'Most nem ajánlott',
+    decision_reason: 'Nincs elég releváns adat ahhoz, hogy erre gyártási döntést építs.',
+    next_action: 'Próbálj tágabb vagy másképp megfogalmazott keresést.',
+    risk_flags,
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { topic, platform, region } = await request.json()
+    const { topic, platform, region, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
     if (!topic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    const cacheKey = `${topic}-${platform}-${region}`.toLowerCase().replace(/\s+/g, '-')
-    const admin = createAdminClient()
+    // ─── Perzisztens, user-szintű eredmény-cache ─────────────────
+    // Amit a user egyszer kredittel lefuttatott, azt bármikor újra meg
+    // tudja nyitni kredit nélkül — a lejárat (6 óra) csak "friss vs.
+    // korábbi mentett" jelzés, SOHA nem fizetési határ. Csak az explicit
+    // force_refresh indít új, fizetős elemzést.
+    const hash = buildViralScoreHash({ userId, topic, platform, region })
+    const paidNormalizedInput = normalizePaidResultInput(topic)
+    const paidInputHash = buildPaidResultHash({
+      userId,
+      toolType: 'viral_score',
+      normalizedInput: paidNormalizedInput,
+      region: region || 'HU',
+      platform: platform || 'youtube',
+    })
 
-    const { data: cached } = await admin
-      .from('viral_score_cache')
-      .select('*')
-      .eq('cache_key', cacheKey)
-      .gt('expires_at', new Date().toISOString())
-      .single()
+    if (!force_refresh) {
+      const paidById = await getPaidResultById(userId, paidResultId || paid_result_id)
+      const paid = paidById || await getPaidResultByHash({ userId, toolType: 'viral_score', inputHash: paidInputHash })
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({
+          ...(opened.result_json as object),
+          from_cache: true,
+          ...paidResultResponseMeta(opened),
+        })
+      }
+      const cached = await getCachedViralScore(hash, userId)
+      if (cached) {
+        await touchLastOpened(cached.id)
 
-    if (cached) {
-      return NextResponse.json({ ...cached.result, cached: true })
+        // Backfill: a régi viral_score_searches cache-ből visszanyitott eredmény is
+        // kerüljön be a központi paid_results táblába, különben a dashboard
+        // "Megvett eredmény" listájában nem jelenik meg.
+        const cachedResult = cached.result as ViralScoreResult
+        const backfillSave = await savePaidResult({
+          userId,
+          toolType: 'viral_score',
+          inputHash: paidInputHash,
+          normalizedInput: paidNormalizedInput,
+          originalInput: cachedResult.topic || topic,
+          region: region || 'HU',
+          platform: platform || 'youtube',
+          resultJson: cachedResult,
+          summaryJson: { score: cached.score, verdict: cachedResult.verdict, topic: cachedResult.topic || topic },
+          creditCost: 1,
+          freshForHours: cacheStatusFor(cached.last_refreshed_at) === 'fresh' ? 6 : undefined,
+        })
+        if (!backfillSave.success) {
+          console.error('[ViralScore] KRITIKUS: paid_results backfill sikertelen cache-hit után:', backfillSave.error)
+        }
+
+        return NextResponse.json({
+          ...(cachedResult as object),
+          from_cache: true,
+          cache_status: cacheStatusFor(cached.last_refreshed_at),
+          last_analyzed_at: cached.last_refreshed_at,
+          requires_credit: false,
+          from_paid_result: backfillSave.success,
+          paid_result_id: backfillSave.record?.id || null,
+        })
+      }
+
+      if (cache_only) {
+        // A kliens csak azt kérdezi, van-e mentett eredmény — ha nincs, NE
+        // induljon el a fizetős elemzés és NE jelenjen meg semmilyen
+        // kredit-igény, amíg a user explicit nem kéri (lásd Similar Videos
+        // ugyanilyen cache_only próbája).
+        return NextResponse.json({ from_cache: false, cache_status: 'miss', requires_credit: true })
+      }
+    }
+
+    // ─── KRITIKUS SZABÁLY: szerver oldali kredit-ellenőrzés a drága munka
+    // (YouTube + Serper + Claude hívások) előtt — a kliens oldali ellenőrzés
+    // (page.tsx) csak UX, önmagában megkerülhető, sosem elég a tényleges védelemhez.
+    const enoughCredits = await hasEnoughCredits(userId, 'viral_score')
+    if (!enoughCredits) {
+      return NextResponse.json({ error: 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
     }
 
     // YouTube adatok lekérése
@@ -88,16 +272,52 @@ export async function POST(request: NextRequest) {
 
     // ─── KRITIKUS SZABÁLY: ha nincs elég adat, NEM hívunk Claude-ot score-ért ───
     if (videoCount < 3) {
+      const decision = buildViralDecisionSummary({ score: 0, confidence, videoCount, webBuzzScore: null })
       const result: ViralScoreResult = {
         topic,
         score: 0,
         confidence,
         video_count: videoCount,
-        breakdown: { avg_views: 0, avg_likes: 0, avg_comments: 0, trend_momentum: 0, competition_level: 0 },
+        breakdown: { avg_views: 0, avg_likes: 0, avg_comments: 0, trend_momentum: 0, competition_level: 0, web_buzz: null },
         recommendation: 'Nincs elegendő adat a megbízható pontszámhoz. A YouTube keresés ehhez a témához kevesebb mint 3 releváns videót talált, így a piaci kereslet nem mérhető megbízhatóan. Próbálj általánosabb vagy más megfogalmazású kulcsszót.',
         verdict: 'avoid',
       }
-      return NextResponse.json(result)
+
+      // Kevés adatnál nem vonunk kreditet, de a user kapott egy lezárt
+      // eredményt. Ezt is mentjük, hogy a dashboard történetben megjelenjen
+      // és később újranyitható legyen.
+      const paidSave = await savePaidResult({
+        userId,
+        toolType: 'viral_score',
+        inputHash: paidInputHash,
+        normalizedInput: paidNormalizedInput,
+        originalInput: topic,
+        region: region || 'HU',
+        platform: platform || 'youtube',
+        resultJson: result,
+        summaryJson: { score: 0, verdict: 'avoid', topic, low_data: true, decision_status: decision.decision_status, decision_label: decision.decision_label },
+        creditCost: 0,
+        freshForHours: 6,
+      })
+      if (!paidSave.success) {
+        console.error('[ViralScore] KRITIKUS: kevés adatos paid_results mentés sikertelen:', paidSave.error)
+      }
+
+      await saveViralScoreResult({
+        userId, hash, normalizedTopic: normalizeTopic(topic), originalTopic: topic,
+        region: region || 'HU', platform: platform || 'youtube',
+        result, score: 0, creditCost: 0,
+      })
+
+      return NextResponse.json({
+        ...result,
+        from_cache: false,
+        cache_status: 'fresh',
+        last_analyzed_at: new Date().toISOString(),
+        requires_credit: false,
+        from_paid_result: false,
+        paid_result_id: paidSave.record?.id || null,
+      })
     }
 
     // ─── Videók egységes formátumra hozása a megosztott scoring függvényekhez ───
@@ -125,9 +345,20 @@ export async function POST(request: NextRequest) {
 
     const totalResults = ytData?.total_results || 0
 
+    // ─── Webes visszhang lekérése (Serper) — a meglévő YouTube-alapú súlyokat
+    // nem bántjuk, csak kiegészítjük velük (lásd calcBackendViralScore). Ha a
+    // Serper API nem elérhető, webBuzzScore marad null, és a formula az
+    // eredeti, tisztán YouTube-alapú súlyozásra esik vissza.
+    const rawSerperResults = await fetchSerperNews(topic, region || 'HU')
+    const topicWords = topicRelevanceWords(topic)
+    const serperResults = rawSerperResults.filter(r => isTopicRelevant(`${r.title} ${r.snippet}`, topicWords))
+    const serperHealth = getSerperHealthStatus()
+    const webBuzzScore = serperHealth.unavailable ? null : calcWebBuzzScore(serperResults)
+
     // ─── Backend számolja a score-t — ugyanazokkal a komponensekkel mint az Opportunity Engine ───
-    const score = calcBackendViralScore(videoStats, avgViews, totalResults)
+    const score = calcBackendViralScore(videoStats, avgViews, totalResults, webBuzzScore)
     const verdict = getVerdict(score)
+    const decision = buildViralDecisionSummary({ score, confidence, videoCount, webBuzzScore })
 
     // Trend momentum: Trend Velocity (views/hour) + Freshness kombinációja
     const trendMomentum = calcTrendVelocity(videoStats)
@@ -148,9 +379,11 @@ BACKEND SZÁMOK:
 - Trend momentum: ${trendMomentum}/100 (friss videók aránya)
 - Verseny szint: ${competitionLevel}/100
 - Összes találat a piacon: ${totalResults.toLocaleString()}
+${webBuzzScore !== null ? `- Webes visszhang (hírek/cikkek): ${webBuzzScore}/100 (${serperResults.length} releváns webes találat)` : '- Webes visszhang: nem elérhető ehhez a futtatáshoz'}
 
 FELADAT:
 Írj egy 2-3 mondatos magyar ajánlást a fenti SZÁMOK alapján. Magyarázd el mit jelentenek ezek a számok a creator számára. NE adj más score-t, NE mondj ellent a fenti verdict-nek.
+Ha a webes lefedettségre hivatkozol, PONTOSAN a "webes visszhang" kifejezést használd — NE találj ki hozzá szinonimát vagy új összetett szót.
 
 Válaszolj KIZÁRÓLAG valid JSON-ban:
 {"recommendation": "2-3 mondatos magyar ajánlás a backend számok alapján"}`
@@ -165,6 +398,17 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     const aiResult = JSON.parse(responseText.replace(/```json|```/g, '').trim())
 
     await logUsage(userId, 'viral_score', MODELS.fast, message.usage.input_tokens, message.usage.output_tokens, { topic })
+
+    // ─── Kredit levonás — korábban ez teljesen hiányzott: a Viral Score
+    // sosem vont le kreditet szerver oldalon, a kliens csak becsült egy
+    // "1 kredit" költséget, ami valójában sosem érvényesült. Emiatt a
+    // funkció eddig ingyenes volt, és nem is jelent meg a "Legutóbbi
+    // történeted" panelen (mert oda csak a ténylegesen levont — credits_charged
+    // > 0 — sorok kerülnek be).
+    const chargeResult = await chargeFeature(userId, 'viral_score', { topic })
+    if (!chargeResult.success) {
+      return NextResponse.json({ error: chargeResult.error || 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
+    }
 
     // Top 5 videó a videoStats-ból - megtekintés szerint rendezve, a UI-nak (VideoCardActions kártyák)
     const topVideos: SimilarVideo[] = [...videoStats]
@@ -188,16 +432,48 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
         avg_comments: Math.round(avgComments),
         trend_momentum: trendMomentum,
         competition_level: competitionLevel,
+        web_buzz: webBuzzScore,
       },
       recommendation: aiResult.recommendation,
       verdict,
       videos: topVideos,
+      web_sources: serperResults.slice(0, 3).map(s => ({ title: s.title, url: s.link, source: s.source, date: s.date })),
     }
 
-    const expires = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
-    await admin.from('viral_score_cache').upsert({ cache_key: cacheKey, result, expires_at: expires })
+    const paidSave = await savePaidResult({
+      userId,
+      toolType: 'viral_score',
+      inputHash: paidInputHash,
+      normalizedInput: paidNormalizedInput,
+      originalInput: topic,
+      region: region || 'HU',
+      platform: platform || 'youtube',
+      resultJson: result,
+      summaryJson: { score, verdict, topic, decision_status: decision.decision_status, decision_label: decision.decision_label },
+      creditCost: 1,
+      freshForHours: 6,
+    })
+    if (!paidSave.success) {
+      console.error('[ViralScore] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+    }
 
-    return NextResponse.json(result)
+    const saveRes = await saveViralScoreResult({
+      userId, hash, normalizedTopic: normalizeTopic(topic), originalTopic: topic,
+      region: region || 'HU', platform: platform || 'youtube',
+      result, score, creditCost: 1,
+    })
+    if (!saveRes.success) {
+      console.error('[ViralScore] KRITIKUS: eredmény mentése sikertelen, a user már fizetett érte:', saveRes.error)
+    }
+
+    return NextResponse.json({
+      ...result,
+      from_cache: false,
+      cache_status: 'fresh',
+      last_analyzed_at: new Date().toISOString(),
+      requires_credit: true,
+      paid_result_id: paidSave.record?.id || null,
+    })
   } catch (error) {
     console.error('Viral Score error:', error)
     return NextResponse.json({ error: 'Elemzés sikertelen.' }, { status: 500 })

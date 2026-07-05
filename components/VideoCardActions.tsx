@@ -23,9 +23,9 @@ function ExtractingOverlay() {
             <animate attributeName="opacity" values="0;0.9;0.9;0" dur="2s" repeatCount="indefinite" />
           </circle>
         </svg>
-        <p className="text-base font-semibold mb-2" style={{ color: '#F8FAFC' }}>Script kinyerese...</p>
-        <p className="text-sm" style={{ color: '#94A3B8' }}>A forras video tartalmat automatikusan feldolgozzuk</p>
-        <p className="text-xs mt-1" style={{ color: '#64748B' }}>Fact Safety Layer aktiv — csak ellenorzott tenyeket hasznal</p>
+        <p className="text-base font-semibold mb-2" style={{ color: '#F8FAFC' }}>Script kinyerése...</p>
+        <p className="text-sm" style={{ color: '#94A3B8' }}>A forrás videó tartalmát automatikusan feldolgozzuk</p>
+        <p className="text-xs mt-1" style={{ color: '#64748B' }}>Fact Safety Layer aktív — csak ellenőrzött tényeket használ</p>
       </div>
     </div>
   )

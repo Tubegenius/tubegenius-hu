@@ -2,11 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 
 // GET /api/dashboard/tracked-trends/videos?id=<tracked_candidate_id>
-// A "Videók megnyitása" gomb ingyenes verziója — a tracked_trend_candidates
-// tábla youtube_video_ids mezőjéhez tartozó, MÁR ISMERT (passzívan a
-// youtube_videos/youtube_video_snapshots táblákba korábban elmentett)
-// videóadatot adja vissza. NINCS új YouTube API hívás, NINCS Claude hívás,
-// NINCS kreditlevonás — ez csak egy adatbázis-olvasás.
+// Ingyenes bizonyíték-lista: a tracked_trend_candidates MÁR ISMERT
+// youtube_video_ids és web_source_ids mezőiből olvas. NINCS új YouTube API hívás,
+// NINCS Claude hívás, NINCS kreditlevonás — ez csak adatbázis-olvasás.
 export async function GET(request: NextRequest) {
   const supabase = createServerSupabaseClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -20,16 +18,41 @@ export async function GET(request: NextRequest) {
 
   const { data: candidate } = await admin
     .from('tracked_trend_candidates')
-    .select('id, candidate_topic, youtube_video_ids')
+    .select('id, candidate_topic, youtube_video_ids, web_source_ids')
     .eq('id', candidateId)
     .eq('user_id', user.id)
     .single()
 
   if (!candidate) return NextResponse.json({ error: 'Nem található' }, { status: 404 })
 
+  const rawWebSources: Array<string | { title?: string; url?: string; link?: string; snippet?: string; source?: string; date?: string }> =
+    Array.isArray(candidate.web_source_ids) ? candidate.web_source_ids : []
+  const web_sources = rawWebSources
+    .map(item => {
+      if (typeof item === 'string') {
+        let source = ''
+        try { source = new URL(item).hostname.replace(/^www\./, '') } catch {}
+        return { title: source || item, url: item, snippet: '', source, date: '' }
+      }
+      const url = item.url || item.link || ''
+      if (!url) return null
+      let source = item.source || ''
+      if (!source) {
+        try { source = new URL(url).hostname.replace(/^www\./, '') } catch {}
+      }
+      return {
+        title: item.title || source || url,
+        url,
+        snippet: item.snippet || '',
+        source,
+        date: item.date || '',
+      }
+    })
+    .filter((item): item is { title: string; url: string; snippet: string; source: string; date: string } => !!item)
+
   const videoIds: string[] = (candidate.youtube_video_ids || []).filter(Boolean)
   if (videoIds.length === 0) {
-    return NextResponse.json({ videos: [], candidate_topic: candidate.candidate_topic })
+    return NextResponse.json({ videos: [], web_sources, candidate_topic: candidate.candidate_topic })
   }
 
   const [{ data: videoRows }, { data: snapshotRows }] = await Promise.all([
@@ -58,5 +81,5 @@ export async function GET(request: NextRequest) {
     }
   }).sort((a, b) => (b.view_count ?? 0) - (a.view_count ?? 0))
 
-  return NextResponse.json({ videos, candidate_topic: candidate.candidate_topic })
+  return NextResponse.json({ videos, web_sources, candidate_topic: candidate.candidate_topic })
 }

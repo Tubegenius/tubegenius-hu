@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -168,6 +168,25 @@ const DIM_WEIGHTS: Record<string, string> = {
   packaging_quality: '15%',
 }
 
+function auditDecisionMeta(result: AuditResult) {
+  const decision = result.decision || 'Remix'
+  const weakest = result.weakest_dimension && result.weakest_dimension !== '-' ? result.weakest_dimension : null
+  const map: Record<string, { title: string; action: string; note: string; icon: string }> = {
+    'Folytatás': { title: 'Skálázd tovább', action: 'Készíts folytatást vagy hasonló verziót ugyanarra az ígéretre.', note: 'A videó szerkezete működik, ezért itt nem újratervezés, hanem ismétlés és variálás a cél.', icon: 'ti-trending-up' },
+    Reupload: { title: 'Újratöltés finomhangolással', action: 'Tartsd meg az alapötletet, de javíts címet, nyitást vagy csomagolást.', note: 'A videó nem rossz, inkább a belépési pontokon lehet még nyerni.', icon: 'ti-refresh' },
+    Rehook: { title: 'Új hook kell', action: 'Írd újra az első 3-5 másodpercet és kezdd erősebb konfliktussal vagy ígérettel.', note: 'A téma menthető, de a nézőnek hamarabb kell okot adni a maradásra.', icon: 'ti-fish-hook' },
+    Repackage: { title: 'Csomagold újra', action: 'Cserélj címet, thumbnail szöveget, captiont és első képi ígéretet.', note: 'A tartalom lehet jó, de a külső ígéret nem ad elég erős kattintási okot.', icon: 'ti-package' },
+    Remix: { title: 'Remix / újravágás', action: 'Rendezd át a struktúrát, húzd előre a legerősebb részt, és vágd ki a lassú bevezetést.', note: 'A videóban van menthető jel, de a tempó vagy a felépítés nem elég feszes.', icon: 'ti-cut' },
+    Replatform: { title: 'Más platformra való', action: 'Tartsd meg az ötletet, de alakítsd át a platform logikájára.', note: 'Nem feltétlen a téma rossz, hanem a forma és a platform illeszkedése gyenge.', icon: 'ti-arrows-exchange' },
+    Abandon: { title: 'Ne erre építs', action: 'Válassz új témát vagy teljesen más szöget, mielőtt újabb gyártási időt teszel bele.', note: 'A jelenlegi forma túl sok fő ponton gyenge, ezért nem ez a legjobb következő lépés.', icon: 'ti-alert-triangle' },
+  }
+  return {
+    ...(map[decision] || map.Remix),
+    weakest,
+    reason: result.decision_reason || result.overall_action || result.overall_meaning || 'A döntés a backend pontszámok és az audit dimenziók alapján készült.',
+  }
+}
+
 export default function VideoAuditPage() {
   const searchParams = useSearchParams()
   const existingId = searchParams.get('id')
@@ -233,7 +252,7 @@ export default function VideoAuditPage() {
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs eleg kredited. ${cost} kredit szukseges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
         })
         return
       }
@@ -247,7 +266,7 @@ export default function VideoAuditPage() {
         remainingCreditsAfterRun: Math.round(balance - cost),
         requiresConfirmation: true,
         canRun: true,
-        message: `Ez a muvelet ${cost} kreditbe kerul.`,
+        message: `Ez a művelet ${cost} kreditbe kerül.`,
       })
     } catch {
       onConfirm()
@@ -464,13 +483,33 @@ export default function VideoAuditPage() {
           </div>
 
           {/* Decision Block */}
-          {result.decision && (
-            <div className={`rounded-2xl p-5 border ${DECISION_COLORS[result.decision] ?? 'border-white/10 bg-white/5'}`}>
-              <div className="text-xs font-semibold uppercase tracking-widest mb-2 opacity-70">Döntés</div>
-              <div className="text-xl font-black mb-2">{result.decision}</div>
-              {result.decision_reason && <p className="text-sm opacity-80">{result.decision_reason}</p>}
-            </div>
-          )}
+          {result.decision && (() => {
+            const decision = auditDecisionMeta(result)
+            return (
+              <div className={`rounded-2xl p-5 border ${DECISION_COLORS[result.decision] ?? 'border-white/10 bg-white/5'}`}>
+                <div className="flex items-start gap-4">
+                  <div className="w-11 h-11 rounded-xl bg-white/5 flex items-center justify-center flex-shrink-0">
+                    <i className={`ti ${decision.icon}`} style={{ fontSize: '22px' }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold uppercase tracking-widest mb-1 opacity-70">Audit döntés</div>
+                    <div className="text-xl font-black mb-1">{result.decision}: {decision.title}</div>
+                    <p className="text-sm opacity-85 mb-3">{decision.reason}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="rounded-xl p-3 bg-black/15 border border-white/10">
+                        <div className="text-[11px] uppercase tracking-widest opacity-60 mb-1">Első lépés</div>
+                        <p className="text-sm font-medium">{decision.action}</p>
+                      </div>
+                      <div className="rounded-xl p-3 bg-black/15 border border-white/10">
+                        <div className="text-[11px] uppercase tracking-widest opacity-60 mb-1">Miért ez?</div>
+                        <p className="text-sm">{decision.weakest ? `Leggyengébb pont: ${decision.weakest}. ` : ''}{decision.note}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
           {/* 5 Dimenzió */}
           <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6">

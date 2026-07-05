@@ -43,7 +43,7 @@ export default function TrendFeedHistory() {
       <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between">
         <span className="text-sm font-semibold flex items-center gap-2" style={{ color: '#F8FAFC' }}>
           <i className="ti ti-history" style={{ color: '#94A3B8' }} />
-          Korábbi ajánlások
+          Korábbi heti ajánlások
         </span>
         <i className={`ti ${open ? 'ti-chevron-up' : 'ti-chevron-down'}`} style={{ color: '#64748B' }} />
       </button>

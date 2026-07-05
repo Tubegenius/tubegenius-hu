@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -61,9 +61,27 @@ const confidenceLabel = {
   nagyon_alacsony: 'Nagyon alacsony megbízhatóság (1–4 videó)',
 }
 
+function viralDecisionMeta(result: ViralScoreResult) {
+  const status = result.decision_status || (result.verdict === 'strong' ? 'make_now' : result.verdict === 'moderate' ? 'test_angle' : result.verdict === 'weak' ? 'research' : 'avoid')
+  const fallback = {
+    make_now: { label: 'Gyártható téma', reason: 'A témában elég erős jel látszik ahhoz, hogy gyártási döntést hozz.', action: 'Készíts videócsomagot, majd válassz erős hookot.', color: '#22C55E', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', icon: 'ti-circle-check' },
+    test_angle: { label: 'Tesztelhető szög', reason: 'Van piaci jel, de érdemes szűkebb angle-t keresni.', action: 'Nézz Similar Videos példákat és csomagold konkrétabb ígéretre.', color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)', icon: 'ti-flask' },
+    research: { label: 'Kutatás kell', reason: 'A jel még gyenge vagy bizonytalan.', action: 'Szűkítsd a keresést, majd validáld Similar Videos vagy webes forrás alapján.', color: '#60A5FA', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)', icon: 'ti-search' },
+    avoid: { label: 'Most nem ajánlott', reason: 'Nincs elég erős adat ahhoz, hogy erre építs.', action: 'Próbálj más megfogalmazást vagy tágabb témát.', color: '#F43F5E', bg: 'rgba(244,63,94,0.08)', border: 'rgba(244,63,94,0.2)', icon: 'ti-alert-triangle' },
+  }[status]
+
+  return {
+    ...fallback,
+    label: result.decision_label || fallback.label,
+    reason: result.decision_reason || fallback.reason,
+    action: result.next_action || fallback.action,
+  }
+}
+
 export default function ViralScorePage() {
   const searchParams = useSearchParams()
   const initialTopic = searchParams.get('topic') || ''
+  const paidResultId = searchParams.get('paidResultId') || ''
 
   const [topic, setTopic] = useState(initialTopic)
   const [loading, setLoading] = useState(false)
@@ -75,7 +93,7 @@ export default function ViralScorePage() {
   // Keresési előzmény visszaállítása böngésző vissza gombhoz
   useEffect(() => {
     if (initialTopic) {
-      checkCreditsBeforeAction(1, 'Viral Score', () => runAnalysis(initialTopic))
+      runAnalysisWithCreditCheck(initialTopic)
       return
     }
     const saved = sessionStorage.getItem('willviral_viral_score_state')
@@ -87,6 +105,37 @@ export default function ViralScorePage() {
       } catch {}
     }
   }, [])
+
+  // Előbb megnézzük, van-e mentett (ingyenes) eredmény ehhez a témához —
+  // ha van (akár friss, akár korábbi), azt mutatjuk kredit-igény és
+  // megerősítő modal nélkül. Amit a user egyszer megvett, azt bármikor
+  // újra meg tudja nyitni — a 6 órás "friss" ablak csak jelzés, nem
+  // fizetési határ. Csak akkor kérünk megerősítést, ha tényleg új,
+  // fizetős elemzés indulna.
+  async function runAnalysisWithCreditCheck(t: string) {
+    if (!t.trim()) return
+    try {
+      const cacheRes = await fetch('/api/viral-score', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: t, platform: 'youtube', region: 'HU', cache_only: true, paidResultId: paidResultId || undefined }),
+      })
+      const cacheData = await cacheRes.json()
+      if (cacheRes.ok && (cacheData.from_cache || cacheData.from_paid_result)) {
+        setTopic(t)
+        setResult(cacheData)
+        sessionStorage.setItem('willviral_viral_score_state', JSON.stringify({ topic: t, result: cacheData }))
+        return
+      }
+    } catch {}
+    checkCreditsBeforeAction(1, 'Viral Score', () => runAnalysis(t))
+  }
+
+  // Explicit "Frissítés" — mindig új, fizetős elemzést indít (kredit-
+  // megerősítéssel), a mentett eredményt figyelmen kívül hagyja.
+  async function handleRefresh() {
+    checkCreditsBeforeAction(1, 'Viral Score', () => runAnalysis(topic || result?.topic || '', true))
+  }
 
   async function checkCreditsBeforeAction(cost: number, featureName: string, onConfirm: () => void) {
     try {
@@ -104,7 +153,7 @@ export default function ViralScorePage() {
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs eleg kredited. ${cost} kredit szukseges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
         })
         return
       }
@@ -118,14 +167,14 @@ export default function ViralScorePage() {
         remainingCreditsAfterRun: Math.round(balance - cost),
         requiresConfirmation: true,
         canRun: true,
-        message: `Ez a muvelet ${cost} kreditbe kerul.`,
+        message: `Ez a művelet ${cost} kreditbe kerül.`,
       })
     } catch {
       onConfirm()
     }
   }
 
-  async function runAnalysis(t: string) {
+  async function runAnalysis(t: string, forceRefresh = false) {
     if (!t.trim()) return
 
     setLoading(true)
@@ -136,7 +185,7 @@ export default function ViralScorePage() {
       const res = await fetch('/api/viral-score', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: t, platform: 'youtube', region: 'HU' }),
+        body: JSON.stringify({ topic: t, platform: 'youtube', region: 'HU', force_refresh: forceRefresh, paidResultId: paidResultId || undefined }),
       })
 
       const data = await res.json()
@@ -162,7 +211,7 @@ export default function ViralScorePage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    checkCreditsBeforeAction(1, 'Viral Score', () => runAnalysis(topic))
+    runAnalysisWithCreditCheck(topic)
   }
 
   async function saveToMemory() {
@@ -219,6 +268,32 @@ export default function ViralScorePage() {
       {/* Result */}
       {result && !loading && (
         <div className="space-y-4 animate-slide-up">
+          {/* Mentett eredmény jelzés — csak ez dönt a UI-ban, a kreditlevonás
+              sosem függ ettől, azt már a szerver eldöntötte */}
+          {result.from_cache && (
+            <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap"
+              style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+              <div>
+                <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
+                  <i className="ti ti-database mr-1.5" />
+                  {result.cache_status === 'fresh' ? 'Friss mentett eredmény betöltve' : 'Korábbi mentett eredmény betöltve'}
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+                  {result.cache_status === 'fresh'
+                    ? 'Ezért nem vontunk le új kreditet.'
+                    : 'Ezért nem vontunk le új kreditet. Frissítheted új adatokért.'}
+                  {result.last_analyzed_at && ` Utolsó elemzés: ${new Date(result.last_analyzed_at).toLocaleDateString('hu-HU')}.`}
+                </p>
+              </div>
+              <button onClick={handleRefresh} disabled={loading}
+                className="text-xs px-3 py-2 rounded-lg font-semibold flex-shrink-0"
+                style={{ background: 'rgba(255,255,255,0.06)', color: '#F8FAFC' }}
+                title="A frissítés új keresést indít, ezért kreditet használ.">
+                Eredmény frissítése
+              </button>
+            </div>
+          )}
+
           {/* Score card */}
           <div className="card text-center">
             <ScoreRing score={result.score} verdict={result.verdict} />
@@ -244,6 +319,35 @@ export default function ViralScorePage() {
             </p>
           </div>
 
+          {/* Creator decision */}
+          {(() => {
+            const decision = viralDecisionMeta(result)
+            return (
+              <div className="card" style={{ background: decision.bg, border: `1px solid ${decision.border}` }}>
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                    <i className={`ti ${decision.icon}`} style={{ color: decision.color, fontSize: '20px' }} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: decision.color }}>Creator döntés</p>
+                    <h3 className="text-lg font-bold mb-1" style={{ color: '#F8FAFC' }}>{decision.label}</h3>
+                    <p className="text-sm leading-relaxed" style={{ color: '#CBD5E1' }}>{decision.reason}</p>
+                    <p className="text-sm mt-2 font-medium" style={{ color: '#F8FAFC' }}>{decision.action}</p>
+                    {result.risk_flags && result.risk_flags.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {result.risk_flags.map(flag => (
+                          <span key={flag} className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: '#CBD5E1', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
           {/* Breakdown */}
           <div className="card">
             <p className="section-label mb-4">Részletes adatok</p>
@@ -253,6 +357,9 @@ export default function ViralScorePage() {
                 { label: 'Átlag like', value: result.breakdown.avg_likes.toLocaleString() },
                 { label: 'Átlag komment', value: result.breakdown.avg_comments.toLocaleString() },
                 { label: 'Vizsgált videók', value: result.video_count },
+                ...(result.breakdown.web_buzz !== null
+                  ? [{ label: 'Webes visszhang', value: `${result.breakdown.web_buzz}/100` }]
+                  : []),
               ].map(item => (
                 <div key={item.label} className="bg-surface-2 rounded-lg p-3">
                   <p className="text-text-muted text-xs mb-1">{item.label}</p>
@@ -261,6 +368,27 @@ export default function ViralScorePage() {
               ))}
             </div>
           </div>
+
+          {/* Webes visszhang forrásai */}
+          {result.web_sources && result.web_sources.length > 0 && (
+            <div className="card">
+              <p className="section-label mb-4">Webes visszhang ({result.web_sources.length})</p>
+              <div className="space-y-1.5">
+                {result.web_sources.map((s, i) => (
+                  <a key={s.url + i} href={s.url} target="_blank" rel="noopener noreferrer"
+                    className="block py-2 px-2 rounded-lg transition-colors hover:bg-white/[0.03]"
+                    style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.045)' }}>
+                    <p className="text-xs font-medium line-clamp-1" style={{ color: '#CBD5E1' }}>{s.title}</p>
+                    {(s.source || s.date) && (
+                      <p className="text-[11px] mt-0.5" style={{ color: '#64748B' }}>
+                        {[s.source, s.date].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Forrás videók */}
           {result.videos && result.videos.length > 0 && (

@@ -9,12 +9,12 @@ export async function POST(request: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const { feature } = await request.json() as { feature: ProtectedFeature }
-    if (!feature) return NextResponse.json({ error: 'Feature megadasa kotelezo' }, { status: 400 })
+    if (!feature) return NextResponse.json({ error: 'Feature megadása kötelező' }, { status: 400 })
 
     const result = await checkUsagePermission(user.id, feature)
     return NextResponse.json(result)
   } catch (error) {
     console.error('Credit check error:', error)
-    return NextResponse.json({ error: 'Ellenorzes sikertelen' }, { status: 500 })
+    return NextResponse.json({ error: 'Ellenőrzés sikertelen' }, { status: 500 })
   }
 }

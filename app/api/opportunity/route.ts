@@ -14,7 +14,7 @@ import { generateSeedsForNiche } from '@/lib/seed-generator'
 import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion, recommendedFormatForExpansion, hookPatternForExpansion } from '@/lib/topic-expansion'
 import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection } from '@/lib/broad-niche-discovery'
 import type { OpportunityTopic } from '@/types'
-import { logYouTubeSearch, checkUsagePermission } from '@/lib/usage-protection'
+import { logYouTubeSearch, checkUsagePermission, logFreeProductUse } from '@/lib/usage-protection'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import {
@@ -26,6 +26,7 @@ import {
   type ViralCandidate,
 } from '@/lib/core-trust-engine'
 import { buildCacheKey, buildTrendCacheKey } from '@/lib/core-trust-engine/cache'
+import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -162,7 +163,11 @@ function buildResearchFallbackTopics(params: {
     hook_pattern: hookPatternForExpansion('storytelling', lane.title),
     hook_suggestion: '',
     ready_to_produce_status: 'research' as const,
-    ready_to_produce_label: 'Kutatás kell',
+    ready_to_produce_label: 'Kutatási irány',
+    evidence_strength: 'none',
+    validation_reason: 'Tág niche-ből bontott kutatási irány. Még nincs elég konkrét webes vagy videós bizonyíték a gyártási ajánláshoz.',
+    recommended_next_action: 'refine_topic',
+    data_limitations: ['Nincs validált webes forrás', 'Nincs releváns YouTube bizonyíték', 'Téma szűkítése szükséges'],
     evidence_match_score: 20,
     risk_flags: ['Nincs elég friss bizonyíték', 'Túl tág niche', 'További szűkítés javasolt'],
     needs_explanation: false,
@@ -215,6 +220,10 @@ function buildBroadDiscoveryFallbackTopics(params: {
       hook_suggestion: 'Kezdd egy meglepő példával, majd mutasd meg, miért nem úgy működik, ahogy elsőre gondolnánk.',
       ready_to_produce_status: 'research' as const,
       ready_to_produce_label: 'Kutatási irány',
+      evidence_strength: 'none',
+      validation_reason: 'Ez keresési irány, nem kész gyártási téma. Mély frissítéssel vagy konkrétabb kulcsszóval validálható.',
+      recommended_next_action: 'refine_topic',
+      data_limitations: ['Nincs validált webes forrás', 'Nincs releváns YouTube bizonyíték', 'Tág niche-ből bontott irány'],
       evidence_match_score: 35,
       risk_flags: ['További validálás kell', 'Még nincs elég konkrét bizonyíték'],
       decision_score: 35,
@@ -229,7 +238,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const niche = (body.niche || '').replace(/[,;\s]+$/, '').trim()
-    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles, main_category, specific_focus, audience, avoid_topics } = body
+    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles, main_category, specific_focus, audience, avoid_topics, paidResultId, paid_result_id } = body
     const excludeTitles: string[] = Array.isArray(exclude_titles)
       ? exclude_titles.map((t: string) => String(t).toLowerCase().trim()).filter(Boolean)
       : []
@@ -270,6 +279,39 @@ export async function POST(request: NextRequest) {
       ? buildBroadNicheDiscoveryPacks(niche, effectiveRegion)
       : []
 
+    const paidNormalizedInput = normalizePaidResultInput({
+      niche,
+      discovery_mode: discovery_mode || 'standard',
+      parent_niche: parent_niche || '',
+      main_category: main_category || '',
+      specific_focus: specific_focus || '',
+      audience: audience || '',
+      avoid_topics: avoid_topics || '',
+    })
+    const paidInputHash = buildPaidResultHash({
+      userId: user.id,
+      toolType: 'opportunity_engine',
+      normalizedInput: paidNormalizedInput,
+      mainCategory: main_category || null,
+      specificFocus: specific_focus || null,
+      region: effectiveRegion,
+      language: language || null,
+      platform: platform || 'youtube',
+    })
+
+    if (!force_refresh) {
+      const paidById = await getPaidResultById(user.id, paidResultId || paid_result_id)
+      const paid = paidById || await getPaidResultByHash({ userId: user.id, toolType: 'opportunity_engine', inputHash: paidInputHash })
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({
+          ...(opened.result_json as object),
+          cached: true,
+          ...paidResultResponseMeta(opened),
+        })
+      }
+    }
+
     // ── 1. Cache check ───────────────────────────────────────
     const oppCacheKey = buildCacheKey({
       niche,
@@ -281,11 +323,23 @@ export async function POST(request: NextRequest) {
       niche_intent: nicheIntent,
     })
 
+    // A cache_key tartalmazza a mai naptári dátumot is (lásd buildCacheKey,
+    // szándékosan — így külön snapshotok íródhatnak, a heti dashboard pedig a legutóbbi érvényes ajánlást mutatja).
+    // A keresésnél viszont ez NEM számíthat: a valódi frissesség-határt az
+    // expires_at adja (24 óra a generálástól). Ha csak a pontos, mai dátumú
+    // kulcsra keresnénk, nap-váltáskor egy még órák óta ténylegesen érvényes
+    // cache is "eltűnne" — és a rendszer feleslegesen (friss YouTube/Serper/
+    // Claude hívások, akár kredit árán) újragenerálná ugyanazt minden egyes
+    // nap első kérésekor. Ez volt a nap-váltás utáni "üres Top lehetőségek"
+    // hiba VALÓDI, gyökér oka — nem csak megjelenítési, hanem költség-hiba is.
+    const oppCacheKeyPrefix = oppCacheKey.replace(/-\d{4}-\d{2}-\d{2}$/, '')
     const { data: oppCached } = await admin
       .from('opportunity_cache')
       .select('*')
-      .eq('cache_key', oppCacheKey)
+      .like('cache_key', `${oppCacheKeyPrefix}-%`)
       .gt('expires_at', new Date().toISOString())
+      .order('generated_at', { ascending: false })
+      .limit(1)
       .single()
 
     if (oppCached && !force_refresh) {
@@ -306,16 +360,54 @@ export async function POST(request: NextRequest) {
     }
 
     if (cache_only) {
+      // A cache_key tartalmazza a mai naptári dátumot is (lásd buildCacheKey),
+      // hogy a Trend Feed heti ajánlása korrektül visszatölthető legyen,
+      // és ne tűnjön el csak napváltás miatt. Emiatt egy olyan panel, ami csak "van-e már
+      // validált top lehetőségem" kérdez (cache_only), nap-váltás után
+      // hamisan üresnek látja a tegnap még érvényes eredményt is — a user
+      // adata megvan, csak a pontos (mai dátumú) kulcs nem talál rá.
+      // Essünk vissza a legutóbbi (max 7 napos) egyező niche/régió/nyelv
+      // találatra, hogy a "Top lehetőségek" panel sose mutasson üres
+      // állapotot olyankor, amikor valójában van már validált adat.
+      const stableKeyPrefix = oppCacheKey.replace(/-\d{4}-\d{2}-\d{2}$/, '')
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+      const { data: fallbackCached } = await admin
+        .from('opportunity_cache')
+        .select('*')
+        .like('cache_key', `${stableKeyPrefix}-%`)
+        .gt('generated_at', sevenDaysAgo)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (fallbackCached) {
+        const allTopics = fallbackCached.topics as (OpportunityTopic & { needs_explanation?: boolean; engine_version?: string })[]
+        const isCurrentEngine = allTopics.length > 0 && allTopics[0].engine_version === ENGINE_VERSION
+        if (isCurrentEngine) {
+          const visibleTopics = allTopics.filter(t => !t.needs_explanation)
+          const poolTopics = allTopics.filter(t => t.needs_explanation)
+          if (visibleTopics.length > 0 || poolTopics.length > 0) {
+            return NextResponse.json({
+              topics: visibleTopics,
+              pool_topics: poolTopics,
+              cached: true,
+              stale: true,
+              generated_at: fallbackCached.generated_at,
+            })
+          }
+        }
+      }
+
       return NextResponse.json({
         topics: [],
         pool_topics: [],
         cached: false,
-        message: 'A trendadatok frissitese folyamatban van. Kattints a Lehetosegek gombra a friss kereseshez.',
+        message: 'A trendadatok frissítése folyamatban van. Kattints a Lehetőségek gombra a friss kereséshez.',
       })
     }
 
     // ── Usage/kredit ellenőrzés — SZERVER OLDALON, nem a kliensre bízva ──
-    // Korábban csak a kézzel indított "Új ajánlás" gomb (force_refresh) ment át
+    // Korábban csak a kézzel indított extra ajánlás gomb (force_refresh) ment át
     // a /api/credit-check előzetes ellenőrzésen; az automatikus (pl. oldal
     // betöltéskori) friss generálás semmilyen kvóta-ellenőrzést nem futtatott,
     // ezért sessionStorage törlésével korlátlanul lehetett ingyenes friss
@@ -338,7 +430,7 @@ export async function POST(request: NextRequest) {
           charged: false,
           credits_charged: 0,
           usage_blocked: true,
-          message: usage.message || 'A napi ingyenes Opportunity Engine kereted elfogyott, és nincs elég kredited a folytatáshoz.',
+          message: usage.message || 'A heti ingyenes Top Opportunity ajánlásod már megvan, és nincs elég kredited extra kereséshez.',
         })
       }
       if (usage.currency === 'credit') {
@@ -352,7 +444,7 @@ export async function POST(request: NextRequest) {
           credits_charged: 0,
           needs_confirmation: true,
           confirmation_cost: usage.cost,
-          message: usage.message || `A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás ${usage.cost} kreditbe kerül.`,
+          message: usage.message || `A heti ingyenes Top Opportunity ajánlásod már megvan. Ez az extra keresés ${usage.cost} kreditbe kerül.`,
         })
       }
     }
@@ -396,11 +488,17 @@ export async function POST(request: NextRequest) {
       parent_niche,
     })
 
+    // Ugyanaz a nap-váltás-tolerancia, mint az opportunity_cache-nél fentebb —
+    // a trendCacheKey is tartalmaz egy dátum-bucketet, de a valódi frissesség-
+    // határ az expires_at, nem a pontos kulcsegyezés.
+    const trendCacheKeyPrefix = trendCacheKey.replace(/_\d{4}-\d{2}-\d{2}$/, '')
     const { data: cachedTrend } = await admin
       .from('trend_candidate_cache')
       .select('candidates')
-      .eq('cache_key', trendCacheKey)
+      .like('cache_key', `${trendCacheKeyPrefix}_%`)
       .gt('expires_at', new Date().toISOString())
+      .order('generated_at', { ascending: false })
+      .limit(1)
       .single()
 
     let trendCandidates: TrendCandidate[]
@@ -472,6 +570,18 @@ export async function POST(request: NextRequest) {
       const serperHealth = getSerperHealthStatus()
       if (serperHealth.unavailable) {
         console.error(`[Opportunity] Serper unavailable (${serperHealth.failures}/${serperHealth.attempts} kérés hibázott): ${serperHealth.lastError}`)
+      }
+
+      if (!isDrilldown && fallbackTopics.length > 0) {
+        const todayDate = new Date().toISOString().slice(0, 10)
+        await admin.from('trend_feed_daily_snapshots').upsert({
+          user_id: user.id,
+          snapshot_date: todayDate,
+          niche,
+          topics: fallbackTopics,
+        }, { onConflict: 'user_id,snapshot_date' }).then(({ error }) => {
+          if (error) console.warn('[Opportunity] fallback trend_feed_daily_snapshots mentes hiba (non-blocking):', error)
+        })
       }
 
       return NextResponse.json({
@@ -702,10 +812,14 @@ KRITIKUS JSON SZABÁLYOK:
         charged = true
         creditsCharged = 2
       }
+    } else if (!force_refresh && validCount > 0) {
+      // Ingyenes heti kvotabol futott (friss generalas, nem cache-hit) - nincs
+      // kredit levonás, de a "Legutóbbi történeted" panelen meg kell jelennie.
+      await logFreeProductUse(user.id, 'opportunity_engine', { topic: niche }).catch(() => {})
     }
 
-    // Napi Trend Feed snapshot mentése — hogy a user vissza tudja nézni a
-    // tegnapi (vagy korábbi napi) ajánlást is, ne csak a mai/legutóbbi cache-t.
+    // Trend Feed snapshot mentese - hogy a user vissza tudja nezni a
+    // korabbi ajanlast is, ne csak a legutobbi cache-t.
     if (!isDrilldown && validCount > 0) {
       const todayDate = new Date().toISOString().slice(0, 10)
       await admin.from('trend_feed_daily_snapshots').upsert({
@@ -732,7 +846,7 @@ KRITIKUS JSON SZABÁLYOK:
       ? `Most ${validCount} erős témát találtunk. A többit kiszűrtük.`
       : undefined
 
-    return NextResponse.json({
+    const responsePayload = {
       topics,
       pool_topics: poolTopics,
       cached: false,
@@ -752,6 +866,38 @@ KRITIKUS JSON SZABÁLYOK:
         strong_signals: trendCandidates.filter(c => c.trend_source_type === 'serper_youtube').length,
         early_opportunities: trendCandidates.filter(c => c.trend_source_type === 'serper_only').length,
       },
+    }
+
+    let savedPaidResultId: string | null = null
+    if (validCount > 0) {
+      const paidSave = await savePaidResult({
+        userId: user.id,
+        toolType: 'opportunity_engine',
+        inputHash: paidInputHash,
+        normalizedInput: paidNormalizedInput,
+        originalInput: niche,
+        mainCategory: main_category || null,
+        specificFocus: specific_focus || null,
+        region: effectiveRegion,
+        language: language || null,
+        platform: platform || 'youtube',
+        resultJson: responsePayload,
+        summaryJson: { topic_count: topics.length, pool_count: poolTopics.length, niche },
+        creditCost: creditsCharged,
+        freshForHours: 24,
+      })
+      if (!paidSave.success) {
+        console.error('[Opportunity] KRITIKUS: paid_results mentés sikertelen:', paidSave.error)
+      }
+      savedPaidResultId = paidSave.record?.id || null
+    }
+
+    return NextResponse.json({
+      ...responsePayload,
+      from_paid_result: false,
+      cache_status: 'fresh',
+      requires_credit: creditsCharged > 0,
+      paid_result_id: savedPaidResultId,
     })
   } catch (error) {
     console.error('Opportunity Engine error:', error)

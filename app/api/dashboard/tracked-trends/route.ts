@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 
 // GET /api/dashboard/tracked-trends
@@ -14,7 +14,7 @@ export async function GET() {
 
   const { data: candidates } = await admin
     .from('tracked_trend_candidates')
-    .select('id, candidate_topic, niche, region, confidence, trend_source_type, opportunity_score, created_at, last_checked_at, next_check_at, refresh_priority, status')
+    .select('id, candidate_topic, niche, region, confidence, trend_source_type, opportunity_score, created_at, last_checked_at, next_check_at, refresh_priority, status, youtube_video_ids, web_source_ids')
     .eq('user_id', user.id)
     .order('last_checked_at', { ascending: false, nullsFirst: false })
     .limit(20)
@@ -41,6 +41,10 @@ export async function GET() {
     snapshotsByCandidate.set(s.tracked_candidate_id, arr)
   }
 
+  function countJsonArray(value: unknown): number {
+    return Array.isArray(value) ? value.length : 0
+  }
+
   const tracked = list.map(c => {
     const snaps = snapshotsByCandidate.get(c.id) || []
     const latest = snaps[0] || null
@@ -64,6 +68,9 @@ export async function GET() {
       next_check_at: c.next_check_at,
       refresh_priority: c.refresh_priority,
       status: c.status,
+      youtube_video_count: countJsonArray(c.youtube_video_ids),
+      web_source_count: countJsonArray(c.web_source_ids),
+      evidence_total: countJsonArray(c.youtube_video_ids) + countJsonArray(c.web_source_ids),
       snapshot_count: snaps.length,
       total_views: latest?.total_views ?? null,
       views_delta: latest?.views_delta ?? null,

@@ -93,6 +93,10 @@ function meaningfulWords(value: string): string[] {
     'egy', 'hogy', 'mint', 'vagy', 'mert', 'amit', 'ami', 'ezt', 'azt', 'van',
     'nem', 'meg', 'mar', 'csak', 'most', 'itt', 'ott',
     'explained', 'news', 'viral', 'trending', 'latest', 'breaking', 'update',
+    'scientist', 'scientists', 'researcher', 'researchers', 'study', 'studies',
+    'solve', 'solved', 'solves', 'mystery', 'mysteries', 'hidden', 'secret',
+    'finally', 'ancient', 'oldest', 'biggest', 'shocking', 'surprising',
+    'tudos', 'tudosok', 'kutato', 'kutatok', 'rejtely', 'megoldottak', 'felfedezes',
   ])
   return normalize(value).split(/\s+/).filter(w => w.length > 2 && !stopwords.has(w))
 }
@@ -183,11 +187,18 @@ export function validateCandidateConsistency(params: {
   for (const video of videos) {
     const videoText = `${video.title} ${video.description || ''}`
     const sim = topicSimilarity(candidate_topic, videoText)
+    const candidateWords = meaningfulWords(candidate_topic)
+    const videoWords = meaningfulWords(videoText)
+    const directMatches = candidateWords.filter(w => videoWords.some(vw => vw.includes(w) || w.includes(vw)))
+    const hasEnoughConcreteOverlap = directMatches.length >= 2 || (candidateWords.length <= 3 && directMatches.length >= 1)
 
-    if (sim >= min_topic_similarity) {
+    if (sim >= min_topic_similarity && hasEnoughConcreteOverlap) {
       validVideos.push(video)
     } else {
-      removedVideos.push({ ...video, reason: `Topic mismatch (similarity: ${sim}). Video nem kapcsolodik a candidate temahoz.` })
+      removedVideos.push({
+        ...video,
+        reason: `Topic mismatch (similarity: ${sim}, concrete_overlap: ${directMatches.length}). Videó nem kapcsolódik a candidate témához.`,
+      })
     }
   }
 

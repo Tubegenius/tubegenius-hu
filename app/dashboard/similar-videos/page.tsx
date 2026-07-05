@@ -228,6 +228,8 @@ export default function SimilarVideosPage() {
   const searchParams = useSearchParams()
   const supabase = createClient()
   const initialTopic = searchParams.get('topic') || ''
+  const initialUserNiche = searchParams.get('user_niche') || searchParams.get('niche') || ''
+  const paidResultId = searchParams.get('paidResultId') || ''
 
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [topic, setTopic] = useState(initialTopic)
@@ -315,7 +317,14 @@ export default function SimilarVideosPage() {
       const res = await fetch('/api/similar-videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: t, region: regionToTry, max_results: 9, force_refresh: forceRefresh }),
+        body: JSON.stringify({
+          topic: t,
+          region: regionToTry,
+          max_results: 9,
+          force_refresh: forceRefresh,
+          user_niche: initialUserNiche || undefined,
+          paidResultId: paidResultId || undefined,
+        }),
       })
       const data = await res.json()
       return { ok: res.ok, data }
@@ -326,7 +335,7 @@ export default function SimilarVideosPage() {
       const first = await requestVideos(r)
       let foundVideos = first.ok ? (first.data.videos || []) : []
       setQueriesUsed(first.data?.queries_used || [])
-      if (first.ok && first.data?.from_cache) {
+      if (first.ok && (first.data?.from_cache || first.data?.from_paid_result)) {
         setFromCache(true)
         setLastRefreshedAt(first.data.last_refreshed_at || null)
       }
@@ -380,10 +389,17 @@ export default function SimilarVideosPage() {
       const cacheRes = await fetch('/api/similar-videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: t, region: r, max_results: 9, cache_only: true }),
+        body: JSON.stringify({
+          topic: t,
+          region: r,
+          max_results: 9,
+          cache_only: true,
+          user_niche: initialUserNiche || undefined,
+          paidResultId: paidResultId || undefined,
+        }),
       })
       const cacheData = await cacheRes.json()
-      if (cacheRes.ok && cacheData.from_cache) {
+      if (cacheRes.ok && (cacheData.from_cache || cacheData.from_paid_result)) {
         setSearchTopic(t)
         setVideos(cacheData.videos || [])
         setFromCache(true)
@@ -518,14 +534,34 @@ export default function SimilarVideosPage() {
 
       {loading && (
         <div className="card">
-          <LoadingScreen steps={LOADING_STEPS.similarVideos} message="Viralis potencial alapjan rangsorolunk" />
+          <LoadingScreen steps={LOADING_STEPS.similarVideos} message="Virális potenciál alapján rangsorolunk" />
         </div>
       )}
 
-      {!loading && videos.length > 0 && (
+      {!loading && videos.length > 0 && (() => {
+        const recommendedVideos = videos.filter(v => v.decision_status !== 'rejected')
+        const rejectedVideos = videos.filter(v => v.decision_status === 'rejected')
+        const readyCount = recommendedVideos.filter(v => v.decision_status === 'ready').length
+        const watchCount = recommendedVideos.filter(v => v.decision_status === 'watch').length
+        const researchCount = recommendedVideos.filter(v => !v.decision_status || v.decision_status === 'research').length
+        const bestScore = Math.max(...recommendedVideos.map(v => v.viral_video_score || v.decision_score || 0), 0)
+        return (
         <div>
+          <div className="grid grid-cols-4 gap-3 mb-4">
+            {[
+              { label: 'Legjobb viral jel', value: bestScore, color: scoreColor(bestScore) },
+              { label: 'Gyártható inspiráció', value: readyCount, color: '#22C55E' },
+              { label: 'Korai lehetőség', value: watchCount, color: '#F59E0B' },
+              { label: 'Kutatási jel', value: researchCount, color: '#94A3B8' },
+            ].map(item => (
+              <div key={item.label} className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <p className="text-xl font-bold" style={{ color: item.color }}>{item.value}</p>
+                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{item.label}</p>
+              </div>
+            ))}
+          </div>
           <div className="flex items-center justify-between mb-4">
-            <p className="section-label">{videos.length} virális jelölt - <span className="text-text-secondary normal-case font-normal text-xs">{searchTopic}</span></p>
+            <p className="section-label">{recommendedVideos.length} virális jelölt - <span className="text-text-secondary normal-case font-normal text-xs">{searchTopic}</span></p>
             {searchedRegions.length > 1 && (
               <p className="text-xs" style={{ color: '#F59E0B' }}>
                 Figyelem: {searchedRegions[0]} régióban nem volt elég erős találat, automatikusan {searchedRegions[1]} régióra váltottunk
@@ -533,10 +569,21 @@ export default function SimilarVideosPage() {
             )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {videos.map(video => <VideoCard key={video.video_id} video={video} />)}
+            {recommendedVideos.map(video => <VideoCard key={video.video_id} video={video} />)}
           </div>
+          {rejectedVideos.length > 0 && (
+            <div className="mt-6 rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-sm font-semibold mb-1" style={{ color: '#CBD5E1' }}>
+                Kiszűrt gyenge találatok: {rejectedVideos.length}
+              </p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>
+                Ezeket a rendszer megtalálta, de alacsony nézettség, gyenge piaci jel vagy túl alacsony validáció miatt nem ajánlja inspirációnak.
+              </p>
+            </div>
+          )}
         </div>
-      )}
+        )
+      })()}
 
       {!loading && videos.length === 0 && searchTopic && (
         <div className="card text-center py-12">

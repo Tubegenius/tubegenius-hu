@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
@@ -17,6 +17,15 @@ function getGreeting(): string {
   if (hour >= 10 && hour < 18) return 'Szia'
   if (hour >= 18 && hour < 23) return 'Jó estét'
   return 'Szia'
+}
+
+function getTrendFeedWeekKey(): string {
+  const now = new Date()
+  const day = now.getDay() || 7
+  const monday = new Date(now)
+  monday.setHours(0, 0, 0, 0)
+  monday.setDate(now.getDate() - day + 1)
+  return monday.toISOString().slice(0, 10)
 }
 
 function ScoreBar({ value, label }: { value: number; label: string }) {
@@ -127,11 +136,11 @@ function EntryPointCards({ stats }: { stats: DashboardStats | null }) {
 
 // ─── Quick Actions ────────────────────────────────────────────
 const quickActions = [
-  { icon: 'ti-chart-bar', label: 'Viral Score', sub: 'Elemzes', href: '/dashboard/viral-score', color: '#8B5CF6' },
-  { icon: 'ti-stethoscope', label: 'Video Audit', sub: 'Elemzes', href: '/dashboard/video-audit', color: '#22C55E' },
-  { icon: 'ti-file-text', label: 'Script', sub: 'Kinyeres', href: '/dashboard/script-extractor', color: '#F59E0B' },
-  { icon: 'ti-player-play', label: 'Similar Videos', sub: 'Kereses', href: '/dashboard/similar-videos', color: '#3B82F6' },
-  { icon: 'ti-package', label: 'Videocsomag', sub: 'Generalas', href: '/dashboard/video-package', color: '#EC4899' },
+  { icon: 'ti-chart-bar', label: 'Viral Score', sub: 'Elemzés', href: '/dashboard/viral-score', color: '#8B5CF6' },
+  { icon: 'ti-stethoscope', label: 'Video Audit', sub: 'Elemzés', href: '/dashboard/video-audit', color: '#22C55E' },
+  { icon: 'ti-file-text', label: 'Script', sub: 'Kinyerés', href: '/dashboard/script-extractor', color: '#F59E0B' },
+  { icon: 'ti-player-play', label: 'Similar Videos', sub: 'Keresés', href: '/dashboard/similar-videos', color: '#3B82F6' },
+  { icon: 'ti-package', label: 'Videócsomag', sub: 'Generálás', href: '/dashboard/video-package', color: '#EC4899' },
 ]
 
 // ─── Trend Row ───────────────────────────────────────────────
@@ -228,13 +237,22 @@ function storePackageContext(topic: DashboardOpportunityTopic) {
   sessionStorage.setItem(`willviral_opportunity_package_${topic.id}`, JSON.stringify(payload))
 }
 
+function topicDashboardWeight(topic: DashboardOpportunityTopic) {
+  if (topic.ready_to_produce_status === 'ready') return 4000
+  if (topic.ready_to_produce_status === 'watch') return 3000
+  if (topic.ready_to_produce_status === 'research') return 1500
+  if (topic.trend_source_type === 'broad_niche_discovery' || topic.trend_source_type === 'research_fallback') return 800
+  return 0
+}
+
+function topicDashboardScore(topic: DashboardOpportunityTopic) {
+  return topicDashboardWeight(topic) + (topic.decision_score || topic.evidence_match_score || topic.opportunity_score || 0)
+}
+
 function pickBestTopic(topics: DashboardOpportunityTopic[]) {
-  const productionTopics = topics.filter(isProductionCandidate)
-  return [...productionTopics].sort((a, b) => {
-    const statusWeight = (t: DashboardOpportunityTopic) =>
-      t.ready_to_produce_status === 'ready' ? 1000 : t.ready_to_produce_status === 'watch' ? 500 : 0
-    return (statusWeight(b) + b.opportunity_score) - (statusWeight(a) + a.opportunity_score)
-  })[0] || null
+  return [...topics]
+    .filter(topic => topic.ready_to_produce_status !== 'rejected')
+    .sort((a, b) => topicDashboardScore(b) - topicDashboardScore(a))[0] || null
 }
 
 // ─── Opportunity Card ─────────────────────────────────────────
@@ -353,14 +371,14 @@ function BestTopicToday({ topic, onLoad, loading, hasProfile }: {
   if (!topic) {
     return (
       <div className="rounded-xl p-5 mb-5" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08))', border: '1px solid rgba(59,130,246,0.15)' }}>
-        <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#3B82F6' }}>EZT GYÁRTSD MA</p>
-        <h2 className="text-xl font-bold text-text-primary mb-2">Ezt gyártsd ma</h2>
+        <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#3B82F6' }}>HETI TOP OPPORTUNITY</p>
+        <h2 className="text-xl font-bold text-text-primary mb-2">Heti Top Opportunity</h2>
         <p className="text-sm mb-4" style={{ color: '#CBD5E1' }}>
-          {hasProfile ? 'Töltsd be a mai lehetőségeket, és kiválasztjuk a legerősebb gyártható témát.' : 'A profil kitöltése után tudunk személyre szabott témát ajánlani.'}
+          {hasProfile ? 'Betöltjük a heti validált ajánlást, és megmutatjuk a következő legjobb lépést.' : 'A profil kitöltése után tudunk személyre szabott témát ajánlani.'}
         </p>
         {hasProfile ? (
           <button onClick={onLoad} disabled={loading} className="btn-primary">
-            {loading ? 'Keresés...' : 'Legjobb téma keresése'}
+            {loading ? 'Keresés...' : 'Heti ajánlás betöltése'}
           </button>
         ) : (
           <Link href="/dashboard/profile" className="btn-primary">Profil kitöltése</Link>
@@ -370,7 +388,9 @@ function BestTopicToday({ topic, onLoad, loading, hasProfile }: {
   }
 
   const ready = getReadyMeta(topic)
-  const canCreatePackage = isProductionCandidate(topic)
+  const isResearchTopic = !isProductionCandidate(topic)
+  const heroEyebrow = isResearchTopic ? 'ELLENŐRIZENDŐ LEHETŐSÉG' : 'HETI TOP OPPORTUNITY'
+  const packageLabel = isResearchTopic ? 'Videócsomag előkészítése' : 'Videócsomag készítése'
   const webCount = topic.web_sources?.length || 0
   const videoCount = topic.evidence_videos?.length || 0
 
@@ -378,7 +398,7 @@ function BestTopicToday({ topic, onLoad, loading, hasProfile }: {
     <div className="rounded-xl p-5 mb-5" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08))', border: '1px solid rgba(59,130,246,0.15)' }}>
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#3B82F6' }}>EZT GYÁRTSD MA</p>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#3B82F6' }}>{heroEyebrow}</p>
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: ready.bg, color: ready.color, border: `1px solid ${ready.color}30` }}>{ready.label}</span>
             <span className="text-xs" style={{ color: '#CBD5E1' }}>{webCount} webes forrás · {videoCount} bizonyíték videó</span>
@@ -398,18 +418,17 @@ function BestTopicToday({ topic, onLoad, loading, hasProfile }: {
             <div className="font-black leading-none" style={{ fontSize: '32px', color: scoreColor(topic.opportunity_score) }}>{topic.opportunity_score}</div>
             <div className="text-xs mt-1 font-medium" style={{ color: scoreLabelColor(topic.opportunity_score) }}>{scoreLabel(topic.opportunity_score)}</div>
           </div>
-          {canCreatePackage ? (
-            <Link href={buildPackageUrl(topic)}
-              onClick={() => storePackageContext(topic)}
-              className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
-              style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
-              Videócsomag készítése
-            </Link>
-          ) : (
+          <Link href={buildPackageUrl(topic)}
+            onClick={() => storePackageContext(topic)}
+            className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+            style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
+            {packageLabel}
+          </Link>
+          {isResearchTopic && (
             <Link href={`/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || topic.title)}`}
               className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
               style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#F59E0B' }}>
-              Előbb validálás
+              Validálás Similar Videos
             </Link>
           )}
           <Link href="/dashboard/opportunities" className="text-xs" style={{ color: '#CBD5E1' }}>Részletek megnyitása</Link>
@@ -420,6 +439,32 @@ function BestTopicToday({ topic, onLoad, loading, hasProfile }: {
 }
 
 // ─── Right Panel ──────────────────────────────────────────────
+function CreatorPipelineStrip() {
+  const steps = [
+    { icon: 'ti-bulb', label: 'Heti téma', sub: 'Top Opportunity', color: '#3B82F6' },
+    { icon: 'ti-shield-check', label: 'Validálás', sub: 'Forrás + videójel', color: '#F59E0B' },
+    { icon: 'ti-package', label: 'Videócsomag', sub: 'Gyártásra kész', color: '#22C55E' },
+  ]
+
+  return (
+    <div className="grid grid-cols-3 gap-3 mb-5">
+      {steps.map((step, index) => (
+        <div key={step.label} className="rounded-xl px-4 py-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div className="flex items-center gap-2">
+            <span className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: `${step.color}18`, color: step.color }}>
+              {index + 1}
+            </span>
+            <i className={`ti ${step.icon}`} style={{ color: step.color }} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold truncate" style={{ color: '#F8FAFC' }}>{step.label}</p>
+              <p className="text-xs truncate" style={{ color: '#94A3B8' }}>{step.sub}</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMemoryItem[]; stats: DashboardStats | null; bestTopic: DashboardOpportunityTopic | null }) {
   const saved = memoryItems.filter(i => i.state === 'saved').length
   const inProgress = memoryItems.filter(i => i.state === 'in_progress').length
@@ -435,7 +480,7 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
           <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
             <i className="ti ti-bulb mr-1.5" style={{ color: '#3B82F6' }} />Opportunity Engine
           </h3>
-          <Link href="/dashboard/opportunities" className="text-xs" style={{ color: '#3B82F6' }}>Megnyitas →</Link>
+          <Link href="/dashboard/opportunities" className="text-xs" style={{ color: '#3B82F6' }}>Megnyitás →</Link>
         </div>
         <div className="flex items-center justify-center py-3">
           <div className="relative w-24 h-24">
@@ -452,11 +497,11 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
         </div>
         <div className="text-center">
           <p className="text-sm font-medium" style={{ color: scoreLabelColor(bestScore) }}>{bestScore > 0 ? scoreLabel(bestScore) : 'Nincs adat'}</p>
-          <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{bestScore > 0 ? 'Legjobb tema pontszama' : 'Kattints a keresre'}</p>
+          <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>{bestScore > 0 ? 'Legjobb téma pontszáma' : 'Kattints a keresésre'}</p>
         </div>
         <Link href="/dashboard/opportunities" className="mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-semibold transition-all"
           style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff', boxShadow: '0 0 15px rgba(59,130,246,0.2)' }}>
-          <i className="ti ti-sparkles text-sm" /> Elemzes most
+          <i className="ti ti-sparkles text-sm" /> Elemzés most
         </Link>
       </div>
 
@@ -467,10 +512,10 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
             <i className="ti ti-chart-bar mr-1.5" style={{ color: '#8B5CF6' }} />Viral Score
           </h3>
         </div>
-        <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>Ird be a video otleted, adj kulcsszavakat</p>
+        <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>Írd be a videó ötleted, adj kulcsszavakat</p>
         <Link href="/dashboard/viral-score" className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-medium transition-all"
           style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)', color: '#8B5CF6' }}>
-          Elemzes most →
+          Elemzés most →
         </Link>
       </div>
 
@@ -481,13 +526,13 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
             <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
               <i className="ti ti-stethoscope mr-1.5" style={{ color: '#22C55E' }} />Video Audit
             </h3>
-            <Link href="/dashboard/video-audit" className="text-xs" style={{ color: '#3B82F6' }}>Reszletek →</Link>
+            <Link href="/dashboard/video-audit" className="text-xs" style={{ color: '#3B82F6' }}>Részletek →</Link>
           </div>
           <div className="flex items-center gap-3">
             <div className="text-3xl font-bold" style={{ color: scoreColor(stats.avg_audit_score || 0) }}>{stats.avg_audit_score || 0}</div>
             <div>
               <p className="text-xs font-medium" style={{ color: '#F8FAFC' }}>/100 {scoreLabel(stats.avg_audit_score || 0)}</p>
-              <p className="text-xs" style={{ color: '#94A3B8' }}>{stats.total_audits} audit elvegezve</p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>{stats.total_audits} audit elvégezve</p>
             </div>
           </div>
         </div>
@@ -499,13 +544,13 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
           <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
             <i className="ti ti-brain mr-1.5" style={{ color: '#F59E0B' }} />Creator Memory
           </h3>
-          <Link href="/dashboard/memory" className="text-xs" style={{ color: '#3B82F6' }}>Osszes →</Link>
+          <Link href="/dashboard/memory" className="text-xs" style={{ color: '#3B82F6' }}>Összes →</Link>
         </div>
         <div className="grid grid-cols-3 gap-2">
           {[
             { label: 'Mentett', count: saved, color: '#3B82F6', icon: 'ti-bookmark' },
             { label: 'Folyamat', count: inProgress, color: '#F59E0B', icon: 'ti-clock' },
-            { label: 'Kesz', count: completed, color: '#22C55E', icon: 'ti-check' },
+            { label: 'Kész', count: completed, color: '#22C55E', icon: 'ti-check' },
           ].map(stat => (
             <div key={stat.label} className="text-center py-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
               <i className={`ti ${stat.icon}`} style={{ color: stat.color, fontSize: '16px' }} />
@@ -519,11 +564,11 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
       {/* Credit Usage Chart */}
       <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <h3 className="font-semibold text-sm mb-1" style={{ color: '#F8FAFC' }}>
-          <i className="ti ti-bolt mr-1.5" style={{ color: '#3B82F6' }} />Kredit felhasznalás
+          <i className="ti ti-bolt mr-1.5" style={{ color: '#3B82F6' }} />Kredit felhasználás
         </h3>
-        <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>Elmult 7 nap</p>
+        <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>Elmúlt 7 nap</p>
         {!stats?.has_data ? (
-          <p className="text-xs text-center py-4" style={{ color: '#94A3B8' }}>Meg nincs eleg aktivitas.</p>
+          <p className="text-xs text-center py-4" style={{ color: '#94A3B8' }}>Még nincs elég aktivitás.</p>
         ) : (
           <>
             <div className="flex items-end gap-1 h-16 mb-2">
@@ -550,13 +595,13 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
       {/* Summary */}
       {stats?.has_data && (
         <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-          <h3 className="font-semibold text-sm mb-3" style={{ color: '#F8FAFC' }}>Osszesito</h3>
+          <h3 className="font-semibold text-sm mb-3" style={{ color: '#F8FAFC' }}>Összesítő</h3>
           <div className="space-y-2.5">
             {[
-              { label: 'Tema lekeresek', value: stats.opportunity_requests, icon: 'ti-trending-up' },
-              { label: 'Videocsomagok', value: stats.total_packages, icon: 'ti-package' },
+              { label: 'Téma lekérések', value: stats.opportunity_requests, icon: 'ti-trending-up' },
+              { label: 'Videócsomagok', value: stats.total_packages, icon: 'ti-package' },
               { label: 'Video Auditok', value: stats.total_audits, icon: 'ti-stethoscope' },
-              { label: 'Felhasznalt kredit', value: stats.total_used.toFixed(1), icon: 'ti-bolt' },
+              { label: 'Felhasznált kredit', value: stats.total_used.toFixed(1), icon: 'ti-bolt' },
             ].map(item => (
               <div key={item.label} className="flex items-center justify-between">
                 <span className="flex items-center gap-2 text-xs" style={{ color: '#94A3B8' }}>
@@ -597,7 +642,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       if (savedTopics) {
         try {
           const parsed = JSON.parse(savedTopics)
-          if (parsed.niche === profile.niche && parsed.topics?.length > 0 && Date.now() - parsed.timestamp < 60 * 60 * 1000) {
+          if (parsed.niche === profile.niche && parsed.topics?.length > 0 && parsed.weekKey === getTrendFeedWeekKey()) {
             setTopics(parsed.topics)
             setGenerated(true)
             return
@@ -605,14 +650,13 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         } catch {}
       }
 
-      // Napi 1 ingyenes auto-frissítés
-      const today = new Date().toISOString().slice(0, 10)
-      const lastRefresh = sessionStorage.getItem('willviral_trend_feed_last_refresh')
-      if (lastRefresh === today) {
+      // Heti 1 ingyenes Top Opportunity. Eloszor mindig a heti mentett/cached ajanlast kerjuk vissza.
+      const weekKey = getTrendFeedWeekKey()
+      const lastRefresh = sessionStorage.getItem('willviral_trend_feed_week_key')
+      if (lastRefresh === weekKey) {
         loadOpportunities(true)
       } else {
-        loadOpportunities(false)
-        sessionStorage.setItem('willviral_trend_feed_last_refresh', today)
+        loadOpportunities(true)
       }
     }
   }, [])
@@ -627,7 +671,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
 
       if (balance < cost) {
         setCreditCheck({
-          feature: 'Trend Feed frissites',
+          feature: 'Trend Feed frissítés',
           cost,
           currency: 'credit',
           currentCredits: Math.round(balance),
@@ -635,20 +679,20 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs eleg kredited. ${cost} kredit szukseges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
         })
         return
       }
 
       setCreditCheck({
-        feature: 'Trend Feed frissites',
+        feature: 'Trend Feed frissítés',
         cost,
         currency: 'credit',
         currentCredits: Math.round(balance),
         remainingCreditsAfterRun: Math.round(balance - cost),
         requiresConfirmation: true,
         canRun: true,
-        message: `Uj trendtemak keresese ${cost} kreditbe kerul. A napi automatikus frissites ingyenes.`,
+        message: `Új trendtémák keresése ${cost} kreditbe kerül. A heti Top Opportunity ajánlás ingyenes, az extra keresés kredites.`,
       })
     } catch {
       loadOpportunities(false, true)
@@ -694,14 +738,14 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       if (data.needs_confirmation) {
         setLoading(false)
         setCreditCheck({
-          feature: 'Trend Feed frissites',
+          feature: 'Trend Feed frissítés',
           cost: data.confirmation_cost || 2,
           currency: 'credit',
           currentCredits: 0,
           remainingCreditsAfterRun: 0,
           requiresConfirmation: true,
           canRun: true,
-          message: data.message || 'A napi ingyenes Opportunity Engine futtatásod elfogyott. Ez a futtatás kreditbe kerül.',
+          message: data.message || 'A heti ingyenes Top Opportunity ajánlásod már megvan. Ez az extra keresés kreditbe kerül.',
         })
         setGenerated(true)
         return
@@ -729,14 +773,17 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           : cacheOnly && allTopics.length === 0
           ? null
           : data.message || (researchTopics.length > 0
-              ? 'Talalunk kutatasi iranyokat, de ma nincs eleg eros gyarthato tema. Nyisd meg az Opportunity Engine-t a tovabbszukiteshez.'
+              ? 'Találtunk kutatási irányokat, de ezen a héten nincs elég erős gyártható téma. Nyisd meg az Opportunity Engine-t a továbbszűkítéshez.'
               : null)
       )
       // Ha nincs production topic, mutassuk a legjobb nem-discovery témákat is
       const displayTopics = productionTopics.length > 0
         ? productionTopics.slice(0, 5)
         : allTopics.filter(t => !isDiscoveryOrResearch(t)).slice(0, 5)
-      const finalTopics = displayTopics.length > 0 ? displayTopics : allTopics.filter(t => t.opportunity_score > 0).slice(0, 3)
+      const sortedFallbackTopics = [...allTopics]
+        .filter(t => t.ready_to_produce_status !== 'rejected')
+        .sort((a, b) => topicDashboardScore(b) - topicDashboardScore(a))
+      const finalTopics = displayTopics.length > 0 ? displayTopics : sortedFallbackTopics.slice(0, 3)
       setTopics(finalTopics)
       setGenerated(true)
 
@@ -747,12 +794,16 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           message: opportunityMessage,
           timestamp: Date.now(),
           niche: profile?.niche,
+          weekKey: getTrendFeedWeekKey(),
         }))
+        if (!forceRefresh) {
+          sessionStorage.setItem('willviral_trend_feed_week_key', getTrendFeedWeekKey())
+        }
       }
     } catch (e) {
       console.error(e)
       if (!cacheOnly) {
-        setOpportunityError('Kapcsolati hiba a lehetosegek betoltesekor.')
+        setOpportunityError('Kapcsolati hiba a lehetőségek betöltésekor.')
       }
       setTopics([])
       setGenerated(true)
@@ -776,10 +827,11 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       {/* 1. Greeting */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{getGreeting()}, {displayName}!</h1>
-        <p className="text-sm" style={{ color: '#94A3B8' }}>Készen állsz a következő sikeres videódra?</p>
+        <p className="text-sm" style={{ color: '#94A3B8' }}>Heti validált téma, gyors validálás, kész videócsomag.</p>
       </div>
 
       <TrendFeedHistory />
+      <CreatorPipelineStrip />
 
       {/* 2. Main Recommendation Card */}
       {loading && (
@@ -794,7 +846,10 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         const evScore = bestTopic.evidence_match_score || 0
         const oppScore = bestTopic.opportunity_score
         const consistencyLabel = (bestTopic as unknown as Record<string, unknown>).topic_consistency_status as string | undefined
-
+        const isResearchTopic = !isProductionCandidate(bestTopic)
+        const heroEyebrow = isResearchTopic ? 'ELLENŐRIZENDŐ LEHETŐSÉG' : 'HETI TOP OPPORTUNITY'
+        const primaryHref = isResearchTopic ? `/dashboard/similar-videos?topic=${encodeURIComponent(bestTopic.keyword || bestTopic.title)}` : buildPackageUrl(bestTopic)
+        const primaryLabel = isResearchTopic ? 'Validálás inditasa' : 'Videócsomag készítése'
         return (
         <div className="relative rounded-2xl mb-6 overflow-hidden" style={{ background: '#0E1422', border: '1px solid rgba(59,130,246,0.2)', boxShadow: '0 0 40px rgba(59,130,246,0.08), 0 20px 60px rgba(0,0,0,0.4)' }}>
           {/* Gradient top accent */}
@@ -804,7 +859,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
             <div className="flex flex-col lg:flex-row gap-6 lg:gap-8">
               {/* Left: Content */}
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#3B82F6' }}>EZT GYÁRTSD MA</p>
+                <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{ color: '#3B82F6' }}>{heroEyebrow}</p>
 
                 <div className="flex items-center gap-2 mb-3 flex-wrap">
                   <span className="text-xs px-2.5 py-1 rounded-full font-medium" style={{ background: rm.bg, color: rm.color, border: `1px solid ${rm.color}30` }}>
@@ -829,17 +884,17 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
 
                 {/* CTAs */}
                 <div className="flex gap-2 flex-wrap">
-                  {isProductionCandidate(bestTopic) ? (
-                    <Link href={buildPackageUrl(bestTopic)} onClick={() => storePackageContext(bestTopic)}
-                      className="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5"
-                      style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff', boxShadow: '0 0 24px rgba(59,130,246,0.3)' }}>
-                      Videócsomag készítése
-                    </Link>
-                  ) : (
-                    <Link href="/dashboard/opportunities"
-                      className="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
-                      style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.3)', color: '#3B82F6' }}>
-                      Validáció megnyitása
+                  <Link href={primaryHref} onClick={() => storePackageContext(bestTopic)}
+                    className="px-5 py-2.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5"
+                    style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff', boxShadow: '0 0 24px rgba(59,130,246,0.3)' }}>
+                    {primaryLabel}
+                  </Link>
+                  {isResearchTopic && (
+                    <Link href={`/dashboard/video-package?topic=${encodeURIComponent(bestTopic.title)}&source_context=opportunity_research`}
+                      onClick={() => storePackageContext(bestTopic)}
+                      className="px-4 py-2.5 rounded-xl text-sm transition-all"
+                      style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#F59E0B' }}>
+                      Csomag előkészítése
                     </Link>
                   )}
                   <Link href={`/dashboard/opportunities?highlight=${encodeURIComponent(bestTopic.id)}`}
@@ -850,7 +905,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
                   </Link>
                   <button onClick={handleManualRefresh} disabled={loading} className="px-4 py-2.5 rounded-xl text-sm transition-all"
                     style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#94A3B8' }}>
-                    Új ajánlás — 2 kredit
+                    Extra keresés - 2 kredit
                   </button>
                 </div>
               </div>
@@ -898,13 +953,13 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       })()}
       {!loading && !bestTopic && generated && (
         <div className="card text-center py-10 mb-6">
-          <h3 className="font-semibold mb-2" style={{ color: '#F8FAFC' }}>Most nincs elég erős téma</h3>
+          <h3 className="font-semibold mb-2" style={{ color: '#F8FAFC' }}>Ezen a héten nincs elég erős kész téma</h3>
           <p className="text-sm mb-4" style={{ color: '#94A3B8' }}>
-            {opportunityMessage || opportunityError || 'Tölts be új ajánlást vagy pontosítsd a niche-ed a Profil oldalon.'}
+            {opportunityMessage || opportunityError || 'Kérhetsz extra keresést, vagy pontosíthatod a niche-edet a Profil oldalon.'}
           </p>
           <div className="flex gap-3 justify-center">
             <button onClick={handleManualRefresh} disabled={loading} className="btn-primary text-sm">
-              Új ajánlás betöltése — 2 kredit
+              Extra keresés - 2 kredit
             </button>
             <Link href="/dashboard/opportunities" className="btn-secondary text-sm">Opportunity Engine</Link>
           </div>

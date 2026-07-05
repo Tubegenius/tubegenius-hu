@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -48,6 +48,7 @@ interface VideoPackageResult {
     opportunity_score?: number
     evidence_match_score?: number | null
     risk_flags?: string[]
+    preparation_mode?: boolean
   } | null
   _credits_remaining?: number
 }
@@ -73,6 +74,7 @@ interface OpportunityPackageContext {
   opportunity_score?: number
   evidence_match_score?: number | null
   risk_flags?: string[]
+  preparation_mode?: boolean
   hook_suggestion?: string
   web_sources?: Array<{ title: string; url: string; snippet?: string; date?: string; source?: string }>
   evidence_videos?: Array<{ video_id: string; title: string; url: string; channel_title: string; view_count: number; like_count: number; comment_count: number; published_at: string }>
@@ -260,9 +262,11 @@ export default function VideoPackagePage() {
 
   const isShorts = ['youtube_shorts', 'tiktok', 'instagram_reels', 'facebook_reels'].includes(platform)
   const opportunityStatus = opportunityContext?.ready_to_produce_status
-  const opportunityNeedsValidation = opportunityStatus === 'research' || opportunityStatus === 'rejected'
+  const opportunityResearchMode = opportunityStatus === 'research'
   const opportunityHardBlocked = opportunityStatus === 'rejected'
-  const generationBlockedByOpportunity = !!(opportunityNeedsValidation && !allowWeakOpportunityGeneration)
+  const opportunityNeedsValidation = opportunityResearchMode || opportunityHardBlocked
+  const opportunityPreparationMode = opportunityResearchMode && allowWeakOpportunityGeneration
+  const generationBlockedByOpportunity = !!(opportunityHardBlocked || (opportunityResearchMode && !allowWeakOpportunityGeneration))
 
   useEffect(() => {
     loadProfile()
@@ -493,7 +497,7 @@ export default function VideoPackagePage() {
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs eleg kredited. ${cost} kredit szukseges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
         })
         return
       }
@@ -507,7 +511,7 @@ export default function VideoPackagePage() {
         remainingCreditsAfterRun: Math.round(balance - cost),
         requiresConfirmation: true,
         canRun: true,
-        message: `Ez a muvelet ${cost} kreditbe kerul.`,
+        message: `Ez a művelet ${cost} kreditbe kerül.`,
       })
     } catch {
       // Ha nem sikerül a credit check, engedjük tovább
@@ -526,7 +530,7 @@ export default function VideoPackagePage() {
     if (generationBlockedByOpportunity) {
       setError(opportunityHardBlocked
         ? 'Ez a téma nem ajánlott gyártásra. Előbb válassz másik Opportunity témát vagy validáld újra.'
-        : 'Ez a téma még kutatási szintű. Futtass Similar Videos / Viral Score validálást, vagy tudatosan engedélyezd a generálást.'
+        : 'Ez a téma kutatási státuszú. Készíthetsz előkészítő csomagot, de publikálás előtt validáld Similar Videos vagy Viral Score alapján.'
       )
       return
     }
@@ -625,6 +629,7 @@ export default function VideoPackagePage() {
             opportunity_score: opportunityContextData.opportunity_score,
             evidence_match_score: opportunityContextData.evidence_match_score,
             risk_flags: opportunityContextData.risk_flags || [],
+            preparation_mode: opportunityPreparationMode,
           } : null,
           source_video: sourceExtract ? {
             video_id: sourceExtract.video_id,
@@ -817,16 +822,27 @@ export default function VideoPackagePage() {
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Platformra szabott, teljes videócsomag — a Creator Profile alapján.</p>
       </div>
 
-      {/* Profil badge */}
+      {/* Profil badge — ez a csatorna ÁLLANDÓ alapbeállítása, NEM az aktuálisan
+          gyártott téma kontextusa. A kettő eltérhet (pl. profil niche "AI és
+          orvostudomány", de a most gyártott téma memória-pszichológia) — ez
+          nem hiba, csak a profil egy háttér-beállítás, amit a csomag stílusa/
+          hashtagjei figyelembe vesznek, nem a téma maga. */}
       {profile && (
         <div className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between"
           style={{ background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)' }}>
           <div className="flex gap-4 text-xs" style={{ color: '#CBD5E1' }}>
             <span>Profil: <span style={{ color: '#F8FAFC' }}>{profile.channel_name || '—'}</span></span>
-            <span>Niche: <span style={{ color: '#F8FAFC' }}>{profile.niche || '—'}</span></span>
+            <span title="Ez a csatornád alapbeállítása a Profil oldalon — nem feltétlenül egyezik a most gyártott témával.">
+              Profil niche (alapbeállítás): <span style={{ color: '#F8FAFC' }}>{profile.niche || '—'}</span>
+            </span>
             <span>Stílus: <span style={{ color: '#F8FAFC' }}>{NARRATION_STYLES.find(s => s.value === profile.narration_style)?.label || '—'}</span></span>
           </div>
           <a href="/dashboard/profile" className="text-xs" style={{ color: '#3B82F6' }}>Szerkesztés →</a>
+        </div>
+      )}
+      {topic.trim() && (
+        <div className="rounded-xl px-4 py-2.5 mb-4 text-xs" style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.15)', color: '#CBD5E1' }}>
+          Aktuális téma kontextus (ez alapján gyártunk, nem a profil niche alapján): <span style={{ color: '#F8FAFC', fontWeight: 600 }}>{topic}</span>
         </div>
       )}
 
@@ -898,11 +914,18 @@ export default function VideoPackagePage() {
                     Validálás
                   </a>
                   {!opportunityHardBlocked && (
+                    <>
+                    <a href={`/dashboard/viral-score?topic=${encodeURIComponent(opportunityContext.keyword || topic)}`}
+                      className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                      style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.22)', color: '#A78BFA' }}>
+                      Viral Score
+                    </a>
                     <button onClick={() => { setAllowWeakOpportunityGeneration(true); setError(null) }}
                       className="text-xs px-3 py-1.5 rounded-lg"
                       style={{ background: allowWeakOpportunityGeneration ? 'rgba(34,197,94,0.1)' : '#121826', border: '1px solid rgba(255,255,255,0.08)', color: allowWeakOpportunityGeneration ? '#22C55E' : '#CBD5E1' }}>
-                      {allowWeakOpportunityGeneration ? 'Engedélyezve' : 'Mégis generálom'}
+                      {allowWeakOpportunityGeneration ? 'Előkészítés engedélyezve' : 'Előkészítő csomag'}
                     </button>
+                    </>
                   )}
                 </div>
               )}
@@ -984,7 +1007,7 @@ export default function VideoPackagePage() {
               <span className="inline-block w-4 h-4 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3B82F6', borderTopColor: 'transparent' }} />
               {factsLoading ? 'Tényadatok keresése (Wikipedia, Google)...' : (isShorts ? 'Shorts csomag generálása...' : 'Long videó csomag generálása...')}
             </span>
-          ) : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved ? `🔄 Újragenerálás (${isShorts ? '2' : '6'} kredit)` : `🎬 ${isShorts ? 'Shorts' : 'Long videó'} csomag generálása`}
+          ) : generationBlockedByOpportunity ? 'Előbb validálás vagy előkészítés' : saved ? `🔄 Újragenerálás (${isShorts ? '2' : '6'} kredit)` : opportunityPreparationMode ? `🧭 ${isShorts ? 'Shorts' : 'Long videó'} előkészítő csomag` : `🎬 ${isShorts ? 'Shorts' : 'Long videó'} csomag generálása`}
         </button>
       </div>
 
@@ -1060,6 +1083,11 @@ export default function VideoPackagePage() {
                       <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{result.estimated_duration || result.video_length}</p>
                     </div>
                   </div>
+                  {context?.preparation_mode && (
+                    <p className="text-xs rounded-lg px-3 py-2" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.18)', color: '#93C5FD' }}>
+                      Előkészítő csomag: a téma még validálást igényel, ezért publikálás előtt ellenőrizd a forrásokat és a videós jeleket.
+                    </p>
+                  )}
                   {result.intensity_downgraded && (
                     <p className="text-xs rounded-lg px-3 py-2" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.18)', color: '#F59E0B' }}>
                       Intenzitás visszavéve: {result.intensity_downgrade_reason || 'factual téma miatt óvatosabb megfogalmazás szükséges.'}

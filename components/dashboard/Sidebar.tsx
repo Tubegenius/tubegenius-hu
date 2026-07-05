@@ -47,20 +47,17 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
 
   return (
     <aside className="min-h-screen flex flex-col flex-shrink-0" style={{ width: 260, background: '#080B14', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
-      {/* Logo */}
       <div className="px-5 py-5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <Link href="/dashboard">
           <Logo variant="full" size="md" />
         </Link>
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {navItems.map(item => {
           const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
           return (
-            <Link key={item.href} href={item.href}
-              className={isActive ? 'nav-item-active' : 'nav-item'}>
+            <Link key={item.href} href={item.href} className={isActive ? 'nav-item-active' : 'nav-item'}>
               <i className={`ti ${item.icon} text-base w-5 text-center`} />
               <span>{item.label}</span>
             </Link>
@@ -68,10 +65,8 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
         })}
       </nav>
 
-      {/* Separator */}
       <div className="mx-4 my-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }} />
 
-      {/* Credits badge */}
       <div className="mx-3 mb-4 rounded-xl p-5" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08))', border: '1px solid rgba(59,130,246,0.2)', boxShadow: '0 0 20px rgba(59,130,246,0.08)' }}>
         <div className="flex items-center gap-2 mb-2">
           <i className="ti ti-bolt text-amber text-sm" />
@@ -85,19 +80,14 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
           <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: pct < 20 ? '#EF4444' : 'linear-gradient(90deg, #3B82F6, #8B5CF6)' }} />
         </div>
         <Link href="/dashboard/credits" className="block w-full text-xs py-2 rounded-lg font-semibold transition-all text-center" style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff', boxShadow: '0 0 15px rgba(59,130,246,0.2)' }}>
-          Kreditek vasarlasa
+          Kreditek vásárlása
         </Link>
       </div>
 
-      {/* Profile & logout */}
       <div className="px-3 pb-5 space-y-0.5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px' }}>
         <Link href="/dashboard/profile" className="nav-item">
           <i className="ti ti-user text-base w-5 text-center" />
           <span>Profilom</span>
-        </Link>
-        <Link href="/dashboard/settings" className="nav-item">
-          <i className="ti ti-settings text-base w-5 text-center" />
-          <span>Beállítások</span>
         </Link>
         <button onClick={handleLogout} className="nav-item w-full text-left hover:text-rose hover:bg-rose/5">
           <i className="ti ti-logout text-base w-5 text-center" />
