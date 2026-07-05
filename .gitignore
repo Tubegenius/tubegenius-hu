@@ -30,3 +30,12 @@ next-env.d.ts
 # OS
 .DS_Store
 Thumbs.db
+
+# Ideiglenes scratch/patch munkakönyvtárak és backup fájlok — ezek soha nem
+# részei az élő appnak (lásd CLAUDE_HANDOVER.md), ide kerülnek, hogy egy
+# jövőbeli munkamenet ne hozzon létre újra hasonló, sosem-commitolt zajt.
+willviral-*/
+*-backup.txt
+*-fixed/
+*-fix/
+fix-*.js

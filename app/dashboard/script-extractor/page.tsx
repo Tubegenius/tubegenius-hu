@@ -56,6 +56,21 @@ export default function ScriptExtractorPage() {
   const sourceContext = searchParams.get('source_context') || null
 
   useEffect(() => {
+    // A "Legutóbbi történeted" panelről érkező, perzisztens megvett eredmény —
+    // kredit nélkül, kredit-megerősítés nélkül tölti vissza a mentett kinyerést.
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      fetch(`/api/script-extract?paidResultId=${paidResultId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) { setError(data.error); return }
+          setUrl(`https://youtube.com/watch?v=${data.video_id}`)
+          setResult(data)
+        })
+        .catch(() => setError('Hiba a betöltés során'))
+      return
+    }
+
     let urlParam = searchParams.get('url')
 
     // Ha nincs URL paraméter (pl. "vissza" navigáció paraméter nélküli URL-re),

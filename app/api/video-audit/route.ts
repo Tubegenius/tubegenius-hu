@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
 import { chargeFeature, hasEnoughCredits, CREDIT_COSTS } from '@/lib/credits'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultById, openPaidResult } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   Platform,
@@ -346,12 +346,20 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET — audit visszanyitás id alapján
+// GET — audit visszanyitás id VAGY paidResultId alapján
 export async function GET(req: NextRequest) {
   try {
     const supabase = createServerSupabaseClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const paidResultId = req.nextUrl.searchParams.get('paidResultId')
+    if (paidResultId) {
+      const paid = await getPaidResultById(user.id, paidResultId)
+      if (!paid) return NextResponse.json({ error: 'Audit nem található' }, { status: 404 })
+      const opened = await openPaidResult(paid)
+      return NextResponse.json({ ...(opened.result_json as object), paid_result_id: opened.id })
+    }
 
     const admin = createAdminClient()
     const id = req.nextUrl.searchParams.get('id')

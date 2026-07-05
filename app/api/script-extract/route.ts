@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, logUsage, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultById, openPaidResult } from '@/lib/paid-results/paid-results-service'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 import { getActiveApiKey } from '@/lib/youtube-service'
@@ -225,5 +225,26 @@ Valaszolj KIZAROLAG valid JSON-ban:
   } catch (error) {
     console.error('Script extract error:', error)
     return NextResponse.json({ error: 'Elemzés sikertelen. Próbáld újra.' }, { status: 500 })
+  }
+}
+
+// GET — kinyert script visszanyitása paidResultId alapján (a "Legutóbbi
+// történeted" panelről érkező, perzisztens megvett eredmény) — kredit nélkül.
+export async function GET(request: NextRequest) {
+  try {
+    const userId = await getUserId()
+    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const paidResultId = request.nextUrl.searchParams.get('paidResultId')
+    if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
+
+    const paid = await getPaidResultById(userId, paidResultId)
+    if (!paid) return NextResponse.json({ error: 'A kinyert script nem található' }, { status: 404 })
+
+    const opened = await openPaidResult(paid)
+    return NextResponse.json({ ...(opened.result_json as object), paid_result_id: opened.id })
+  } catch (error) {
+    console.error('Script extract GET error:', error)
+    return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })
   }
 }

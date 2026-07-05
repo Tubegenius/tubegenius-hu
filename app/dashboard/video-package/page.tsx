@@ -272,6 +272,11 @@ export default function VideoPackagePage() {
     loadProfile()
     loadSourceVideoContext()
     loadOpportunityContext()
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     const packageId = searchParams.get('id')
     if (packageId) {
       loadSavedPackage(packageId)
@@ -393,6 +398,29 @@ export default function VideoPackagePage() {
     }
 
     return null
+  }
+
+  async function loadPaidResult(paidResultId: string) {
+    setLoadingSavedPackage(true)
+    try {
+      const res = await fetch(`/api/video-package?paidResultId=${paidResultId}`)
+      const data = await res.json()
+      if (res.ok && !data.error) {
+        setTopic(data.topic)
+        setPlatform(data.platform)
+        setVideoLength(data.video_length)
+        if (data.narration_style) setNarrationStyle(data.narration_style)
+        setResult(data)
+        setSaved(true)
+      } else {
+        setError(data.error || 'A videócsomag nem található')
+      }
+    } catch (e) {
+      console.error('Load paid result error:', e)
+      setError('Hiba a betöltés során')
+    } finally {
+      setLoadingSavedPackage(false)
+    }
   }
 
   async function loadSavedPackage(id: string) {

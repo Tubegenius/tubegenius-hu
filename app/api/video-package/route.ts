@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultById, openPaidResult } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   classifyContentType,
@@ -514,5 +514,26 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Video Package error:', error)
     return NextResponse.json({ error: 'Generálás sikertelen. Próbáld újra.' }, { status: 500 })
+  }
+}
+
+// GET — csomag visszanyitása paidResultId alapján (a "Legutóbbi történeted"
+// panelről érkező, perzisztens megvett eredmény) — kredit nélkül, ingyenesen.
+export async function GET(request: NextRequest) {
+  try {
+    const userId = await getUserId()
+    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const paidResultId = request.nextUrl.searchParams.get('paidResultId')
+    if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
+
+    const paid = await getPaidResultById(userId, paidResultId)
+    if (!paid) return NextResponse.json({ error: 'Videócsomag nem található' }, { status: 404 })
+
+    const opened = await openPaidResult(paid)
+    return NextResponse.json({ ...(opened.result_json as object), paid_result_id: opened.id })
+  } catch (error) {
+    console.error('Video Package GET error:', error)
+    return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })
   }
 }

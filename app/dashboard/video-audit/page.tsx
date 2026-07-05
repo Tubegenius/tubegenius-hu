@@ -190,6 +190,7 @@ function auditDecisionMeta(result: AuditResult) {
 export default function VideoAuditPage() {
   const searchParams = useSearchParams()
   const existingId = searchParams.get('id')
+  const paidResultId = searchParams.get('paidResultId')
 
   const [platform, setPlatform] = useState<Platform>('youtube_long')
   const [videoUrl, setVideoUrl] = useState('')
@@ -207,8 +208,22 @@ export default function VideoAuditPage() {
 
   const isYouTube = platform === 'youtube_long' || platform === 'youtube_shorts'
 
-  // Visszanyitás: ha van ?id= param, betöltjük a mentett auditot
+  // Visszanyitás: ha van ?id= (régi, video_audits tábla sor) vagy ?paidResultId=
+  // (a "Legutóbbi történeted" panelről érkező, perzisztens megvett eredmény)
+  // param, betöltjük a mentett auditot — kredit-igény és megerősítés nélkül.
   useEffect(() => {
+    if (paidResultId) {
+      setLoadingExisting(true)
+      fetch(`/api/video-audit?paidResultId=${paidResultId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) setError(data.error)
+          else setResult(data)
+        })
+        .catch(() => setError('Hiba a betöltés során'))
+        .finally(() => setLoadingExisting(false))
+      return
+    }
     if (existingId) {
       setLoadingExisting(true)
       fetch(`/api/video-audit?id=${existingId}`)
