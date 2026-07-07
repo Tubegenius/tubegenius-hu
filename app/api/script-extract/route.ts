@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, logUsage, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultById, openPaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
+import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 import { getActiveApiKey } from '@/lib/youtube-service'
@@ -64,6 +65,22 @@ export async function POST(request: NextRequest) {
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const normalizedInput = normalizePaidResultInput({ videoId, url })
+    const inputHash = buildPaidResultHash({
+      userId,
+      toolType: 'script_extract',
+      normalizedInput,
+      platform: 'youtube',
+    })
+    const paid = await getPaidResultByHash({ userId, toolType: 'script_extract', inputHash })
+    if (paid) {
+      const opened = await openPaidResult(paid)
+      return NextResponse.json({
+        ...(polishHungarianOutput(opened.result_json) as object),
+        ...paidResultResponseMeta(opened),
+      })
+    }
 
     const enoughCredits = await hasEnoughCredits(userId, 'script_extract')
     if (!enoughCredits) {
@@ -198,13 +215,6 @@ Valaszolj KIZAROLAG valid JSON-ban:
       _credits_remaining: charge.new_balance,
     }
 
-    const normalizedInput = normalizePaidResultInput({ videoId, url })
-    const inputHash = buildPaidResultHash({
-      userId,
-      toolType: 'script_extract',
-      normalizedInput,
-      platform: 'youtube',
-    })
     const paidSave = await savePaidResult({
       userId,
       toolType: 'script_extract',
@@ -242,7 +252,10 @@ export async function GET(request: NextRequest) {
     if (!paid) return NextResponse.json({ error: 'A kinyert script nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
-    return NextResponse.json({ ...(opened.result_json as object), paid_result_id: opened.id })
+    return NextResponse.json({
+      ...(polishHungarianOutput(opened.result_json) as object),
+      ...paidResultResponseMeta(opened),
+    })
   } catch (error) {
     console.error('Script extract GET error:', error)
     return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })

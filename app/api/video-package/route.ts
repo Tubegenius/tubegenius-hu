@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultById, openPaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   classifyContentType,
@@ -133,12 +133,15 @@ async function generateCreativeCore(params: {
   sourceVideoMode: boolean
 }) {
   const { topic, isShorts, t, arc, niche, stylePrompt, intensity, goal, factSection, factSafetyRules, contentType, strictFactMode, sourceVideoMode } = params
+  const channelContext = niche || 'nincs megadva'
 
   const prompt = isShorts
     ? `Te egy profi magyar YouTube videocsomag-keszito vagy.
 
 TEMA: "${topic}"
-NICHE: ${niche || 'altalanos'}
+AKTUALIS VIDEO TEMA: "${topic}"
+CSATORNA ALAPNICHE: ${channelContext}
+FONTOS: a csatorna alapniche csak hangnemhez, celkozonseghez es hashtaghez ad kontextust. A konkret allitasokat es a narracio temajat az AKTUALIS VIDEO TEMA es a verified fact block hatarozza meg.
 PLATFORM: SHORTS
 VIDEOHOSSZ: ${t.seconds} masodperc
 STILUS: ${stylePrompt}
@@ -176,7 +179,9 @@ Valaszolj KIZAROLAG valid JSON-ban:
     : `Te egy profi magyar YouTube videocsomag-keszito vagy.
 
 TEMA: "${topic}"
-NICHE: ${niche || 'altalanos'}
+AKTUALIS VIDEO TEMA: "${topic}"
+CSATORNA ALAPNICHE: ${channelContext}
+FONTOS: a csatorna alapniche csak hangnemhez, celkozonseghez es hashtaghez ad kontextust. A konkret allitasokat es a narracio temajat az AKTUALIS VIDEO TEMA es a verified fact block hatarozza meg.
 PLATFORM: YouTube Long
 VIDEOHOSSZ: ${t.minutes} perc
 STILUS: ${stylePrompt}
@@ -242,6 +247,7 @@ async function generatePackaging(params: {
   qualityStatus: QualityStatus
 }) {
   const { topic, isShorts, platform, hook, narration, niche, strictFactMode, qualityStatus } = params
+  const channelContext = niche || 'nincs megadva'
 
   const haiku_safety = strictFactMode ? `
 HAIKU TENYSZABALYOK - KOTELEZO:
@@ -254,7 +260,9 @@ HAIKU TENYSZABALYOK - KOTELEZO:
   const prompt = `Egy magyar ${isShorts ? 'Shorts/TikTok' : 'YouTube'} videohoz kell marketing csomagolas.
 
 TEMA: "${topic}"
-NICHE: ${niche || 'altalanos'}
+AKTUALIS VIDEO TEMA: "${topic}"
+CSATORNA ALAPNICHE: ${channelContext}
+FONTOS: a csatorna alapniche csak hashtag es pozicionalasi kontextus, nem irhatja felul az aktualis videotemat.
 HOOK: ${hook}
 NARRACIO RESZLET: ${narration.slice(0, 300)}...
 QUALITY STATUS: ${qualityStatus}
@@ -301,7 +309,7 @@ export async function POST(request: NextRequest) {
   try {
     const {
       topic, platform, video_length, narration_style, intensity, goal,
-      custom_prompt, niche, language, fact_block, sources,
+      custom_prompt, niche, channel_context, language, fact_block, sources,
       web_sources, youtube_sources, source_video, opportunity_context,
     } = await request.json()
 
@@ -319,6 +327,46 @@ export async function POST(request: NextRequest) {
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const sourceVideoKey = source_video?.video_id || source_video?.id || source_video?.url || null
+    const opportunityKey = opportunity_context?.id || opportunity_context?.title || null
+    const normalizedInput = normalizePaidResultInput({
+      topic,
+      platform,
+      video_length,
+      narration_style,
+      source_video_id: sourceVideoKey,
+      opportunity_id: opportunityKey,
+      fact_block: fact_block || null,
+    })
+    const inputHash = buildPaidResultHash({
+      userId,
+      toolType: 'video_package',
+      normalizedInput,
+      region: language || null,
+      language: language || null,
+      platform: platform || null,
+    })
+    const legacyNormalizedInput = normalizePaidResultInput({ topic, platform, video_length, narration_style, source_video_id: source_video?.video_id || null })
+    const legacyInputHash = buildPaidResultHash({
+      userId,
+      toolType: 'video_package',
+      normalizedInput: legacyNormalizedInput,
+      region: language || null,
+      language: language || null,
+      platform: platform || null,
+    })
+    const paid = await getPaidResultByHash({ userId, toolType: 'video_package', inputHash })
+      || (legacyInputHash !== inputHash
+        ? await getPaidResultByHash({ userId, toolType: 'video_package', inputHash: legacyInputHash })
+        : null)
+    if (paid) {
+      const opened = await openPaidResult(paid)
+      return NextResponse.json({
+        ...(polishHungarianOutput(opened.result_json) as object),
+        ...paidResultResponseMeta(opened),
+      })
+    }
 
     const enoughCredits = await hasEnoughCredits(userId, feature)
     if (!enoughCredits) {
@@ -396,6 +444,7 @@ export async function POST(request: NextRequest) {
     // ── 2. GENERÁLÁS ──────────────────────────────────────────
 
     const stylePrompt = narration_style === 'sajat' && custom_prompt ? custom_prompt : STYLE_PROMPTS[narration_style]
+    const creatorContext = channel_context || niche || ''
     const uploadTimes = getUploadTimes(platform)
 
     const opportunitySection = opportunity_context
@@ -426,7 +475,7 @@ export async function POST(request: NextRequest) {
     }
 
     const coreResult = await generateCreativeCore({
-      topic, isShorts, t, arc, niche, stylePrompt,
+      topic, isShorts, t, arc, niche: creatorContext, stylePrompt,
       intensity: final_intensity, goal, factSection, factSafetyRules,
       platform, videoLength: video_length, narrationStyle: narration_style,
       contentType, strictFactMode, sourceVideoMode,
@@ -436,7 +485,7 @@ export async function POST(request: NextRequest) {
       topic, isShorts, platform,
       hook: coreResult.parsed.hook as string,
       narration: coreResult.parsed.narration as string,
-      niche, uploadTimes, strictFactMode, qualityStatus,
+      niche: creatorContext, uploadTimes, strictFactMode, qualityStatus,
     })
 
     const polishedCore = polishHungarianOutput(coreResult.parsed) as Record<string, unknown>
@@ -483,15 +532,6 @@ export async function POST(request: NextRequest) {
     }
 
     const responsePayload = { ...result, _credits_remaining: chargeResult.new_balance }
-    const normalizedInput = normalizePaidResultInput({ topic, platform, video_length, narration_style, source_video_id: source_video?.video_id || null })
-    const inputHash = buildPaidResultHash({
-      userId,
-      toolType: 'video_package',
-      normalizedInput,
-      region: language || null,
-      language: language || null,
-      platform: platform || null,
-    })
     const paidSave = await savePaidResult({
       userId,
       toolType: 'video_package',
@@ -531,7 +571,10 @@ export async function GET(request: NextRequest) {
     if (!paid) return NextResponse.json({ error: 'Videócsomag nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
-    return NextResponse.json({ ...(opened.result_json as object), paid_result_id: opened.id })
+    return NextResponse.json({
+      ...(polishHungarianOutput(opened.result_json) as object),
+      ...paidResultResponseMeta(opened),
+    })
   } catch (error) {
     console.error('Video Package GET error:', error)
     return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })

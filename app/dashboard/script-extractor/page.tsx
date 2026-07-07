@@ -21,6 +21,9 @@ interface ExtractResult {
   transcript_available?: boolean
   transcript_source?: 'transcript' | 'metadata'
   raw_transcript?: string | null
+  from_paid_result?: boolean
+  paid_result_id?: string | null
+  _credits_remaining?: number
 }
 
 const sectionTypeColor: Record<string, string> = {
@@ -207,6 +210,12 @@ export default function ScriptExtractorPage() {
 
       {result && !loading && (
         <div className="space-y-5 animate-slide-up">
+          {result.from_paid_result && (
+            <div className="rounded-xl border border-emerald/20 bg-emerald/10 px-4 py-3 text-sm text-emerald">
+              Mentett eredmény, kredit nélkül megnyitva.
+            </div>
+          )}
+
           {/* Video header */}
           <div className="card">
             <div className="flex items-start gap-4">

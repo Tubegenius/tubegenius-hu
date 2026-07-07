@@ -15,6 +15,7 @@ import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-se
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { normalizeTopic as normalizeTopicForHash, buildSearchContextHash, getCachedSearch, touchLastOpened, saveSearchResult } from '@/lib/similar-videos-cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MIN_SIMILAR_VIDEO_RELEVANCE = 60
@@ -357,8 +358,13 @@ function engagementScore(video: YouTubeVideoStats) {
   return Math.round(Math.max(0, Math.min(100, calcVideoEngagementRate(video) * 2000)))
 }
 
-function badgesFor(score: { relevance: number; freshness: number; velocity: number; engagement: number; outlier: number }, decisionLabel?: string) {
+function badgesFor(
+  score: { relevance: number; freshness: number; velocity: number; engagement: number; outlier: number },
+  decisionLabel?: string,
+  decisionStatus?: 'ready' | 'watch' | 'research' | 'rejected'
+) {
   const badges: string[] = decisionLabel ? [decisionLabel] : []
+  if (decisionStatus === 'rejected') return badges.slice(0, 1)
   if (score.velocity >= 70) badges.push('Gyorsan növekvő')
   if (score.engagement >= 65) badges.push('Erős közönségreakció')
   if (score.outlier >= 70) badges.push('Kiugró teljesítmény')
@@ -367,7 +373,10 @@ function badgesFor(score: { relevance: number; freshness: number; velocity: numb
   return badges.slice(0, 4)
 }
 
-function reasonFor(scores: { relevance: number; freshness: number; velocity: number; engagement: number; outlier: number }) {
+function reasonFor(
+  scores: { relevance: number; freshness: number; velocity: number; engagement: number; outlier: number },
+  decisionStatus?: 'ready' | 'watch' | 'research' | 'rejected'
+) {
   const strongest = [
     { label: 'erősen kapcsolódik a megadott témához', value: scores.relevance },
     { label: 'friss és aktuális', value: scores.freshness },
@@ -376,9 +385,13 @@ function reasonFor(scores: { relevance: number; freshness: number; velocity: num
     { label: 'a hasonló találatokhoz képest kiugró teljesítményű', value: scores.outlier },
   ].sort((a, b) => b.value - a.value).slice(0, 2)
 
-  return `Inspirációnak erős, mert ${strongest.map(s => s.label).join(' és ')}.`
+  const reason = strongest.map(s => s.label).join(' és ')
+  if (decisionStatus === 'ready') return `Inspirációnak erős, mert ${reason}.`
+  if (decisionStatus === 'watch') return `Érdemes figyelni, mert ${reason}, de még ellenőrizd a téma gyárthatóságát.`
+  if (decisionStatus === 'research') return `Kutatási nyom: ${reason}. Önmagában még nem elég erős gyártási inspiráció.`
+  if (decisionStatus === 'rejected') return `Nem ajánlott inspirációnak: nincs elég erős piaci bizonyíték ennél a találatnál.`
+  return `Kutatási nyom: ${reason}.`
 }
-
 function calcNicheFit(video: { title: string; description?: string; channelTitle?: string }, niche: string): { score: number; label: string; reason: string } {
   if (!niche || niche.length < 2) return { score: 0, label: '', reason: '' }
 
@@ -456,17 +469,17 @@ export async function POST(request: NextRequest) {
       const paid = paidById || await getPaidResultByHash({ userId, toolType: 'similar_videos', inputHash: paidInputHash })
       if (paid) {
         const opened = await openPaidResult(paid)
-        return NextResponse.json({
+        return NextResponse.json(polishHungarianOutput({
           ...(opened.result_json as object),
           from_cache: true,
           ...paidResultResponseMeta(opened),
-        })
+        }))
       }
       const cached = await getCachedSearch(searchHash, userId)
       if (cached) {
         await touchLastOpened(cached.id)
         return NextResponse.json({
-          videos: cached.results,
+          videos: polishHungarianOutput(cached.results),
           from_cache: true,
           cache_only: false,
           last_refreshed_at: cached.last_refreshed_at,
@@ -628,10 +641,10 @@ export async function POST(request: NextRequest) {
         relevance_score: search_relevance,
         viral_video_score,
         score_breakdown: { search_relevance, freshness_score, velocity_score, engagement_score, outlier_score },
-        reason: reasonFor(scores),
+        reason: reasonFor(scores, decision.status),
         freshness_label: freshnessLabel(video.publishedAt),
         velocity_label: velocityLabel(video),
-        badges: badgesFor(scores, decision.label),
+        badges: badgesFor(scores, decision.label, decision.status),
         decision_status: decision.status,
         decision_label: decision.label,
         decision_score: decision.score,
@@ -682,8 +695,8 @@ export async function POST(request: NextRequest) {
           duration: video.duration, relevance_score: search_relevance,
           viral_video_score: decision.score,
           score_breakdown: { search_relevance, freshness_score: freshness_score_val, velocity_score: velocity_score_val, engagement_score: engagement_score_val, outlier_score: outlier_score_val },
-          reason: reasonFor(scores), freshness_label: freshnessLabel(video.publishedAt),
-          velocity_label: velocityLabel(video), badges: badgesFor(scores, decision.label),
+          reason: reasonFor(scores, decision.status), freshness_label: freshnessLabel(video.publishedAt),
+          velocity_label: velocityLabel(video), badges: badgesFor(scores, decision.label, decision.status),
           decision_status: decision.status, decision_label: decision.label,
           decision_score: decision.score, risk_flags: decision.risk_flags,
           niche_fit: calculateNicheFit({ title: video.title, description: video.description, channelTitle: video.channelTitle }, effectiveNiche, relevance.score),
@@ -692,7 +705,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Kredit levonás + usage log — CSAK ha tényleg volt keresés (nem üres eredmény cache-ből)
-    const hadRealSearch = finalVideos.length > 0
+    const polishedFinalVideos = polishHungarianOutput(finalVideos)
+    const hadRealSearch = polishedFinalVideos.length > 0
     let savedPaidResultId: string | null = null
     if (userId && hadRealSearch) {
       if (usageCheck.cost > 0 && !creditCharged) {
@@ -719,7 +733,7 @@ export async function POST(request: NextRequest) {
       // legyen. A user már fizetett ezért a keresésért (ha kredit kellett hozzá),
       // ezért a mentés hibája KRITIKUS — logoljuk, de a választ így is visszaadjuk.
       const responsePayload = {
-        videos: finalVideos,
+        videos: polishedFinalVideos,
         queries_used: queries,
         interpreted_topic: haikuExpansion?.interpreted_topic || topic,
         global_adaptable: haikuExpansion?.global_adaptable ?? false,
@@ -727,7 +741,7 @@ export async function POST(request: NextRequest) {
         region_used: regionCode,
         min_relevance: MIN_SIMILAR_VIDEO_RELEVANCE,
         quota: quotaSummary(),
-        warning: finalVideos.length === 0
+        warning: polishedFinalVideos.length === 0
           ? (quotaSummary().is_exhausted
               ? 'YouTube API kvóta kimerült. A keresés holnap újra elérhető, vagy próbáld cache-ből.'
               : 'Nem találtunk elég erős Similar Videos találatot erre a témára.')
@@ -744,7 +758,7 @@ export async function POST(request: NextRequest) {
         language: language || null,
         platform: platform || null,
         resultJson: responsePayload,
-        summaryJson: { result_count: finalVideos.length, topic },
+        summaryJson: { result_count: polishedFinalVideos.length, topic },
         creditCost: usageCheck.cost > 0 ? usageCheck.cost : 0,
         freshForHours: 6,
       })
@@ -762,13 +776,13 @@ export async function POST(request: NextRequest) {
         language: language || null,
         platform: platform || null,
         queryVariants: queries,
-        results: finalVideos,
+        results: polishedFinalVideos,
         creditCost: usageCheck.cost > 0 ? usageCheck.cost : 0,
       })
     }
 
     return NextResponse.json({
-      videos: finalVideos,
+      videos: polishedFinalVideos,
       queries_used: queries,
       from_cache: false,
       interpreted_topic: haikuExpansion?.interpreted_topic || topic,
@@ -777,7 +791,7 @@ export async function POST(request: NextRequest) {
       region_used: regionCode,
       min_relevance: MIN_SIMILAR_VIDEO_RELEVANCE,
       quota: quotaSummary(),
-      warning: finalVideos.length === 0
+      warning: polishedFinalVideos.length === 0
         ? (quotaSummary().is_exhausted
             ? 'YouTube API kvóta kimerült. A keresés holnap újra elérhető, vagy próbáld cache-ből.'
             : 'Nem találtunk elég erős Similar Videos találatot erre a témára.')
@@ -793,3 +807,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ videos: [], error: 'Videók betöltése sikertelen.', error_detail: reason }, { status: 500 })
   }
 }
+

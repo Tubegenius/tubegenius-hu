@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import type { CreatorProfile, CreatorMemoryItem, OpportunityTopic } from '@/types'
 
 // ─── Score helpers ────────────────────────────────────────────
@@ -10,6 +11,8 @@ import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import TrendFeedHistory from '@/components/dashboard/TrendFeedHistory'
+import CreatorIntelligenceSummary from '@/components/dashboard/CreatorIntelligenceSummary'
+import { polishHungarianText } from '@/lib/hungarian-output-polish'
 
 function getGreeting(): string {
   const hour = new Date().getHours()
@@ -26,6 +29,10 @@ function getTrendFeedWeekKey(): string {
   monday.setHours(0, 0, 0, 0)
   monday.setDate(now.getDate() - day + 1)
   return monday.toISOString().slice(0, 10)
+}
+
+function cleanText(value: string | null | undefined): string {
+  return value ? polishHungarianText(value) : ''
 }
 
 function ScoreBar({ value, label }: { value: number; label: string }) {
@@ -194,15 +201,15 @@ function isDiscoveryOrResearch(topic: DashboardOpportunityTopic) {
 
 function getReadyMeta(topic: DashboardOpportunityTopic) {
   if (topic.ready_to_produce_status === 'ready') {
-    return { label: topic.ready_to_produce_label || 'Gyártható', color: '#22C55E', bg: 'rgba(34,197,94,0.1)' }
+    return { label: cleanText(topic.ready_to_produce_label) || 'Gyártható', color: '#22C55E', bg: 'rgba(34,197,94,0.1)' }
   }
   if (topic.ready_to_produce_status === 'watch') {
-    return { label: topic.ready_to_produce_label || 'Korai lehetőség', color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' }
+    return { label: cleanText(topic.ready_to_produce_label) || 'Korai lehetőség', color: '#F59E0B', bg: 'rgba(245,158,11,0.1)' }
   }
   if (topic.ready_to_produce_status === 'rejected') {
-    return { label: topic.ready_to_produce_label || 'Nem ajánlott', color: '#EF4444', bg: 'rgba(239,68,68,0.1)' }
+    return { label: cleanText(topic.ready_to_produce_label) || 'Nem ajánlott', color: '#EF4444', bg: 'rgba(239,68,68,0.1)' }
   }
-  return { label: topic.ready_to_produce_label || 'Kutatás kell', color: '#CBD5E1', bg: 'rgba(139,155,180,0.08)' }
+  return { label: cleanText(topic.ready_to_produce_label) || 'Kutatás kell', color: '#CBD5E1', bg: 'rgba(139,155,180,0.08)' }
 }
 
 function buildPackageUrl(topic: DashboardOpportunityTopic) {
@@ -253,6 +260,34 @@ function pickBestTopic(topics: DashboardOpportunityTopic[]) {
   return [...topics]
     .filter(topic => topic.ready_to_produce_status !== 'rejected')
     .sort((a, b) => topicDashboardScore(b) - topicDashboardScore(a))[0] || null
+}
+
+function getTodayActionMeta(topic: DashboardOpportunityTopic) {
+  if (topic.ready_to_produce_status === 'ready') {
+    return {
+      title: 'Ma ezt gyártsd le',
+      body: 'Van elég erős jel ahhoz, hogy ebből videócsomag készüljön. Ne új ötletet keress, ezt vidd végig gyártásig.',
+      outcome: 'Kész hook, narráció, címek és gyártási terv.',
+      icon: 'ti-package',
+      color: '#22C55E',
+    }
+  }
+  if (topic.ready_to_produce_status === 'watch') {
+    return {
+      title: 'Ma ezt validáld, utána gyárts',
+      body: 'A téma ígéretes, de előbb nézd meg a hasonló videókat vagy futtass Viral Score-t, hogy ne gyenge jelre építs.',
+      outcome: 'Döntés: mehet videócsomagba vagy új téma kell.',
+      icon: 'ti-shield-check',
+      color: '#F59E0B',
+    }
+  }
+  return {
+    title: 'Ma ebből keress erősebb bizonyítékot',
+    body: 'Ez még kutatási nyom, nem gyártási ajánlás. A cél most nem a csomagkészítés, hanem piaci bizonyíték gyűjtése.',
+    outcome: 'Erősebb Similar Videos lista vagy elvetett téma.',
+    icon: 'ti-search',
+    color: '#F59E0B',
+  }
 }
 
 // ─── Opportunity Card ─────────────────────────────────────────
@@ -465,6 +500,78 @@ function CreatorPipelineStrip() {
     </div>
   )
 }
+
+function FirstRunLaunchPad({
+  profile,
+  loading,
+  hasTopic,
+  hasData,
+}: {
+  profile: CreatorProfile | null
+  loading: boolean
+  hasTopic: boolean
+  hasData: boolean
+}) {
+  if (!profile?.niche) return null
+
+  const steps = [
+    {
+      label: 'Téma kiválasztása',
+      body: hasTopic ? 'Megvan az első ajánlott irány.' : loading ? 'Most keresünk validálható témát.' : 'Indítsd el az első keresést.',
+      state: hasTopic ? 'done' : loading ? 'active' : 'next',
+    },
+    {
+      label: 'Bizonyíték ellenőrzése',
+      body: 'Similar Videos és Viral Score segít eldönteni, érdemes-e gyártani.',
+      state: hasTopic ? 'next' : 'locked',
+    },
+    {
+      label: 'Videócsomag készítése',
+      body: 'Hook, narráció, címek, leírás és gyártási brief egy helyen.',
+      state: hasTopic ? 'next' : 'locked',
+    },
+  ] as const
+
+  return (
+    <div className="rounded-2xl p-5 mb-6" style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.18)' }}>
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#3B82F6' }}>
+            {hasData ? 'Mai gyártási útvonal' : 'Első 5 perces indulás'}
+          </p>
+          <h2 className="text-lg font-bold" style={{ color: '#F8FAFC' }}>
+            {hasData ? 'Folytasd ott, ahol érték keletkezik' : 'Építsük fel az első gyártható videódat'}
+          </h2>
+          <p className="text-sm mt-1" style={{ color: '#CBD5E1' }}>
+            Profil: <span style={{ color: '#F8FAFC', fontWeight: 600 }}>{profile.niche}</span>. A cél nem több menüpont kipróbálása, hanem egy döntés: gyártható-e ma ebből videó.
+          </p>
+        </div>
+        <Link href="/dashboard/opportunities" className="px-4 py-2 rounded-xl text-sm font-semibold text-center"
+          style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
+          Opportunity Engine
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {steps.map((step, index) => {
+          const color = step.state === 'done' ? '#22C55E' : step.state === 'active' ? '#3B82F6' : step.state === 'next' ? '#F59E0B' : '#64748B'
+          return (
+            <div key={step.label} className="rounded-xl px-4 py-3" style={{ background: 'rgba(8,13,24,0.45)', border: `1px solid ${color}22` }}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold" style={{ background: `${color}1A`, color }}>
+                  {step.state === 'done' ? '✓' : index + 1}
+                </span>
+                <p className="text-sm font-semibold" style={{ color: '#F8FAFC' }}>{step.label}</p>
+              </div>
+              <p className="text-xs leading-relaxed" style={{ color: '#CBD5E1' }}>{step.body}</p>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMemoryItem[]; stats: DashboardStats | null; bestTopic: DashboardOpportunityTopic | null }) {
   const saved = memoryItems.filter(i => i.state === 'saved').length
   const inProgress = memoryItems.filter(i => i.state === 'in_progress').length
@@ -625,6 +732,7 @@ interface Props {
 }
 
 export default function DashboardClient({ profile, memoryItems, displayName }: Props) {
+  const searchParams = useSearchParams()
   const [topics, setTopics] = useState<DashboardOpportunityTopic[]>([])
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
@@ -812,6 +920,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   }
 
   const bestTopic = pickBestTopic(topics)
+  const showFirstRunLaunchPad = searchParams.get('setup') === 'complete' || stats?.has_data === false
 
   return (
     <div className="max-w-5xl mx-auto animate-fade-in">
@@ -830,6 +939,15 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         <p className="text-sm" style={{ color: '#94A3B8' }}>Heti validált téma, gyors validálás, kész videócsomag.</p>
       </div>
 
+      {showFirstRunLaunchPad && (
+        <FirstRunLaunchPad
+          profile={profile}
+          loading={loading}
+          hasTopic={!!bestTopic}
+          hasData={!!stats?.has_data}
+        />
+      )}
+
       <TrendFeedHistory />
       <CreatorPipelineStrip />
 
@@ -847,9 +965,10 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         const oppScore = bestTopic.opportunity_score
         const consistencyLabel = (bestTopic as unknown as Record<string, unknown>).topic_consistency_status as string | undefined
         const isResearchTopic = !isProductionCandidate(bestTopic)
-        const heroEyebrow = isResearchTopic ? 'ELLENŐRIZENDŐ LEHETŐSÉG' : 'HETI TOP OPPORTUNITY'
+        const heroEyebrow = isResearchTopic ? 'MAI KÖVETKEZŐ LÉPÉS' : 'MAI GYÁRTHATÓ AJÁNLÁS'
         const primaryHref = isResearchTopic ? `/dashboard/similar-videos?topic=${encodeURIComponent(bestTopic.keyword || bestTopic.title)}` : buildPackageUrl(bestTopic)
-        const primaryLabel = isResearchTopic ? 'Validálás inditasa' : 'Videócsomag készítése'
+        const primaryLabel = isResearchTopic ? 'Validálás indítása' : 'Videócsomag készítése'
+        const todayAction = getTodayActionMeta(bestTopic)
         return (
         <div className="relative rounded-2xl mb-6 overflow-hidden" style={{ background: '#0E1422', border: '1px solid rgba(59,130,246,0.2)', boxShadow: '0 0 40px rgba(59,130,246,0.08), 0 20px 60px rgba(0,0,0,0.4)' }}>
           {/* Gradient top accent */}
@@ -875,6 +994,21 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
                 <h2 className="text-xl lg:text-2xl font-bold leading-snug mb-3" style={{ color: '#F8FAFC' }}>{bestTopic.title}</h2>
                 <p className="text-sm leading-relaxed mb-4" style={{ color: '#CBD5E1' }}>{bestTopic.description}</p>
 
+                <div className="mb-4 rounded-xl px-4 py-3" style={{ background: `${todayAction.color}0F`, border: `1px solid ${todayAction.color}28` }}>
+                  <div className="flex items-start gap-3">
+                    <span className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${todayAction.color}1F`, color: todayAction.color }}>
+                      <i className={`ti ${todayAction.icon}`} />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold mb-1" style={{ color: '#F8FAFC' }}>{todayAction.title}</p>
+                      <p className="text-xs leading-relaxed" style={{ color: '#CBD5E1' }}>{todayAction.body}</p>
+                      <p className="text-xs mt-2" style={{ color: todayAction.color }}>
+                        Várható eredmény: {todayAction.outcome}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 {bestTopic.hook_suggestion && (
                   <div className="rounded-xl px-4 py-3 mb-4" style={{ background: 'rgba(59,130,246,0.04)', border: '1px solid rgba(59,130,246,0.1)' }}>
                     <span className="text-xs font-semibold" style={{ color: '#3B82F6' }}>Hook ötlet</span>
@@ -890,11 +1024,10 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
                     {primaryLabel}
                   </Link>
                   {isResearchTopic && (
-                    <Link href={`/dashboard/video-package?topic=${encodeURIComponent(bestTopic.title)}&source_context=opportunity_research`}
-                      onClick={() => storePackageContext(bestTopic)}
+                    <Link href={`/dashboard/viral-score?topic=${encodeURIComponent(bestTopic.keyword || bestTopic.title)}`}
                       className="px-4 py-2.5 rounded-xl text-sm transition-all"
                       style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#F59E0B' }}>
-                      Csomag előkészítése
+                      Viral Score ellenőrzés
                     </Link>
                   )}
                   <Link href={`/dashboard/opportunities?highlight=${encodeURIComponent(bestTopic.id)}`}
@@ -973,6 +1106,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         </div>
       )}
 
+      <CreatorIntelligenceSummary />
     </div>
   )
 }

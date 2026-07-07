@@ -53,7 +53,7 @@ function clampScore(value: number) {
 export function hasVideoMarketValidation(input: VideoDecisionInput) {
   return (
     input.view_count >= 1000 ||
-    input.views_per_day >= 300 ||
+    (input.views_per_day >= 300 && input.view_count >= 300) ||
     (input.engagement_score >= 70 && input.view_count >= 300) ||
     (input.outlier_score >= 80 && input.view_count >= 500)
   )
@@ -89,6 +89,16 @@ export function decideSimilarVideo(input: VideoDecisionInput): DecisionResult {
     }
   }
 
+  if (input.view_count < 100) {
+    return {
+      status: 'rejected',
+      label: 'Túl gyenge jel',
+      score: Math.min(25, scoreValidatedVideo(input)),
+      risk_flags: ['100 alatti megtekintés', 'Nincs elég piaci bizonyíték'],
+      gates: { relevance: true, market_validation: false, freshness: false, evidence: false },
+    }
+  }
+
   // ── Piaci scoring — csak releváns videók kapnak pontot ──
   const market_validation = hasVideoMarketValidation(input)
   const freshness = ageDays(input.published_at) <= 180 || (input.outlier_score >= 85 && input.view_count >= 5000)
@@ -104,7 +114,7 @@ export function decideSimilarVideo(input: VideoDecisionInput): DecisionResult {
   if (market_validation && freshness && evidence && score >= 60) {
     return { status: 'ready', label: 'Ajánlott inspiráció', score, risk_flags: [], gates }
   }
-  if (market_validation && score >= 45) {
+  if (market_validation && evidence && score >= 45) {
     return { status: 'watch', label: 'Figyelendő jel', score, risk_flags, gates }
   }
   if (evidence) {

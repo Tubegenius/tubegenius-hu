@@ -14,7 +14,7 @@ import { generateSeedsForNiche } from '@/lib/seed-generator'
 import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion, recommendedFormatForExpansion, hookPatternForExpansion } from '@/lib/topic-expansion'
 import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection } from '@/lib/broad-niche-discovery'
 import type { OpportunityTopic } from '@/types'
-import { logYouTubeSearch, checkUsagePermission, logFreeProductUse } from '@/lib/usage-protection'
+import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import {
@@ -746,6 +746,31 @@ KRITIKUS JSON SZABÁLYOK:
       poolTopics = [...poolTopics, ...(fillers.slice(needed) as typeof poolTopics)]
     }
 
+    const validCount = topics.length
+    let charged = false
+    let creditsCharged = 0
+
+    if (force_refresh && validCount > 0) {
+      const charge = await chargeProtectedFeature(user.id, 'opportunity_engine', { topic: niche, engine_version: ENGINE_VERSION })
+      if (!charge.success) {
+        return NextResponse.json({
+          topics: [],
+          pool_topics: [],
+          cached: false,
+          charged: false,
+          credits_charged: 0,
+          usage_blocked: true,
+          message: charge.error || 'Nincs elég kredited ehhez az extra Opportunity kereséshez.',
+        }, { status: 402 })
+      }
+      charged = true
+      creditsCharged = 2
+    } else if (!force_refresh && validCount > 0) {
+      // Ingyenes heti kvotabol futott (friss generalas, nem cache-hit) - nincs
+      // kredit levonás, de a "Legutóbbi történeted" panelen meg kell jelennie.
+      await logFreeProductUse(user.id, 'opportunity_engine', { topic: niche }).catch(() => {})
+    }
+
     // Magas confidence / magas score / friss trend topicokat limitáltan trackeljük
     // (háttérfrissítés célra) — a gatekeeper (isTrackWorthy) dönti el, melyik éri meg.
     // Hiba esetén nem törheti el a fő választ.
@@ -791,32 +816,6 @@ KRITIKUS JSON SZABÁLYOK:
       wasCached: false,
       planType: 'beta',
     }).catch(() => {})
-
-    // ── 9. Credit charging ───────────────────────────────────
-    const validCount = topics.length
-    let charged = false
-    let creditsCharged = 0
-
-    if (force_refresh && validCount > 0) {
-      const { data: credits } = await admin.from('user_credits').select('balance, total_used').eq('user_id', user.id).single()
-      if (credits && Number(credits.balance) >= 2) {
-        await admin.from('user_credits').update({
-          balance: Number(credits.balance) - 2,
-          total_used: Number(credits.total_used) + 2,
-        }).eq('user_id', user.id)
-        await admin.from('ai_usage_logs').insert({
-          user_id: user.id, feature_name: 'trend_feed_refresh', model: 'youtube_search',
-          input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0, credits_charged: 2,
-          metadata: { type: 'trend_feed_manual_refresh', niche, engine_version: ENGINE_VERSION },
-        })
-        charged = true
-        creditsCharged = 2
-      }
-    } else if (!force_refresh && validCount > 0) {
-      // Ingyenes heti kvotabol futott (friss generalas, nem cache-hit) - nincs
-      // kredit levonás, de a "Legutóbbi történeted" panelen meg kell jelennie.
-      await logFreeProductUse(user.id, 'opportunity_engine', { topic: niche }).catch(() => {})
-    }
 
     // Trend Feed snapshot mentese - hogy a user vissza tudja nezni a
     // korabbi ajanlast is, ne csak a legutobbi cache-t.

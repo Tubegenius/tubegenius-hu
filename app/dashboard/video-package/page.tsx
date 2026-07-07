@@ -51,6 +51,8 @@ interface VideoPackageResult {
     preparation_mode?: boolean
   } | null
   _credits_remaining?: number
+  from_paid_result?: boolean
+  requires_credit?: boolean
 }
 
 interface Scene {
@@ -641,7 +643,8 @@ export default function VideoPackagePage() {
           topic, platform, video_length: videoLength,
           narration_style: narrationStyle, intensity, goal,
           custom_prompt: narrationStyle === 'sajat' ? customPrompt : null,
-          niche: profile?.niche || '',
+          niche: '',
+          channel_context: profile?.niche || '',
           language: profile?.language || 'hu',
           fact_block: factBlock,
           sources: sources.map(s => ({ title: s.title, url: s.url, snippet: s.snippet, source_type: s.source_type })),
@@ -1069,7 +1072,11 @@ export default function VideoPackagePage() {
                 </div>
               </div>
               <div className="flex flex-col items-end gap-2">
-                {result._credits_remaining !== undefined && (
+                {result.from_paid_result ? (
+                  <span className="text-xs" style={{ color: '#22C55E' }}>
+                    Mentett eredmény, kredit nélkül megnyitva
+                  </span>
+                ) : result._credits_remaining !== undefined && (
                   <span className="text-xs" style={{ color: '#94A3B8' }}>
                     Maradék kredit: <span style={{ color: '#3B82F6' }}>{result._credits_remaining.toFixed(1)}</span>
                   </span>

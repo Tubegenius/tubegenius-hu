@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
 import { chargeFeature, hasEnoughCredits, CREDIT_COSTS } from '@/lib/credits'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultById, openPaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   Platform,
@@ -170,14 +170,6 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const enoughCredits = await hasEnoughCredits(user.id, 'video_audit')
-    if (!enoughCredits) {
-      return NextResponse.json({ error: 'Nincs elég kredited. Ehhez ' + CREDIT_COSTS.video_audit + ' kredit szükséges.' }, { status: 402 })
-    }
-
-    // Admin kliens: RLS bypass a mentéshez
-    const admin = createAdminClient()
-
     const body = await req.json()
     const { platform, video_url, manual_data } = body as {
       platform: Platform
@@ -188,7 +180,35 @@ export async function POST(req: NextRequest) {
     if (!platform) return NextResponse.json({ error: 'Platform kötelező' }, { status: 400 })
 
     const isYouTube = platform === 'youtube_long' || platform === 'youtube_shorts'
+    const videoIdForHash = isYouTube && video_url ? extractVideoId(video_url) : null
+    const paidNormalizedInput = normalizePaidResultInput({
+      platform,
+      video_id: videoIdForHash || null,
+      video_url: videoIdForHash ? null : (video_url || null),
+      manual_data: videoIdForHash ? null : (manual_data || null),
+    })
+    const paidInputHash = buildPaidResultHash({
+      userId: user.id,
+      toolType: 'video_audit',
+      normalizedInput: paidNormalizedInput,
+      platform,
+    })
+    const paid = await getPaidResultByHash({ userId: user.id, toolType: 'video_audit', inputHash: paidInputHash })
+    if (paid) {
+      const opened = await openPaidResult(paid)
+      return NextResponse.json({
+        ...(polishHungarianOutput(opened.result_json) as object),
+        ...paidResultResponseMeta(opened),
+      })
+    }
 
+    const enoughCredits = await hasEnoughCredits(user.id, 'video_audit')
+    if (!enoughCredits) {
+      return NextResponse.json({ error: 'Nincs elég kredited. Ehhez ' + CREDIT_COSTS.video_audit + ' kredit szükséges.' }, { status: 402 })
+    }
+
+    // Admin kliens: RLS bypass a mentéshez
+    const admin = createAdminClient()
     let inputData: YouTubeApiData | ManualPlatformData
     let backendScores
     let hasApiData = false
@@ -315,18 +335,11 @@ export async function POST(req: NextRequest) {
       },
     }
 
-    const normalizedInput = normalizePaidResultInput({ platform, video_url: video_url || null, topic })
-    const inputHash = buildPaidResultHash({
-      userId: user.id,
-      toolType: 'video_audit',
-      normalizedInput,
-      platform,
-    })
     const paidSave = await savePaidResult({
       userId: user.id,
       toolType: 'video_audit',
-      inputHash,
-      normalizedInput,
+      inputHash: paidInputHash,
+      normalizedInput: paidNormalizedInput,
       originalInput: title || topic || video_url || 'Video audit',
       platform,
       resultJson: responsePayload,
@@ -358,7 +371,10 @@ export async function GET(req: NextRequest) {
       const paid = await getPaidResultById(user.id, paidResultId)
       if (!paid) return NextResponse.json({ error: 'Audit nem található' }, { status: 404 })
       const opened = await openPaidResult(paid)
-      return NextResponse.json({ ...(opened.result_json as object), paid_result_id: opened.id })
+      return NextResponse.json({
+        ...(polishHungarianOutput(opened.result_json) as object),
+        ...paidResultResponseMeta(opened),
+      })
     }
 
     const admin = createAdminClient()

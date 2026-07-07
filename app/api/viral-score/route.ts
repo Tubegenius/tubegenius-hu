@@ -9,6 +9,7 @@ import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import { fetchSerperNews, computeSerperFreshness, getSerperHealthStatus, type SerperResult } from '@/lib/trend-radar'
 import { buildViralScoreHash, normalizeTopic, cacheStatusFor, getCachedViralScore, touchLastOpened, saveViralScoreResult } from '@/lib/viral-score-cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { polishHungarianOutput, polishHungarianText } from '@/lib/hungarian-output-polish'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -396,6 +397,7 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
 
     const responseText = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
     const aiResult = JSON.parse(responseText.replace(/```json|```/g, '').trim())
+    const polishedRecommendation = polishHungarianText(String(aiResult.recommendation || ''))
 
     await logUsage(userId, 'viral_score', MODELS.fast, message.usage.input_tokens, message.usage.output_tokens, { topic })
 
@@ -434,7 +436,7 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
         competition_level: competitionLevel,
         web_buzz: webBuzzScore,
       },
-      recommendation: aiResult.recommendation,
+      recommendation: polishedRecommendation,
       verdict,
       videos: topVideos,
       web_sources: serperResults.slice(0, 3).map(s => ({ title: s.title, url: s.link, source: s.source, date: s.date })),
@@ -477,5 +479,28 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
   } catch (error) {
     console.error('Viral Score error:', error)
     return NextResponse.json({ error: 'Elemzés sikertelen.' }, { status: 500 })
+  }
+}
+
+// GET - Viral Score visszanyitása paidResultId alapján kredit nélkül.
+export async function GET(request: NextRequest) {
+  try {
+    const userId = await getUserId()
+    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const paidResultId = request.nextUrl.searchParams.get('paidResultId')
+    if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
+
+    const paid = await getPaidResultById(userId, paidResultId)
+    if (!paid) return NextResponse.json({ error: 'Viral Score eredmény nem található' }, { status: 404 })
+
+    const opened = await openPaidResult(paid)
+    return NextResponse.json({
+      ...(polishHungarianOutput(opened.result_json) as object),
+      ...paidResultResponseMeta(opened),
+    })
+  } catch (error) {
+    console.error('Viral Score GET error:', error)
+    return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })
   }
 }

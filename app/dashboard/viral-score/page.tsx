@@ -92,6 +92,10 @@ export default function ViralScorePage() {
 
   // Keresési előzmény visszaállítása böngésző vissza gombhoz
   useEffect(() => {
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     if (initialTopic) {
       runAnalysisWithCreditCheck(initialTopic)
       return
@@ -105,6 +109,26 @@ export default function ViralScorePage() {
       } catch {}
     }
   }, [])
+
+  async function loadPaidResult(id: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/viral-score?paidResultId=${id}`)
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setError(data.error || 'A Viral Score eredmény nem található.')
+        return
+      }
+      setTopic(data.topic || initialTopic)
+      setResult(data)
+      sessionStorage.setItem('willviral_viral_score_state', JSON.stringify({ topic: data.topic || initialTopic, result: data }))
+    } catch {
+      setError('Hiba a mentett Viral Score betöltésekor.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // Előbb megnézzük, van-e mentett (ingyenes) eredmény ehhez a témához —
   // ha van (akár friss, akár korábbi), azt mutatjuk kredit-igény és

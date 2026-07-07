@@ -120,7 +120,7 @@ export default function ProfilePage() {
 
     setSaving(false)
     setSaved(true)
-    setTimeout(() => { window.location.href = '/dashboard' }, 1000)
+    setTimeout(() => { window.location.href = '/dashboard?setup=complete' }, 1000)
   }
 
   if (loading) {

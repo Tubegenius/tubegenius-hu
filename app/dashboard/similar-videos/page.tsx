@@ -48,6 +48,11 @@ function scoreColor(score: number) {
   return '#CBD5E1'
 }
 
+function normalizedDecisionStatus(video: ViralSimilarVideo): 'ready' | 'watch' | 'research' | 'rejected' {
+  if (video.view_count < 100) return 'rejected'
+  return video.decision_status || 'research'
+}
+
 function MiniScore({ label, value }: { label: string; value: number }) {
   return (
     <div>
@@ -86,7 +91,7 @@ function VideoCard({ video }: { video: ViralSimilarVideo }) {
 
   const score = video.viral_video_score ?? 0
   const breakdown = video.score_breakdown
-  const decisionStatus = video.decision_status || 'research'
+  const decisionStatus = normalizedDecisionStatus(video)
   const decisionColor = decisionStatus === 'ready' ? '#22C55E'
     : decisionStatus === 'watch' ? '#F59E0B'
     : decisionStatus === 'rejected' ? '#EF4444'
@@ -539,11 +544,15 @@ export default function SimilarVideosPage() {
       )}
 
       {!loading && videos.length > 0 && (() => {
-        const recommendedVideos = videos.filter(v => v.decision_status !== 'rejected')
-        const rejectedVideos = videos.filter(v => v.decision_status === 'rejected')
+        const recommendedVideos = videos.filter(v => {
+          const status = normalizedDecisionStatus(v)
+          return status === 'ready' || status === 'watch'
+        })
+        const researchVideos = videos.filter(v => normalizedDecisionStatus(v) === 'research')
+        const rejectedVideos = videos.filter(v => normalizedDecisionStatus(v) === 'rejected')
         const readyCount = recommendedVideos.filter(v => v.decision_status === 'ready').length
         const watchCount = recommendedVideos.filter(v => v.decision_status === 'watch').length
-        const researchCount = recommendedVideos.filter(v => !v.decision_status || v.decision_status === 'research').length
+        const researchCount = researchVideos.length
         const bestScore = Math.max(...recommendedVideos.map(v => v.viral_video_score || v.decision_score || 0), 0)
         return (
         <div>
@@ -561,16 +570,37 @@ export default function SimilarVideosPage() {
             ))}
           </div>
           <div className="flex items-center justify-between mb-4">
-            <p className="section-label">{recommendedVideos.length} virális jelölt - <span className="text-text-secondary normal-case font-normal text-xs">{searchTopic}</span></p>
+            <p className="section-label">{recommendedVideos.length} ajánlott inspiráció - <span className="text-text-secondary normal-case font-normal text-xs">{searchTopic}</span></p>
             {searchedRegions.length > 1 && (
               <p className="text-xs" style={{ color: '#F59E0B' }}>
                 Figyelem: {searchedRegions[0]} régióban nem volt elég erős találat, automatikusan {searchedRegions[1]} régióra váltottunk
               </p>
             )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {recommendedVideos.map(video => <VideoCard key={video.video_id} video={video} />)}
-          </div>
+          {recommendedVideos.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {recommendedVideos.map(video => <VideoCard key={video.video_id} video={video} />)}
+            </div>
+          ) : (
+            <div className="rounded-xl px-4 py-3 text-sm mb-4" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.18)', color: '#F59E0B' }}>
+              Nincs elég erős gyártási inspiráció. A találatokat kutatási nyomként vagy gyenge jelzésként kezeld.
+            </div>
+          )}
+          {researchVideos.length > 0 && (
+            <div className="mt-6">
+              <div className="mb-3">
+                <p className="text-sm font-semibold" style={{ color: '#CBD5E1' }}>
+                  Kutatási nyomok: {researchVideos.length}
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+                  Ezek még nem ajánlott inspirációk. Használd őket iránykeresésre, majd validáld tovább Similar Videos vagy Viral Score alapján.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 opacity-90">
+                {researchVideos.map(video => <VideoCard key={video.video_id} video={video} />)}
+              </div>
+            </div>
+          )}
           {rejectedVideos.length > 0 && (
             <div className="mt-6 rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
               <p className="text-sm font-semibold mb-1" style={{ color: '#CBD5E1' }}>

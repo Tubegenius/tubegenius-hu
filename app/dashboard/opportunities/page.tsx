@@ -9,6 +9,7 @@ import { scoreColor as getScoreColor, scoreLabel, scoreLabelColor, regionLabel, 
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { polishHungarianText } from '@/lib/hungarian-output-polish'
 
 // ── Score komponensek ─────────────────────────────────────────
 
@@ -92,6 +93,14 @@ function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return n.toString()
+}
+
+function cleanText(value: string | null | undefined): string {
+  return value ? polishHungarianText(value) : ''
+}
+
+function cleanTextList(values: string[] | null | undefined): string[] {
+  return (values || []).map(value => polishHungarianText(value))
 }
 
 // ── Evidence Video komponens ──────────────────────────────────
@@ -301,7 +310,7 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
   const [similarLoading, setSimilarLoading] = useState(false)
   const [similarError, setSimilarError] = useState<string | null>(null)
   const [displayTitle, setDisplayTitle] = useState(topic.title)
-  const [displayDescription, setDisplayDescription] = useState(topic.description)
+  const [displayDescription, setDisplayDescription] = useState(cleanText(topic.description))
   const scoreColorVal = getScoreColor(topic.opportunity_score)
 
   const hasVideos = topic.evidence_videos && topic.evidence_videos.length > 0
@@ -360,7 +369,7 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
       const data = await res.json()
       if (res.ok) {
         setDisplayTitle(data.title)
-        setDisplayDescription(data.description)
+        setDisplayDescription(cleanText(data.description))
         await fetch('/api/feedback', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ topic: displayTitle, feedback_type: 'request_similar', opportunity_score: topic.opportunity_score, niche_cluster: topic.niche_cluster }),
@@ -431,13 +440,13 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
                     {topic.validation_summary.label}
                   </span>
                 </div>
-                <p className="text-xs mb-2" style={{ color: '#CBD5E1' }}>{topic.validation_summary.explanation}</p>
+                <p className="text-xs mb-2" style={{ color: '#CBD5E1' }}>{cleanText(topic.validation_summary.explanation)}</p>
                 {(() => {
                   const strength = topic.evidence_strength || topic.validation_summary.evidence_strength
                   const meta = evidenceStrengthMeta(strength)
-                  const reason = topic.validation_reason || topic.validation_summary.validation_reason
+                  const reason = cleanText(topic.validation_reason || topic.validation_summary.validation_reason)
                   const action = topic.recommended_next_action || topic.validation_summary.recommended_next_action
-                  const limitations = topic.data_limitations || topic.validation_summary.data_limitations || []
+                  const limitations = cleanTextList(topic.data_limitations || topic.validation_summary.data_limitations || [])
                   return (
                     <div className="mb-2 rounded-lg px-2.5 py-2" style={{ background: 'rgba(8,13,24,0.5)', border: `1px solid ${meta.color}22` }}>
                       <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
@@ -732,8 +741,8 @@ function DiscoveryLaneCard({ topic, onSearch }: {
   const [expanded, setExpanded] = useState(false)
   const strength = topic.evidence_strength || topic.validation_summary?.evidence_strength
   const meta = evidenceStrengthMeta(strength)
-  const reason = topic.validation_reason || topic.validation_summary?.validation_reason
-  const limitations = topic.data_limitations || topic.validation_summary?.data_limitations || []
+  const reason = cleanText(topic.validation_reason || topic.validation_summary?.validation_reason)
+  const limitations = cleanTextList(topic.data_limitations || topic.validation_summary?.data_limitations || [])
   const webSources = topic.web_sources || []
   const videos = topic.evidence_videos || []
   const hasDetails = webSources.length > 0 || videos.length > 0 || !!reason || limitations.length > 0
@@ -753,7 +762,7 @@ function DiscoveryLaneCard({ topic, onSearch }: {
               {meta.label}
             </span>
           </div>
-          <p className="text-xs leading-relaxed mb-3" style={{ color: '#94A3B8' }}>{topic.description}</p>
+          <p className="text-xs leading-relaxed mb-3" style={{ color: '#94A3B8' }}>{cleanText(topic.description)}</p>
 
           {(reason || limitations.length > 0) && (
             <div className="rounded-lg px-3 py-2 mb-3" style={{ background: 'rgba(8,13,24,0.45)', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -768,7 +777,7 @@ function DiscoveryLaneCard({ topic, onSearch }: {
 
           {topic.risk_flags && topic.risk_flags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-3">
-              {topic.risk_flags.map((flag, i) => (
+              {cleanTextList(topic.risk_flags).map((flag, i) => (
                 <span key={i} className="text-xs px-2 py-0.5 rounded-full"
                   style={{ background: 'rgba(245,158,11,0.08)', color: '#F59E0B', border: '1px solid rgba(245,158,11,0.15)' }}>
                   {flag}
