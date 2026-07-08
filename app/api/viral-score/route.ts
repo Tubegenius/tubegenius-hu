@@ -1,6 +1,6 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { calcEngagementRate, calcTrendVelocity, calcViewOutlierScore, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import { calculateNicheFit } from '@/lib/niche-fit'
 import type { SimilarVideo } from '@/types'
@@ -21,8 +21,6 @@ import {
   forwardWorkflowStatus,
   type VideoIdeaWorkflowStatus,
 } from '@/lib/video-ideas/video-idea-service'
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
 // ── Téma-relevancia szűrés ────────────────────────────────────
 // A YouTube/Serper keresés önmagában fuzzy — pl. "AI botrányok"-ra simán
@@ -450,14 +448,21 @@ Ha a webes lefedettségre hivatkozol, PONTOSAN a "webes visszhang" kifejezést h
 Válaszolj KIZÁRÓLAG valid JSON-ban:
 {"recommendation": "2-3 mondatos magyar ajánlás a backend számok alapján", "hook_potential": 0, "audience_curiosity": 0, "platform_fit": 0, "production_difficulty": 0}`
 
-    const message = await anthropic.messages.create({
+    const aiCall = await callAIProvider({
       model: MODELS.fast,
-      max_tokens: 500,
+      maxTokens: 500,
       messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: 'viral_score_explanation',
+      promptVersion: 'v1',
     })
 
-    const responseText = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
-    const aiResult = JSON.parse(responseText.replace(/```json|```/g, '').trim())
+    const aiResult = extractJson<{
+      recommendation?: string
+      hook_potential?: unknown
+      audience_curiosity?: unknown
+      platform_fit?: unknown
+      production_difficulty?: unknown
+    }>(aiCall.text)
     const polishedRecommendation = polishHungarianText(String(aiResult.recommendation || ''))
     const clampScore = (value: unknown) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)))
     const hookPotential = clampScore(aiResult.hook_potential)
@@ -465,7 +470,7 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     const platformFit = clampScore(aiResult.platform_fit)
     const productionDifficulty = clampScore(aiResult.production_difficulty)
 
-    await logUsage(userId, 'viral_score', MODELS.fast, message.usage.input_tokens, message.usage.output_tokens, { topic })
+    await logUsage(userId, 'viral_score', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
 
     // ─── Kredit levonás — korábban ez teljesen hiányzott: a Viral Score
     // sosem vont le kreditet szerver oldalon, a kliens csak becsült egy
@@ -533,6 +538,11 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
       summaryJson: { score, verdict, topic, decision_status: decision.decision_status, decision_label: decision.decision_label },
       creditCost: 1,
       freshForHours: 6,
+      provider: aiCall.provider,
+      model: aiCall.model,
+      promptTemplateId: aiCall.promptTemplateId,
+      promptVersion: aiCall.promptVersion,
+      estimatedCost: aiCall.estimatedCost,
     })
     if (!paidSave.success) {
       console.error('[ViralScore] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
