@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
@@ -15,26 +15,6 @@ import {
   type VerifiedFactBlock,
   type QualityStatus,
 } from '@/lib/fact-safety'
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
-
-function extractJson(text: string): unknown {
-  let cleaned = text.replace(/```json|```/g, '').trim()
-  const firstBrace = cleaned.indexOf('{')
-  const lastBrace = cleaned.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1)
-  }
-  cleaned = cleaned.replace(/"([^"\\]*(\\.[^"\\]*)*)"/g, (match) => {
-    return match.replace(/\n/g, ' ').replace(/\r/g, '')
-  })
-  try {
-    return JSON.parse(cleaned)
-  } catch (e) {
-    console.error('JSON parse failed:', cleaned.slice(0, 1500))
-    throw e
-  }
-}
 
 const STYLE_PROMPTS: Record<string, string> = {
   mrbeast: 'MrBeast stilus: eros hook, gyors tempo, nagy tet, kozvetlen. Hiteles, nem gyerekes.',
@@ -221,19 +201,21 @@ Valaszolj KIZAROLAG valid JSON-ban:
   "claims_used": [{"claim_text": "allitas szovege", "claim_type": "fact"}]
 }`
 
-  const message = await anthropic.messages.create({
+  const aiCall = await callAIProvider({
     model: MODELS.primary,
-    max_tokens: 6000,
+    maxTokens: 6000,
     messages: [{ role: 'user', content: prompt }],
+    promptTemplateId: isShorts ? 'video_package_core_shorts' : 'video_package_core_long',
+    promptVersion: 'v1',
   })
 
-  const text = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
-  const parsed = extractJson(text) as Record<string, unknown>
+  const parsed = extractJson<Record<string, unknown>>(aiCall.text)
 
   return {
     parsed,
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
+    inputTokens: aiCall.usage.inputTokens,
+    outputTokens: aiCall.usage.outputTokens,
+    estimatedCost: aiCall.estimatedCost,
   }
 }
 
@@ -296,19 +278,21 @@ Keszitsd el magyarul, KIZAROLAG valid JSON-ban:
   "production_checklist": ["Gyartasi lepes 1", "Gyartasi lepes 2", "Gyartasi lepes 3"]
 }`
 
-  const message = await anthropic.messages.create({
+  const aiCall = await callAIProvider({
     model: MODELS.fast,
-    max_tokens: 1500,
+    maxTokens: 1500,
     messages: [{ role: 'user', content: prompt }],
+    promptTemplateId: 'video_package_packaging',
+    promptVersion: 'v1',
   })
 
-  const text = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
-  const parsed = extractJson(text) as Record<string, unknown>
+  const parsed = extractJson<Record<string, unknown>>(aiCall.text)
 
   return {
     parsed,
-    inputTokens: message.usage.input_tokens,
-    outputTokens: message.usage.output_tokens,
+    inputTokens: aiCall.usage.inputTokens,
+    outputTokens: aiCall.usage.outputTokens,
+    estimatedCost: aiCall.estimatedCost,
   }
 }
 
@@ -558,6 +542,15 @@ export async function POST(request: NextRequest) {
       summaryJson: { topic, platform, video_length, quality_status: qualityStatus },
       creditCost: CREDIT_COSTS[feature],
       freshForHours: 24,
+      // Ket kulon AI-hivas (core + packaging) tortenik egy Video Package
+      // generalasnal, de a paid_results tablaban csak egy provider/model
+      // mezo van soronkent — a "combined" ugyanaz a konvencio, amit a
+      // chargeFeature() mar hasznal az ai_usage_logs-ban tobb-lepeses feature-oknel.
+      provider: 'anthropic',
+      model: 'combined',
+      promptTemplateId: 'video_package',
+      promptVersion: 'v1',
+      estimatedCost: coreResult.estimatedCost + packagingResult.estimatedCost,
     })
     if (!paidSave.success) {
       console.error('[VideoPackage] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)

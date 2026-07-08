@@ -99,7 +99,12 @@ export function extractJson<T = unknown>(text: string): T {
   const start = useBracket ? firstBracket : firstBrace
   const end = cleaned.lastIndexOf(closeChar)
 
-  const jsonSlice = start !== -1 && end !== -1 && end > start ? cleaned.slice(start, end + 1) : cleaned
+  const rawSlice = start !== -1 && end !== -1 && end > start ? cleaned.slice(start, end + 1) : cleaned
+
+  // Claude alkalmanként a promptban tiltott sortoreseket is beszur egy-egy
+  // string ertek (pl. "narration") belsejebe, ami nyers JSON.parse-t elrontana —
+  // csak a stringliteralokon belul csereljuk le, nem az egesz valaszon.
+  const jsonSlice = rawSlice.replace(/"([^"\\]*(?:\\.[^"\\]*)*)"/g, match => match.replace(/\r?\n/g, ' '))
 
   try {
     return JSON.parse(jsonSlice) as T
