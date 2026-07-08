@@ -36,6 +36,12 @@ export interface PaidResultRecord {
   last_refreshed_at: string
   fresh_until: string | null
   source_run_id: string | null
+  linked_video_idea_id: string | null
+  provider: string | null
+  model: string | null
+  prompt_template_id: string | null
+  prompt_version: string | null
+  estimated_cost: number | null
 }
 
 function adminClient() {
@@ -164,6 +170,12 @@ export async function savePaidResult(input: {
   creditCost?: number
   freshForHours?: number
   sourceRunId?: string | null
+  linkedVideoIdeaId?: string | null
+  provider?: string | null
+  model?: string | null
+  promptTemplateId?: string | null
+  promptVersion?: string | null
+  estimatedCost?: number | null
 }): Promise<{ success: boolean; record?: PaidResultRecord; error?: string }> {
   try {
     const now = new Date().toISOString()
@@ -192,6 +204,12 @@ export async function savePaidResult(input: {
         last_refreshed_at: now,
         fresh_until: freshUntil,
         source_run_id: input.sourceRunId || null,
+        ...(input.linkedVideoIdeaId !== undefined ? { linked_video_idea_id: input.linkedVideoIdeaId } : {}),
+        ...(input.provider !== undefined ? { provider: input.provider } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.promptTemplateId !== undefined ? { prompt_template_id: input.promptTemplateId } : {}),
+        ...(input.promptVersion !== undefined ? { prompt_version: input.promptVersion } : {}),
+        ...(input.estimatedCost !== undefined ? { estimated_cost: input.estimatedCost } : {}),
       }, { onConflict: 'user_id,tool_type,input_hash' })
       .select('*')
       .single()

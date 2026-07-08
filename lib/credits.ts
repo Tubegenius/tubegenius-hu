@@ -7,6 +7,7 @@
 
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { MODELS } from '@/lib/models'
 
 export type FeatureName =
   | 'video_package_shorts'
@@ -32,13 +33,17 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
   video_package_long: 6,
 }
 
+// A kulcsok a lib/models.ts MODELS ertekeivel egyeznek — korabban itt elavult
+// modellnevek (claude-sonnet-4-5, claude-3-5-haiku-20241022) szerepeltek, amik
+// sosem talaltak talalatot, ezert minden hivas csendben a Sonnet-arral lett
+// beccsulve, a Haiku-hivasok is.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-sonnet-4-5': { input: 3, output: 15 },
-  'claude-3-5-haiku-20241022': { input: 0.25, output: 1.25 },
+  [MODELS.primary]: { input: 3, output: 15 },
+  [MODELS.fast]: { input: 0.25, output: 1.25 },
 }
 
 export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const pricing = MODEL_PRICING[model] || MODEL_PRICING['claude-sonnet-4-5']
+  const pricing = MODEL_PRICING[model] || MODEL_PRICING[MODELS.primary]
   return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output
 }
 
