@@ -50,6 +50,12 @@ export const LOADING_STEPS = {
     'Transcript kinyerése...',
     'Struktúra elemzése...',
   ],
+  transcript: [
+    'Fájl előkészítése...',
+    'Hang szöveggé alakítása...',
+    'Időkódok rendezése...',
+    'Exportok készítése...',
+  ],
 }
 
 export default function LoadingScreen({ steps, currentStep, message }: LoadingScreenProps) {

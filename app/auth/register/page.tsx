@@ -135,7 +135,9 @@ export default function RegisterPage() {
 
       <p className="text-text-muted text-xs text-center mt-4">
         A regisztrációval elfogadod az{' '}
-        <Link href="/terms" className="text-violet hover:underline">Általános Szerződési Feltételeket</Link>.
+        <Link href="/terms" className="text-violet hover:underline">Általános Szerződési Feltételeket</Link>{' '}
+        és az{' '}
+        <Link href="/privacy" className="text-violet hover:underline">Adatvédelmi Szabályzatot</Link>.
       </p>
 
       <div className="mt-6 pt-6 border-t border-border text-center">

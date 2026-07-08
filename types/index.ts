@@ -8,6 +8,18 @@ export type CreatorLevel = 'beginner' | 'growing' | 'advanced' | 'professional'
 export type VideoLength = 'short' | 'medium' | 'long'
 export type TopicState = 'saved' | 'in_progress' | 'completed' | 'rejected'
 export type Region = 'HU' | 'US' | 'BOTH'
+export type Market = 'HU' | 'CEE' | 'US' | 'UK' | 'DE' | 'GLOBAL_EN' | 'LATAM'
+export type Currency = 'HUF' | 'EUR' | 'USD' | 'GBP'
+export type VideoIdeaWorkflowStatus =
+  | 'new_idea'
+  | 'validating'
+  | 'validated'
+  | 'ready_to_produce'
+  | 'scheduled'
+  | 'published'
+  | 'audited'
+  | 'rejected'
+  | 'archived'
 
 export type NarrationStyle =
   | 'mrbeast'
@@ -269,6 +281,7 @@ export interface ScriptSection {
 export interface CreatorMemoryItem {
   id: string
   user_id: string
+  video_idea_id?: string | null
   topic: string
   search_keyword?: string | null
   platform?: string | null
@@ -280,10 +293,72 @@ export interface CreatorMemoryItem {
   updated_at: string
 }
 
+// ============================================================
+// VIDEO IDEA — Creator OS kozponti objektum
+// ============================================================
+
+export interface VideoIdea {
+  id: string
+  user_id: string
+  title: string
+  topic: string
+  short_description: string | null
+  niche: string | null
+  platform: string | null
+  language: string | null
+  market: string | null
+  country: string | null
+  currency: string | null
+  timezone: string | null
+  content_format: string | null
+  keywords: unknown[]
+  trend_signals: unknown[]
+  similar_videos: unknown[]
+  competitor_proof: unknown[]
+  source_links: unknown[]
+  viral_score: number | null
+  opportunity_score: number | null
+  competition_score: number | null
+  risk_factors: unknown[]
+  proof_summary: string | null
+  title_ideas: unknown[]
+  hook_ideas: unknown[]
+  thumbnail_concepts: unknown[]
+  video_package_id: string | null
+  audit_result_id: string | null
+  calendar_status: string | null
+  publish_status: string | null
+  workflow_status: VideoIdeaWorkflowStatus
+  paid_result_reference: string | null
+  input_hash: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface VideoIdeaProofSignal {
+  id: string
+  video_idea_id: string
+  user_id: string
+  signal_type: 'similar_video' | 'competitor_video' | 'web_source' | 'trend_signal' | 'keyword_signal' | 'transcript' | 'manual_note'
+  source_tool: string | null
+  source_id: string | null
+  title: string | null
+  url: string | null
+  channel_title: string | null
+  published_at: string | null
+  view_count: number | null
+  relevance_score: number | null
+  strength: 'strong' | 'medium' | 'weak' | 'rejected' | null
+  reason: string | null
+  payload: Record<string, unknown>
+  created_at: string
+}
+
 // ─── Video Package — mentett, visszanézhető generálás ───
 export interface VideoPackageRecord {
   id: string
   user_id: string
+  video_idea_id?: string | null
   topic: string
   search_keyword?: string | null
   platform: string

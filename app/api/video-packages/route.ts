@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
+import { ensureVideoIdea, linkVideoIdeaToLegacyRecord, logVideoIdeaEvent, markVideoIdeaReadyToProduce } from '@/lib/video-ideas/video-idea-service'
 
 // GET: lista vagy egy konkrét csomag (?id=...)
 export async function GET(request: NextRequest) {
@@ -88,6 +89,47 @@ export async function POST(request: NextRequest) {
   if (error) {
     console.error('Video package save error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  const ideaResult = await ensureVideoIdea(admin, {
+    userId: user.id,
+    title: body.topic,
+    topic: body.topic,
+    shortDescription: body.hook || null,
+    platform: body.platform || 'youtube',
+    language: body.language || null,
+    market: body.market || body.region || null,
+    contentFormat: body.video_length || null,
+    keywords: body.search_keyword ? [body.search_keyword] : [],
+    proofSummary: body.verified_fact_block || null,
+    workflowStatus: 'ready_to_produce',
+    metadata: {
+      source_tool: 'video_package',
+      search_keyword: body.search_keyword || null,
+      quality_status: body.quality_status || null,
+      fact_strictness_level: body.fact_strictness_level || null,
+    },
+  })
+
+  if (ideaResult.idea?.id) {
+    await linkVideoIdeaToLegacyRecord(admin, {
+      table: 'video_packages',
+      userId: user.id,
+      recordId: data.id,
+      videoIdeaId: ideaResult.idea.id,
+    })
+    await markVideoIdeaReadyToProduce(admin, {
+      userId: user.id,
+      videoIdeaId: ideaResult.idea.id,
+      videoPackageId: data.id,
+    })
+    await logVideoIdeaEvent(admin, {
+      userId: user.id,
+      videoIdeaId: ideaResult.idea.id,
+      eventType: 'video_package_created',
+      sourceTool: 'video_package',
+      payload: { video_package_id: data.id, topic: body.topic },
+    })
   }
 
   // Amiből videócsomag készült, azt limitáltan trackeljük (háttérfrissítés célra) —

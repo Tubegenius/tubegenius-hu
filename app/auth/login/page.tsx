@@ -24,7 +24,7 @@ export default function LoginPage() {
       return
     }
 
-    window.location.replace('http://localhost:3000/dashboard')
+    window.location.replace('/dashboard')
   }
 
   return (
@@ -89,6 +89,12 @@ export default function LoginPage() {
           </Link>
         </p>
       </div>
+
+      <p className="text-text-muted text-xs text-center mt-6">
+        <Link href="/terms" className="hover:underline">Felhasználási feltételek</Link>
+        {' · '}
+        <Link href="/privacy" className="hover:underline">Adatvédelem</Link>
+      </p>
     </div>
   )
 }

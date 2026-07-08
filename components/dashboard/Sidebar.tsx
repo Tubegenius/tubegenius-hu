@@ -20,6 +20,7 @@ const navItems = [
   { label: 'Video Package', href: '/dashboard/video-package', icon: 'ti-package' },
   { label: 'Video Audit', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },
   { label: 'Viral Score', href: '/dashboard/viral-score', icon: 'ti-chart-bar' },
+  { label: 'Auto Transcript', href: '/dashboard/transcript', icon: 'ti-microphone' },
   { label: 'Script Extractor', href: '/dashboard/script-extractor', icon: 'ti-file-text' },
   { label: 'Creator Memory', href: '/dashboard/memory', icon: 'ti-brain' },
   { label: 'Kreditek', href: '/dashboard/credits', icon: 'ti-bolt' },

@@ -17,6 +17,7 @@ export default function CreditConfirmModal({ check, onConfirm, onCancel, loading
     'Video Package (Long)': 'Video Package (Long)',
     'Video Audit': 'Video Audit',
     'Script Extractor': 'Script Extractor',
+    'Auto Transcript': 'Auto Transcript',
     'Viral Score': 'Viral Score',
     'Trend mély frissítés': 'Trend mély frissítés',
     trend_deep_refresh: 'Trend mély frissítés',

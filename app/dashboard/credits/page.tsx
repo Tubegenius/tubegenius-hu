@@ -28,6 +28,7 @@ const TOPUP_PACKS = [
 const CREDIT_COSTS = [
   { feature: 'Video Package (Shorts)', cost: 2, icon: 'ti-device-mobile' },
   { feature: 'Video Package (Long)', cost: 6, icon: 'ti-player-play' },
+  { feature: 'Auto Transcript', cost: 3, icon: 'ti-microphone' },
   { feature: 'Script Extract', cost: 3, icon: 'ti-file-text' },
   { feature: 'Video Audit', cost: 4, icon: 'ti-stethoscope' },
   { feature: 'Viral Score', cost: 1, icon: 'ti-chart-bar' },

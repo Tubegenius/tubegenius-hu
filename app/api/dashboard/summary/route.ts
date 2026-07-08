@@ -25,6 +25,7 @@ export async function GET() {
     snapshotsCountRes,
     trackedRes,
     paidResultsRes,
+    videoIdeasRes,
   ] = await Promise.all([
     admin.from('user_credits').select('balance, total_used, plan').eq('user_id', userId).single(),
     admin.from('creator_memory').select('id, topic, state, platform, opportunity_score, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
@@ -35,6 +36,7 @@ export async function GET() {
     admin.from('youtube_video_snapshots').select('*', { count: 'exact', head: true }),
     admin.from('tracked_trend_candidates').select('id, candidate_topic').eq('user_id', userId).eq('status', 'active'),
     admin.from('paid_results').select('id, tool_type, original_input, created_at, last_opened_at, credit_cost, status').eq('user_id', userId).eq('status', 'completed').order('last_opened_at', { ascending: false, nullsFirst: false }).limit(30),
+    admin.from('video_ideas').select('id, title, topic, platform, language, market, content_format, viral_score, opportunity_score, competition_score, proof_summary, video_package_id, calendar_status, publish_status, workflow_status, updated_at, created_at').eq('user_id', userId).order('updated_at', { ascending: false }).limit(25),
   ])
 
   const memory = memoryRes.data || []
@@ -43,6 +45,7 @@ export async function GET() {
   const usageLogs = usageLogsRes.data || []
   const tracked = trackedRes.data || []
   const paidResults = paidResultsRes.data || []
+  const videoIdeas = videoIdeasRes.data || []
   function normalizeActivityKey(value: string | null | undefined): string {
     return String(value || '')
       .toLowerCase()
@@ -70,7 +73,7 @@ export async function GET() {
       return Number.isFinite(paidTime) && Math.abs(paidTime - t) <= 10 * 60 * 1000
     })
   }
-  const hasAnyActivity = memory.length > 0 || packages.length > 0 || audits.length > 0 || usageLogs.length > 0 || paidResults.length > 0
+  const hasAnyActivity = memory.length > 0 || packages.length > 0 || audits.length > 0 || usageLogs.length > 0 || paidResults.length > 0 || videoIdeas.length > 0
 
   // ── Trend alakulás — a témák egy részéhez tartozik tracked_trend_candidate ──
   // (lásd lib/trend-tracking.ts). Ha van hozzá legutóbbi snapshot, azt a
@@ -155,7 +158,7 @@ export async function GET() {
   // A puszta kredit-tranzakció naplósorokat (amik már egy fenti termék-sorral
   // duplikálnának, pl. video_package/video_audit) kiszűrjük.
   type ActivityItem = {
-    type: 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'viral_score'
+    type: 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'transcript_extract' | 'viral_score'
     title: string
     topic: string
     date: string
@@ -176,6 +179,7 @@ export async function GET() {
     trend_feed_refresh: { type: 'opportunity', label: 'Trend Feed frissítés', href: '/dashboard' },
     similar_videos: { type: 'similar_videos', label: 'Similar Videos keresés', href: '/dashboard/similar-videos' },
     script_extract: { type: 'script_extract', label: 'Script kinyerve', href: '/dashboard/script-extractor' },
+    transcript_extract: { type: 'transcript_extract', label: 'Transcript kinyerve', href: '/dashboard/transcript' },
     source_video_extract: { type: 'script_extract', label: 'Script kinyerve', href: '/dashboard/script-extractor' },
     viral_score: { type: 'viral_score', label: 'Viral Score elemzés', href: '/dashboard/viral-score' },
   }
@@ -235,6 +239,7 @@ export async function GET() {
         video_package: '/dashboard/video-package',
         content_gap: '/dashboard',
         script_extract: '/dashboard/script-extractor',
+        transcript_extract: '/dashboard/transcript',
         analyzer: '/dashboard',
       }
       const toolTypeMap: Record<string, ActivityItem['type']> = {
@@ -245,6 +250,7 @@ export async function GET() {
         video_package: 'video_package',
         content_gap: 'opportunity',
         script_extract: 'script_extract',
+        transcript_extract: 'transcript_extract',
         analyzer: 'script_extract',
       }
       const labelMap: Record<string, string> = {
@@ -254,6 +260,7 @@ export async function GET() {
         video_audit: 'Videó audit',
         video_package: 'Videócsomag',
         script_extract: 'Script Extractor',
+        transcript_extract: 'Auto Transcript',
         content_gap: 'Content Gap',
         analyzer: 'Elemzés',
       }
@@ -284,7 +291,7 @@ export async function GET() {
         const paidToolType = l.feature_name === 'opportunity_engine' || l.feature_name === 'opportunity_explain'
           ? 'opportunity_engine'
           : l.feature_name
-        const paidResultOnlyFeatures = new Set(['script_extract', 'source_video_extract'])
+        const paidResultOnlyFeatures = new Set(['script_extract', 'transcript_extract', 'source_video_extract'])
         if (paidResultOnlyFeatures.has(l.feature_name)) {
           return false
         }
@@ -351,6 +358,126 @@ export async function GET() {
     }
   }
 
+  type VideoIdeaSummary = {
+    id: string
+    title: string | null
+    topic: string | null
+    platform: string | null
+    language: string | null
+    market: string | null
+    content_format: string | null
+    viral_score: number | null
+    opportunity_score: number | null
+    competition_score: number | null
+    proof_summary: string | null
+    video_package_id: string | null
+    calendar_status: string | null
+    publish_status: string | null
+    workflow_status: string | null
+    updated_at: string
+    created_at: string
+  }
+
+  function ideaScore(idea: VideoIdeaSummary): number {
+    const opportunity = Number(idea.opportunity_score || 0)
+    const viral = Number(idea.viral_score || 0)
+    const statusBoost: Record<string, number> = {
+      ready_to_produce: 45,
+      validated: 35,
+      validating: 20,
+      new_idea: 10,
+      scheduled: 5,
+      published: 0,
+      audited: 0,
+      rejected: -80,
+      archived: -100,
+    }
+    const packageBoost = idea.video_package_id ? 30 : 0
+    return Math.round((opportunity * 0.55) + (viral * 0.35) + (statusBoost[String(idea.workflow_status || 'new_idea')] || 0) + packageBoost)
+  }
+
+  function ideaHref(idea: VideoIdeaSummary): string {
+    if (idea.video_package_id) return `/dashboard/video-package?id=${idea.video_package_id}`
+    if (idea.workflow_status === 'ready_to_produce') return `/dashboard/video-package?topic=${encodeURIComponent(idea.topic || idea.title || '')}`
+    if (idea.viral_score != null) return `/dashboard/video-package?topic=${encodeURIComponent(idea.topic || idea.title || '')}`
+    return `/dashboard/similar-videos?topic=${encodeURIComponent(idea.topic || idea.title || '')}`
+  }
+
+  function nextActionForIdea(idea: VideoIdeaSummary) {
+    if (idea.video_package_id || idea.workflow_status === 'ready_to_produce') {
+      return {
+        label: 'Gyártási csomag megnyitása',
+        reason: 'Ez az ötlet már gyártásra kész állapotban van.',
+        href: ideaHref(idea),
+        tone: 'ready',
+      }
+    }
+    if (idea.workflow_status === 'validated' || (idea.viral_score || 0) >= 70 || (idea.opportunity_score || 0) >= 75) {
+      return {
+        label: 'Videócsomag készítése',
+        reason: 'Elég erős jel látszik ahhoz, hogy csomag készüljön belőle.',
+        href: `/dashboard/video-package?topic=${encodeURIComponent(idea.topic || idea.title || '')}`,
+        tone: 'package',
+      }
+    }
+    return {
+      label: 'Piaci bizonyíték keresése',
+      reason: 'Még validálni kell hasonló videókkal vagy Viral Score-ral.',
+      href: `/dashboard/similar-videos?topic=${encodeURIComponent(idea.topic || idea.title || '')}`,
+      tone: 'validate',
+    }
+  }
+
+  const activeIdeas = (videoIdeas as VideoIdeaSummary[])
+    .filter(idea => !['rejected', 'archived', 'published'].includes(String(idea.workflow_status)))
+    .sort((a, b) => ideaScore(b) - ideaScore(a))
+
+  const readyIdeas = activeIdeas.filter(idea => idea.video_package_id || idea.workflow_status === 'ready_to_produce').slice(0, 4)
+  const topIdea = activeIdeas[0] || null
+  const topIdeaAction = topIdea ? nextActionForIdea(topIdea) : null
+  const commandCenter = {
+    has_video_ideas: videoIdeas.length > 0,
+    top_idea: topIdea ? {
+      id: topIdea.id,
+      title: topIdea.title || topIdea.topic || 'Cím nélkül',
+      topic: topIdea.topic || topIdea.title || 'Cím nélkül',
+      platform: topIdea.platform || 'youtube',
+      workflow_status: topIdea.workflow_status || 'new_idea',
+      opportunity_score: topIdea.opportunity_score,
+      viral_score: topIdea.viral_score,
+      proof_summary: topIdea.proof_summary,
+      video_package_id: topIdea.video_package_id,
+      href: ideaHref(topIdea),
+      next_action: topIdeaAction,
+    } : null,
+    ready_to_create: readyIdeas.map(idea => ({
+      id: idea.id,
+      title: idea.title || idea.topic || 'Cím nélkül',
+      topic: idea.topic || idea.title || 'Cím nélkül',
+      href: ideaHref(idea),
+      video_package_id: idea.video_package_id,
+      opportunity_score: idea.opportunity_score,
+      viral_score: idea.viral_score,
+      updated_at: idea.updated_at,
+    })),
+    pipeline: {
+      total: videoIdeas.length,
+      new_idea: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'new_idea').length,
+      validating: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'validating').length,
+      validated: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'validated').length,
+      ready_to_produce: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'ready_to_produce').length,
+      scheduled: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'scheduled').length,
+      published: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'published').length,
+      rejected: videoIdeas.filter((idea: VideoIdeaSummary) => idea.workflow_status === 'rejected').length,
+    },
+    next_best_action: topIdeaAction || {
+      label: 'Videólehetőségek keresése',
+      reason: 'Még nincs központi Video Idea adat. Indíts egy validált témakeresést.',
+      href: '/dashboard/opportunities',
+      tone: 'start',
+    },
+  }
+
   // ── YouTube jelek — passzívan gyűjtött snapshot adatvagyon (globális, nem user-specifikus) ──
   const youtubeSignals = {
     videos_seen: videosSeenRes.count ?? 0,
@@ -367,6 +494,7 @@ export async function GET() {
     memory: memorySummary,
     fact_safety: factSafety,
     recent_activity: activity,
+    command_center: commandCenter,
     content_direction_insight: contentDirectionInsight,
     youtube_signals: youtubeSignals,
   })

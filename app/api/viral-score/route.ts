@@ -10,6 +10,16 @@ import { fetchSerperNews, computeSerperFreshness, getSerperHealthStatus, type Se
 import { buildViralScoreHash, normalizeTopic, cacheStatusFor, getCachedViralScore, touchLastOpened, saveViralScoreResult } from '@/lib/viral-score-cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput, polishHungarianText } from '@/lib/hungarian-output-polish'
+import { createAdminClient } from '@/lib/supabase-server'
+import {
+  buildVideoIdeaInputHash,
+  ensureVideoIdea,
+  addVideoIdeaProofSignal,
+  logVideoIdeaEvent,
+  getVideoIdeaWorkflowStatus,
+  forwardWorkflowStatus,
+  type VideoIdeaWorkflowStatus,
+} from '@/lib/video-ideas/video-idea-service'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
@@ -466,6 +476,73 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     })
     if (!saveRes.success) {
       console.error('[ViralScore] KRITIKUS: eredmény mentése sikertelen, a user már fizetett érte:', saveRes.error)
+    }
+
+    // ── Video Idea — proof signal bekötés ───────────────────────
+    // A Viral Score eredményét (score, top videók, webes források) a topic
+    // mögötti Video Idea bizonyítékaként mentjük. Hiba itt sosem törheti el
+    // a fő választ — a service funkciók maguk is try/catch-eltek.
+    const ideaPlatform = platform || 'youtube'
+    const ideaLanguage = (region || 'HU') === 'US' ? 'en' : 'hu'
+    const ideaMarket = region || 'HU'
+    const videoIdeaHash = buildVideoIdeaInputHash({ userId, topic, platform: ideaPlatform, language: ideaLanguage, market: ideaMarket })
+    const videoIdeaAdmin = createAdminClient()
+    const existingWorkflowStatus = await getVideoIdeaWorkflowStatus(videoIdeaAdmin, userId, videoIdeaHash)
+    const candidateStatus: VideoIdeaWorkflowStatus =
+      decision.decision_status === 'make_now' ? 'validated'
+      : decision.decision_status === 'avoid' ? 'new_idea'
+      : 'validating'
+    const strength = verdict === 'strong' ? 'strong' : verdict === 'moderate' ? 'medium' : 'weak'
+
+    const ideaResult = await ensureVideoIdea(videoIdeaAdmin, {
+      userId,
+      topic,
+      platform: ideaPlatform,
+      language: ideaLanguage,
+      market: ideaMarket,
+      inputHash: videoIdeaHash,
+      viralScore: score,
+      workflowStatus: forwardWorkflowStatus(existingWorkflowStatus, candidateStatus),
+      proofSummary: decision.decision_reason,
+    })
+
+    if (ideaResult.success && ideaResult.idea) {
+      await Promise.all([
+        ...topVideos.map(video => addVideoIdeaProofSignal(videoIdeaAdmin, {
+          userId,
+          videoIdeaId: ideaResult.idea!.id,
+          signalType: 'competitor_video',
+          sourceTool: 'viral_score',
+          sourceId: video.video_id,
+          title: video.title,
+          url: video.url,
+          channelTitle: video.channel_title,
+          publishedAt: video.published_at,
+          viewCount: video.view_count,
+          strength,
+          reason: decision.decision_reason,
+          payload: { score, verdict },
+        })),
+        ...(result.web_sources || []).slice(0, 3).map(source => addVideoIdeaProofSignal(videoIdeaAdmin, {
+          userId,
+          videoIdeaId: ideaResult.idea!.id,
+          signalType: 'web_source',
+          sourceTool: 'viral_score',
+          title: source.title,
+          url: source.url,
+          strength,
+          reason: 'Webes visszhang (Serper hírkeresés)',
+          payload: { source_name: source.source, date: source.date },
+        })),
+      ])
+
+      await logVideoIdeaEvent(videoIdeaAdmin, {
+        userId,
+        videoIdeaId: ideaResult.idea.id,
+        eventType: 'viral_score_completed',
+        sourceTool: 'viral_score',
+        payload: { topic, score, verdict, video_count: videoCount, decision_status: decision.decision_status },
+      })
     }
 
     return NextResponse.json({

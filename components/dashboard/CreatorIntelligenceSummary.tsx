@@ -7,7 +7,7 @@ import Sparkline from '@/components/dashboard/Sparkline'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 
 interface ActivityItem {
-  type: 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'viral_score'
+  type: 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'transcript_extract' | 'viral_score'
   title: string
   topic: string
   date: string
@@ -46,6 +46,7 @@ const ACTIVITY_ICON: Record<ActivityItem['type'], { icon: string; color: string 
   opportunity: { icon: 'ti-bulb', color: '#3B82F6' },
   similar_videos: { icon: 'ti-player-play', color: '#8B5CF6' },
   script_extract: { icon: 'ti-file-text', color: '#F59E0B' },
+  transcript_extract: { icon: 'ti-microphone', color: '#06B6D4' },
   viral_score: { icon: 'ti-chart-bar', color: '#8B5CF6' },
 }
 
@@ -56,6 +57,7 @@ const ACTIVITY_TYPE_LABEL: Record<ActivityItem['type'], string> = {
   opportunity: 'Opportunity',
   similar_videos: 'Similar Videos',
   script_extract: 'Script',
+  transcript_extract: 'Transcript',
   viral_score: 'Viral Score',
 }
 

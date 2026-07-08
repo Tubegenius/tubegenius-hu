@@ -8,6 +8,7 @@ export type PaidToolType =
   | 'video_audit'
   | 'video_package'
   | 'script_extract'
+  | 'transcript_extract'
   | 'content_gap'
   | 'analyzer'
 

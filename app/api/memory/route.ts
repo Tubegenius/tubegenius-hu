@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
+import { ensureVideoIdea, linkVideoIdeaToLegacyRecord, logVideoIdeaEvent } from '@/lib/video-ideas/video-idea-service'
 import type { TopicState } from '@/types'
 
 // GET: temak listazasa
@@ -80,6 +81,37 @@ export async function POST(request: NextRequest) {
   if (error) {
     console.error('Memory POST error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  const ideaResult = await ensureVideoIdea(admin, {
+    userId: user.id,
+    title: topic,
+    topic,
+    platform: platform || 'youtube',
+    opportunityScore: opportunity_score ?? null,
+    viralScore: viral_score ?? null,
+    workflowStatus: state === 'rejected' ? 'rejected' : state === 'completed' ? 'validated' : 'new_idea',
+    metadata: {
+      source_context: source_context || 'creator_memory',
+      search_keyword: search_keyword || null,
+      quality_status: quality_status || null,
+    },
+  })
+
+  if (ideaResult.idea?.id && data?.id) {
+    await linkVideoIdeaToLegacyRecord(admin, {
+      table: 'creator_memory',
+      userId: user.id,
+      recordId: data.id,
+      videoIdeaId: ideaResult.idea.id,
+    })
+    await logVideoIdeaEvent(admin, {
+      userId: user.id,
+      videoIdeaId: ideaResult.idea.id,
+      eventType: state === 'rejected' ? 'idea_rejected' : 'idea_saved',
+      sourceTool: source_context || 'creator_memory',
+      payload: { topic, search_keyword, state: state || 'saved' },
+    })
   }
 
   // Amit a user explicit ment, azt limitáltan trackeljük (háttérfrissítés célra) —

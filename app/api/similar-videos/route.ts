@@ -16,6 +16,14 @@ import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { normalizeTopic as normalizeTopicForHash, buildSearchContextHash, getCachedSearch, touchLastOpened, saveSearchResult } from '@/lib/similar-videos-cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
+import {
+  buildVideoIdeaInputHash,
+  ensureVideoIdea,
+  addVideoIdeaProofSignal,
+  logVideoIdeaEvent,
+  getVideoIdeaWorkflowStatus,
+  forwardWorkflowStatus,
+} from '@/lib/video-ideas/video-idea-service'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MIN_SIMILAR_VIDEO_RELEVANCE = 60
@@ -779,6 +787,61 @@ export async function POST(request: NextRequest) {
         results: polishedFinalVideos,
         creditCost: usageCheck.cost > 0 ? usageCheck.cost : 0,
       })
+
+      // ── Video Idea — proof signal bekötés ─────────────────────
+      // A Similar Videos találatait a topic mögötti Video Idea bizonyítékaként
+      // mentjük, hogy a Creator OS command center ne csak témát, hanem valós
+      // piaci jelet lásson. Hiba itt sosem törheti el a fő választ — a service
+      // funkciók maguk is try/catch-eltek.
+      const ideaPlatform = platform || 'youtube'
+      const ideaLanguage = language || (regionCode === 'US' ? 'en' : 'hu')
+      const ideaMarket = regionCode
+      const videoIdeaHash = buildVideoIdeaInputHash({ userId, topic, platform: ideaPlatform, language: ideaLanguage, market: ideaMarket })
+      const videoIdeaAdmin = createAdminClient()
+      const existingWorkflowStatus = await getVideoIdeaWorkflowStatus(videoIdeaAdmin, userId, videoIdeaHash)
+      const readyCount = polishedFinalVideos.filter(v => v.decision_status === 'ready').length
+      const watchCount = polishedFinalVideos.filter(v => v.decision_status === 'watch').length
+      const candidateStatus = readyCount > 0 || watchCount > 0 ? 'validated' : 'validating'
+
+      const ideaResult = await ensureVideoIdea(videoIdeaAdmin, {
+        userId,
+        topic,
+        platform: ideaPlatform,
+        language: ideaLanguage,
+        market: ideaMarket,
+        inputHash: videoIdeaHash,
+        workflowStatus: forwardWorkflowStatus(existingWorkflowStatus, candidateStatus),
+        proofSummary: `Similar Videos: ${polishedFinalVideos.length} találat (${readyCount} ajánlott, ${watchCount} figyelendő).`,
+      })
+
+      if (ideaResult.success && ideaResult.idea) {
+        const proofVideos = polishedFinalVideos.filter(v => v.decision_status !== 'rejected').slice(0, 8)
+        const strengthFor = (status: string) => status === 'ready' ? 'strong' : status === 'watch' ? 'medium' : 'weak'
+        await Promise.all(proofVideos.map(video => addVideoIdeaProofSignal(videoIdeaAdmin, {
+          userId,
+          videoIdeaId: ideaResult.idea!.id,
+          signalType: 'similar_video',
+          sourceTool: 'similar_videos',
+          sourceId: video.video_id,
+          title: video.title,
+          url: video.url,
+          channelTitle: video.channel_title,
+          publishedAt: video.published_at,
+          viewCount: video.view_count,
+          relevanceScore: video.relevance_score,
+          strength: strengthFor(video.decision_status),
+          reason: video.reason,
+          payload: { decision_status: video.decision_status, decision_score: video.decision_score, badges: video.badges },
+        })))
+
+        await logVideoIdeaEvent(videoIdeaAdmin, {
+          userId,
+          videoIdeaId: ideaResult.idea.id,
+          eventType: 'similar_videos_completed',
+          sourceTool: 'similar_videos',
+          payload: { topic, video_count: polishedFinalVideos.length, ready_count: readyCount, watch_count: watchCount },
+        })
+      }
     }
 
     return NextResponse.json({

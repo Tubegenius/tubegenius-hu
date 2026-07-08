@@ -14,6 +14,7 @@ export type FeatureName =
   | 'viral_score'
   | 'opportunity_explain'
   | 'script_extract'
+  | 'transcript_extract'
   | 'video_audit'
   | 'hashtag_caption'
   | 'trend_deep_refresh'
@@ -25,6 +26,7 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
   viral_score: 1,
   video_package_shorts: 2,
   script_extract: 3,
+  transcript_extract: 3,
   trend_deep_refresh: 1,
   video_audit: 4,
   video_package_long: 6,

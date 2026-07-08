@@ -84,6 +84,88 @@ interface DashboardStats {
   has_data: boolean
 }
 
+type DashboardActivityType = 'video_package' | 'video_audit' | 'memory' | 'opportunity' | 'similar_videos' | 'script_extract' | 'transcript_extract' | 'viral_score'
+
+interface DashboardSummaryLite {
+  has_data: boolean
+  command_center?: {
+    has_video_ideas: boolean
+    top_idea: {
+      id: string
+      title: string
+      topic: string
+      platform: string
+      workflow_status: string
+      opportunity_score: number | null
+      viral_score: number | null
+      proof_summary: string | null
+      video_package_id: string | null
+      href: string
+      next_action: {
+        label: string
+        reason: string
+        href: string
+        tone: string
+      } | null
+    } | null
+    ready_to_create: Array<{
+      id: string
+      title: string
+      topic: string
+      href: string
+      video_package_id: string | null
+      opportunity_score: number | null
+      viral_score: number | null
+      updated_at: string
+    }>
+    pipeline: {
+      total: number
+      new_idea: number
+      validating: number
+      validated: number
+      ready_to_produce: number
+      scheduled: number
+      published: number
+      rejected: number
+    }
+    next_best_action: {
+      label: string
+      reason: string
+      href: string
+      tone: string
+    }
+  }
+  recent_activity: Array<{
+    type: DashboardActivityType
+    title: string
+    topic: string
+    href: string
+    date: string
+  }>
+}
+
+function normalizeTopicKey(value: string | null | undefined): string {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function activityMatchesTopic(activityTopic: string | null | undefined, topic: DashboardOpportunityTopic | null): boolean {
+  if (!topic) return false
+  const activityKey = normalizeTopicKey(activityTopic)
+  const titleKey = normalizeTopicKey(topic.title)
+  const keywordKey = normalizeTopicKey(topic.keyword)
+  if (!activityKey) return false
+  return (
+    (!!titleKey && (activityKey.includes(titleKey) || titleKey.includes(activityKey))) ||
+    (!!keywordKey && (activityKey.includes(keywordKey) || keywordKey.includes(activityKey)))
+  )
+}
+
 // ─── Entry Points ─────────────────────────────────────────────
 function EntryPointCards({ stats }: { stats: DashboardStats | null }) {
   const entryPoints = [
@@ -501,6 +583,102 @@ function CreatorPipelineStrip() {
   )
 }
 
+function CreatorCommandCenter({ summary }: { summary: DashboardSummaryLite | null }) {
+  const command = summary?.command_center
+  if (!command) return null
+
+  const topIdea = command.top_idea
+  const action = command.next_best_action
+  const pipeline = command.pipeline
+  const actionColor = action.tone === 'ready' ? '#22C55E' : action.tone === 'package' ? '#3B82F6' : action.tone === 'validate' ? '#F59E0B' : '#8B5CF6'
+
+  return (
+    <div className="rounded-2xl p-5 mb-6" style={{ background: 'rgba(255,255,255,0.045)', border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 18px 50px rgba(0,0,0,0.30)' }}>
+      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 mb-5">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#22D3EE' }}>Creator központ</p>
+          <h2 className="text-lg font-bold" style={{ color: '#F8FAFC' }}>
+            {topIdea ? 'A következő legjobb gyártási döntésed' : 'Építsünk központi ötletpipeline-t'}
+          </h2>
+          <p className="text-sm mt-1 max-w-2xl" style={{ color: '#CBD5E1' }}>
+            {topIdea
+              ? 'A WillViral most már Video Idea-ként kezeli az ötleteket, így a validálás, csomag és memória egy folyamatba kerül.'
+              : 'Még nincs Video Idea adat. Indíts egy témakeresést vagy ments egy ötletet, és innen fog összeállni a creator OS pipeline.'}
+          </p>
+        </div>
+        <Link href={action.href} className="px-4 py-2.5 rounded-xl text-sm font-semibold text-center flex-shrink-0"
+          style={{ background: `${actionColor}1A`, border: `1px solid ${actionColor}40`, color: actionColor }}>
+          {action.label}
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-4">
+        <div className="rounded-xl p-4" style={{ background: 'rgba(8,13,24,0.55)', border: `1px solid ${actionColor}26` }}>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${actionColor}18`, color: actionColor }}>
+              <i className={`ti ${topIdea?.video_package_id ? 'ti-package' : action.tone === 'validate' ? 'ti-shield-check' : 'ti-bulb'}`} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold mb-1" style={{ color: actionColor }}>{action.label}</p>
+              <h3 className="text-base font-semibold leading-snug" style={{ color: '#F8FAFC' }}>
+                {topIdea?.title || 'Keress egy validálható videólehetőséget'}
+              </h3>
+              <p className="text-xs leading-relaxed mt-2" style={{ color: '#CBD5E1' }}>{action.reason}</p>
+              {topIdea?.proof_summary && (
+                <p className="text-xs leading-relaxed mt-2" style={{ color: '#94A3B8' }}>{topIdea.proof_summary}</p>
+              )}
+            </div>
+            {topIdea && (
+              <div className="flex gap-2 flex-shrink-0">
+                {topIdea.opportunity_score != null && (
+                  <div className="text-center">
+                    <div className="text-lg font-bold" style={{ color: scoreColor(topIdea.opportunity_score) }}>{topIdea.opportunity_score}</div>
+                    <div className="text-[10px]" style={{ color: '#94A3B8' }}>Opp</div>
+                  </div>
+                )}
+                {topIdea.viral_score != null && (
+                  <div className="text-center">
+                    <div className="text-lg font-bold" style={{ color: scoreColor(topIdea.viral_score) }}>{topIdea.viral_score}</div>
+                    <div className="text-[10px]" style={{ color: '#94A3B8' }}>Viral</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 lg:grid-cols-2 gap-2">
+          {[
+            { label: 'Ötlet', value: pipeline.total, color: '#3B82F6' },
+            { label: 'Validálás', value: pipeline.validating + pipeline.validated, color: '#F59E0B' },
+            { label: 'Gyártható', value: pipeline.ready_to_produce, color: '#22C55E' },
+            { label: 'Publikált', value: pipeline.published, color: '#8B5CF6' },
+          ].map(item => (
+            <div key={item.label} className="rounded-xl p-3" style={{ background: `${item.color}0D`, border: `1px solid ${item.color}22` }}>
+              <div className="text-xl font-black" style={{ color: item.color }}>{item.value}</div>
+              <div className="text-xs" style={{ color: '#CBD5E1' }}>{item.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {command.ready_to_create.length > 0 && (
+        <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <p className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#94A3B8' }}>Gyártásra vár</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {command.ready_to_create.slice(0, 2).map(idea => (
+              <Link key={idea.id} href={idea.href} className="rounded-xl px-3 py-2 flex items-center justify-between gap-3 transition-all hover:bg-white/[0.03]" style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span className="text-sm truncate" style={{ color: '#F8FAFC' }}>{idea.title}</span>
+                <i className="ti ti-arrow-up-right flex-shrink-0" style={{ color: '#22C55E' }} />
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FirstRunLaunchPad({
   profile,
   loading,
@@ -569,6 +747,154 @@ function FirstRunLaunchPad({
         })}
       </div>
     </div>
+  )
+}
+
+function FirstVideoFlow({
+  profile,
+  topic,
+  stats,
+  summary,
+  loading,
+}: {
+  profile: CreatorProfile | null
+  topic: DashboardOpportunityTopic | null
+  stats: DashboardStats | null
+  summary: DashboardSummaryLite | null
+  loading: boolean
+}) {
+  if (!profile?.niche) return null
+
+  const topicActivities = summary?.recent_activity?.filter(activity => activityMatchesTopic(activity.topic, topic)) || []
+  const hasSimilarForTopic = topicActivities.some(activity => activity.type === 'similar_videos')
+  const hasViralForTopic = topicActivities.some(activity => activity.type === 'viral_score')
+  const hasPackageForTopic = topicActivities.some(activity => activity.type === 'video_package')
+  const hasAnyPackage = (stats?.total_packages || 0) > 0
+  const validationDone = hasSimilarForTopic || hasViralForTopic
+  const topicReady = topic ? isProductionCandidate(topic) : false
+  const topicNeedsValidation = !!topic && !topicReady
+  const topicText = topic ? cleanText(topic.title) : profile.niche
+  const similarHref = topic ? `/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || topic.title)}` : '/dashboard/opportunities'
+  const viralHref = topic ? `/dashboard/viral-score?topic=${encodeURIComponent(topic.keyword || topic.title)}` : '/dashboard/viral-score'
+  const packageHref = topic ? buildPackageUrl(topic) : '/dashboard/video-package'
+
+  const steps = [
+    {
+      label: '1. Találj témát',
+      body: topic
+        ? 'Van egy kiinduló téma, amit tovább lehet vinni.'
+        : loading
+          ? 'Most keressük az első validálható témát.'
+          : 'Kezdj egy Opportunity kereséssel a profilod alapján.',
+      state: topic ? 'done' : loading ? 'active' : 'next',
+      href: '/dashboard/opportunities',
+      cta: topic ? 'Téma részletei' : 'Téma keresése',
+      color: '#3B82F6',
+    },
+    {
+      label: '2. Validáld',
+      body: validationDone
+        ? 'Ehhez a témához már van validációs jel. Innen dönthető el, mehet-e gyártásba.'
+        : topicReady
+        ? 'A jel elég erős, de a Similar Videos tovább erősíti a döntést.'
+        : topicNeedsValidation
+          ? 'Ez még kutatási irány. Előbb nézd meg, vannak-e erős hasonló videók.'
+          : 'A téma után jön a Similar Videos és Viral Score ellenőrzés.',
+      state: validationDone ? 'done' : topic ? 'active' : 'locked',
+      href: similarHref,
+      cta: hasViralForTopic && !hasSimilarForTopic ? 'Similar Videos' : 'Similar Videos',
+      color: '#F59E0B',
+    },
+    {
+      label: '3. Készíts csomagot',
+      body: hasPackageForTopic
+        ? 'Ehhez a témához már készült videócsomag. Következőnek új témát vihetsz végig.'
+        : topicReady || validationDone
+          ? 'Most ebből már készülhet hook, narráció, cím és gyártási brief.'
+          : hasAnyPackage
+            ? 'Van már korábbi videócsomagod, de ennél a témánál előbb validálj.'
+          : 'A videócsomag akkor legyen a következő lépés, ha a validáció átment.',
+      state: hasPackageForTopic ? 'done' : (topicReady || validationDone) ? 'active' : 'locked',
+      href: packageHref,
+      cta: hasPackageForTopic ? 'Új téma' : 'Videócsomag',
+      color: '#22C55E',
+    },
+  ] as const
+
+  const flowComplete = !!topic && hasPackageForTopic
+  const primaryStep = steps.find(step => step.state === 'active') || steps.find(step => step.state === 'next') || steps[2]
+  const primaryHref = flowComplete ? '/dashboard/opportunities' : primaryStep.label.startsWith('3.') ? packageHref : primaryStep.href
+  const primaryLabel = flowComplete ? 'Új téma keresése' : 'Következő lépés'
+
+  return (
+    <section className="mb-6 rounded-2xl overflow-hidden" style={{ background: '#0E1422', border: '1px solid rgba(255,255,255,0.08)' }}>
+      <div className="px-5 py-4 border-b border-white/10 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#22C55E' }}>Első videó elkészítése</p>
+          <h2 className="text-lg font-bold truncate" style={{ color: '#F8FAFC' }}>{topicText}</h2>
+          <p className="text-sm mt-1" style={{ color: '#CBD5E1' }}>
+            Egy útvonal, nem menülista: téma, bizonyíték, majd gyártható videócsomag.
+          </p>
+          {topic && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {[
+                { label: 'Similar Videos', done: hasSimilarForTopic },
+                { label: 'Viral Score', done: hasViralForTopic },
+                { label: 'Videócsomag', done: hasPackageForTopic },
+              ].map(item => (
+                <span key={item.label} className="text-xs px-2 py-1 rounded-full"
+                  style={{ background: item.done ? 'rgba(34,197,94,0.12)' : 'rgba(255,255,255,0.04)', color: item.done ? '#22C55E' : '#94A3B8', border: `1px solid ${item.done ? 'rgba(34,197,94,0.25)' : 'rgba(255,255,255,0.08)'}` }}>
+                  {item.done ? '✓' : '–'} {item.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Link href={primaryHref}
+            onClick={() => { if (topic && !flowComplete && primaryStep.label.startsWith('3.')) storePackageContext(topic) }}
+            className="px-4 py-2 rounded-xl text-sm font-semibold"
+            style={{ background: 'linear-gradient(135deg, #22C55E, #3B82F6)', color: '#fff' }}>
+            {primaryLabel}
+          </Link>
+          {topic && (
+            <Link href={viralHref} className="px-4 py-2 rounded-xl text-sm"
+              style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', color: '#A78BFA' }}>
+              Viral Score
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
+        {steps.map(step => {
+          const isLocked = step.state === 'locked'
+          const activeBorder = step.state === 'active' ? step.color : 'rgba(255,255,255,0.06)'
+          return (
+            <Link key={step.label}
+              href={isLocked ? '#' : hasPackageForTopic && step.label.startsWith('3.') ? '/dashboard/opportunities' : step.href}
+              onClick={e => {
+                if (isLocked) e.preventDefault()
+                if (!isLocked && topic && !hasPackageForTopic && step.label.startsWith('3.')) storePackageContext(topic)
+              }}
+              className="p-5 transition-all"
+              style={{ borderRight: '1px solid rgba(255,255,255,0.06)', borderTop: `2px solid ${activeBorder}`, opacity: isLocked ? 0.55 : 1 }}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
+                  style={{ background: `${step.color}1A`, color: step.color }}>
+                  {step.state === 'done' ? '✓' : step.state === 'locked' ? '-' : '→'}
+                </span>
+                <p className="text-sm font-semibold" style={{ color: '#F8FAFC' }}>{step.label}</p>
+              </div>
+              <p className="text-xs leading-relaxed mb-3" style={{ color: '#CBD5E1' }}>{step.body}</p>
+              <span className="text-xs font-semibold" style={{ color: isLocked ? '#64748B' : step.color }}>
+                {isLocked ? 'Előbb az előző lépés' : step.cta}
+              </span>
+            </Link>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -737,6 +1063,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [summary, setSummary] = useState<DashboardSummaryLite | null>(null)
   const [opportunityMessage, setOpportunityMessage] = useState<string | null>(null)
   const [opportunityError, setOpportunityError] = useState<string | null>(null)
   const [researchCount, setResearchCount] = useState(0)
@@ -744,6 +1071,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
 
   useEffect(() => {
     fetch('/api/dashboard-stats').then(r => r.json()).then(setStats).catch(() => {})
+    fetch('/api/dashboard/summary').then(r => r.json()).then(setSummary).catch(() => {})
     if (profile?.niche && !generated) {
       // Először sessionStorage-ból próbálunk (force_refresh eredménye)
       const savedTopics = sessionStorage.getItem('willviral_dashboard_topics')
@@ -921,6 +1249,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
 
   const bestTopic = pickBestTopic(topics)
   const showFirstRunLaunchPad = searchParams.get('setup') === 'complete' || stats?.has_data === false
+  const showFirstVideoFlow = !!profile?.niche && (showFirstRunLaunchPad || (stats?.total_packages || 0) === 0)
 
   return (
     <div className="max-w-5xl mx-auto animate-fade-in">
@@ -948,8 +1277,19 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         />
       )}
 
+      {showFirstVideoFlow && (
+        <FirstVideoFlow
+          profile={profile}
+          topic={bestTopic}
+          stats={stats}
+          summary={summary}
+          loading={loading}
+        />
+      )}
+
       <TrendFeedHistory />
       <CreatorPipelineStrip />
+      <CreatorCommandCenter summary={summary} />
 
       {/* 2. Main Recommendation Card */}
       {loading && (
