@@ -1,4 +1,5 @@
 import { MODELS } from './models'
+import { callAIProvider, extractJson } from './services/ai-provider-service'
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!
 
@@ -91,31 +92,15 @@ KRITIKUS JSON SZABALYOK:
 }`
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: MODELS.fast,
-        max_tokens: 400,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+    const aiCall = await callAIProvider({
+      model: MODELS.fast,
+      maxTokens: 400,
+      messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: 'similar_videos_query_expansion',
+      promptVersion: 'v1',
     })
 
-    const data = await res.json()
-    const text = data.content?.[0]?.text || ''
-
-    let cleaned = text.replace(/```json|```/g, '').trim()
-    const firstBrace = cleaned.indexOf('{')
-    const lastBrace = cleaned.lastIndexOf('}')
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      cleaned = cleaned.slice(firstBrace, lastBrace + 1)
-    }
-
-    const parsed = JSON.parse(cleaned) as SimilarQueryExpansion
+    const parsed = extractJson<SimilarQueryExpansion>(aiCall.text)
 
     if (!parsed.hu_queries || !parsed.en_queries) {
       return fallbackExpansion(input)
