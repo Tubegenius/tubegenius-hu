@@ -17,14 +17,20 @@ interface VideoPackageResult {
   intensity: string
   goal: string
   hook: string
+  hook_variations?: string[]
   narration: string
   scene_structure: Scene[]
   broll_ideas: string[]
   thumbnail_texts: string[]
+  thumbnail_concept?: string | null
   title_variations: string[]
   caption: string
   description: string
   hashtags: { viral: string[]; niche: string[]; general: string[] }
+  pinned_comment?: string | null
+  why_it_works?: string | null
+  risks?: string[]
+  production_checklist?: string[]
   upload_times: { primary: string; secondary: string; reason: string }
   cta: string
   timestamps?: string[]
@@ -245,6 +251,7 @@ export default function VideoPackagePage() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [savedPackageId, setSavedPackageId] = useState<string | null>(null)
+  const [calendarStatus, setCalendarStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [factSources, setFactSources] = useState<{ title: string; snippet: string; url: string; source_type: string }[]>([])
   const [loadingSavedPackage, setLoadingSavedPackage] = useState(false)
   const searchKeyword = searchParams.get('keyword') || ''
@@ -705,6 +712,27 @@ export default function VideoPackagePage() {
     finally { setLoading(false) }
   }
 
+  async function saveToCalendar() {
+    if (!result) return
+    setCalendarStatus('saving')
+    try {
+      const ideaRes = await fetch('/api/video-ideas', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: result.topic, platform: result.platform, workflow_status: 'ready_to_produce' }),
+      })
+      const ideaData = await ideaRes.json()
+      if (!ideaRes.ok || !ideaData.idea?.id) { setCalendarStatus('error'); return }
+
+      const patchRes = await fetch('/api/video-ideas', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: ideaData.idea.id, calendar_status: 'scheduled' }),
+      })
+      setCalendarStatus(patchRes.ok ? 'saved' : 'error')
+    } catch {
+      setCalendarStatus('error')
+    }
+  }
+
   async function autoSavePackage(pkg: VideoPackageResult) {
     try {
       const res = await fetch('/api/video-packages', {
@@ -1083,6 +1111,15 @@ export default function VideoPackagePage() {
                 )}
                 <div className="flex gap-2 flex-wrap">
                 <CopyBtn text={fullText} label="📋 Teljes csomag" />
+                <button onClick={saveToCalendar} disabled={calendarStatus === 'saving' || calendarStatus === 'saved'}
+                  className="text-xs px-3 py-1.5 rounded-lg border transition-all"
+                  style={{
+                    background: calendarStatus === 'saved' ? 'rgba(34,197,94,0.1)' : calendarStatus === 'error' ? 'rgba(239,68,68,0.1)' : '#121826',
+                    border: calendarStatus === 'saved' ? '1px solid rgba(34,197,94,0.3)' : calendarStatus === 'error' ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(255,255,255,0.08)',
+                    color: calendarStatus === 'saved' ? '#22C55E' : calendarStatus === 'error' ? '#EF4444' : '#CBD5E1',
+                  }}>
+                  {calendarStatus === 'saved' ? '✓ Naptárba mentve' : calendarStatus === 'saving' ? 'Mentés...' : calendarStatus === 'error' ? 'Hiba, próbáld újra' : '📅 Naptárba mentés'}
+                </button>
                 <span className="text-xs px-3 py-1.5 rounded-lg border"
                   style={{ background: saved ? 'rgba(34,197,94,0.1)' : '#121826', border: saved ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(255,255,255,0.08)', color: saved ? '#22C55E' : '#CBD5E1' }}>
                   {saved ? '✓ Automatikusan elmentve' : 'Mentés...'}
@@ -1172,7 +1209,39 @@ export default function VideoPackagePage() {
           <Block title="🎣 Hook" accent="rgba(139,92,246,0.2)">
             <p className="text-sm leading-relaxed font-medium" style={{ color: '#F8FAFC' }}>{result.hook}</p>
             <div className="mt-3"><CopyBtn text={result.hook} label="📋 Hook másolása" /></div>
+            {result.hook_variations && result.hook_variations.length > 0 && (
+              <div className="mt-4 pt-4 space-y-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <p className="text-xs" style={{ color: '#94A3B8' }}>Alternatív hook-ok, ha másik szöget akarsz</p>
+                {result.hook_variations.map((variant, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span className="text-sm" style={{ color: '#D1D9E6' }}>{variant}</span>
+                    <CopyBtn text={variant} label="📋" />
+                  </div>
+                ))}
+              </div>
+            )}
           </Block>
+
+          {/* Miért működhet + kockázatok */}
+          {(result.why_it_works || (result.risks && result.risks.length > 0)) && (
+            <Block title="🎯 Miért működhet ez" accent="rgba(34,197,94,0.2)">
+              {result.why_it_works && (
+                <p className="text-sm leading-relaxed mb-3" style={{ color: '#F8FAFC' }}>{result.why_it_works}</p>
+              )}
+              {result.risks && result.risks.length > 0 && (
+                <div>
+                  <p className="text-xs mb-2" style={{ color: '#F59E0B' }}>⚠️ Kockázatok, amikre figyelj</p>
+                  <ul className="space-y-1">
+                    {result.risks.map((risk, i) => (
+                      <li key={i} className="text-xs flex items-start gap-2" style={{ color: '#CBD5E1' }}>
+                        <span style={{ color: '#F59E0B' }}>•</span>{risk}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </Block>
+          )}
 
           {/* Narráció */}
           <Block title={isShorts ? '🎙 Narráció (shorts)' : '🎙 Teljes narráció'}>
@@ -1223,6 +1292,9 @@ export default function VideoPackagePage() {
 
           {/* Thumbnail / Overlay szövegek */}
           <Block title={isShorts ? '📱 Overlay / Caption szövegek' : '🖼 Thumbnail szövegek'}>
+            {result.thumbnail_concept && (
+              <p className="text-xs leading-relaxed mb-3" style={{ color: '#94A3B8' }}>💡 {result.thumbnail_concept}</p>
+            )}
             <div className="grid grid-cols-2 gap-2">
               {result.thumbnail_texts.map((text, i) => (
                 <div key={i} className="rounded-lg p-3 text-center font-bold text-sm" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#F8FAFC' }}>
@@ -1288,6 +1360,27 @@ export default function VideoPackagePage() {
             <p className="text-sm leading-relaxed" style={{ color: '#F8FAFC' }}>{result.cta}</p>
             <div className="mt-3"><CopyBtn text={result.cta} label="📋 CTA másolása" /></div>
           </Block>
+
+          {/* Kitűzhető komment */}
+          {result.pinned_comment && (
+            <Block title="📌 Kitűzhető komment">
+              <p className="text-sm leading-relaxed" style={{ color: '#D1D9E6' }}>{result.pinned_comment}</p>
+              <div className="mt-3"><CopyBtn text={result.pinned_comment} label="📋 Komment másolása" /></div>
+            </Block>
+          )}
+
+          {/* Gyártási checklist */}
+          {result.production_checklist && result.production_checklist.length > 0 && (
+            <Block title="✅ Gyártási checklist">
+              <ul className="space-y-1.5">
+                {result.production_checklist.map((step, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm" style={{ color: '#CBD5E1' }}>
+                    <span style={{ color: '#22C55E' }}>☐</span>{step}
+                  </li>
+                ))}
+              </ul>
+            </Block>
+          )}
 
           {/* Források */}
           {result.sources_used && result.sources_used.length > 0 && (

@@ -163,6 +163,7 @@ ${JSON_RULES}
 Valaszolj KIZAROLAG valid JSON-ban:
 {
   "hook": "Eros 0-3mp hook - curiosity gap - EGY SOROS",
+  "hook_variations": ["Alternativ hook 1 - mas szog, EGY SOROS", "Alternativ hook 2 - mas szog, EGY SOROS"],
   "narration": "Teljes narracio PONTOSAN ${t.words} szo - EGYETLEN SOROS STRING - NE HASZNALJ SORTORЕСТ",
   "scene_structure": [
     {"number": 1, "title": "Hook", "duration": "0:00-0:03", "visual": "Vizual leiras EGY SOROS", "narration": "Hook szoveg EGY SOROS"},
@@ -204,6 +205,7 @@ ${JSON_RULES}
 Valaszolj KIZAROLAG valid JSON-ban:
 {
   "hook": "Eros nyitomondatt - EGY SOROS",
+  "hook_variations": ["Alternativ hook 1 - mas szog, EGY SOROS", "Alternativ hook 2 - mas szog, EGY SOROS"],
   "narration": "Teljes narracio ${t.words} szoban - EGYETLEN SOROS STRING",
   "scene_structure": [
     {"number": 1, "title": "Hook + Intro", "duration": "0:00-0:45", "visual": "Vizual", "narration": "Narracio EGY SOROS"},
@@ -279,6 +281,7 @@ KRITIKUS JSON SZABALYOK:
 Keszitsd el magyarul, KIZAROLAG valid JSON-ban:
 {
   "thumbnail_texts": ["${isShorts ? 'OVERLAY' : 'THUMBNAIL'} szoveg 1 max 4 szo nagybetukkel", "szoveg 2", "szoveg 3", "szoveg 4"],
+  "thumbnail_concept": "1-2 mondatos kompozicio-javaslat: mit mutasson a kep, milyen kontraszt/erzelem/szimbolum kelti fel a figyelmet",
   "title_variations": ["Magyar cim 1", "Cim 2", "Cim 3", "Cim 4", "Cim 5"],
   "caption": "${isShorts ? 'Rovid caption max 300 karakter egy soros' : 'rovid caption'}",
   "description": "${isShorts ? '' : 'SEO-barát YouTube leiras min 150 szo LINK placeholderekkel'}",
@@ -286,7 +289,11 @@ Keszitsd el magyarul, KIZAROLAG valid JSON-ban:
     "viral": ["#hashtag1", "#hashtag2"],
     "niche": ["#hashtag3", "#hashtag4"],
     "general": ["#hashtag5"]
-  }
+  },
+  "pinned_comment": "Rovid, elkotelezodest generalo hozzaszolas-javaslat, amit a creator kituzhet a video ala",
+  "why_it_works": "1-2 mondat, konkretan a fenti hook/tema/quality status alapjan, miert mukodhet ez a video",
+  "risks": ["Konkret kockazat 1 (pl. tul altalanos cim, gyenge hook, tulzsufolt thumbnail)", "Konkret kockazat 2"],
+  "production_checklist": ["Gyartasi lepes 1", "Gyartasi lepes 2", "Gyartasi lepes 3"]
 }`
 
   const message = await anthropic.messages.create({
@@ -506,15 +513,21 @@ export async function POST(request: NextRequest) {
       estimated_duration: isShorts ? `${t.seconds} mp` : `${t.minutes} perc`,
       scene_count: t.scenes,
       hook: polishedCore.hook,
+      hook_variations: polishedCore.hook_variations || [],
       narration: polishedCore.narration,
       scene_structure: polishedCore.scene_structure,
       broll_ideas: polishedCore.broll_ideas,
       timestamps: polishedCore.timestamps,
       thumbnail_texts: polishedPackaging.thumbnail_texts,
+      thumbnail_concept: polishedPackaging.thumbnail_concept || null,
       title_variations: polishedPackaging.title_variations,
       caption: polishedPackaging.caption,
       description: polishedPackaging.description,
       hashtags: polishedPackaging.hashtags,
+      pinned_comment: polishedPackaging.pinned_comment || null,
+      why_it_works: polishedPackaging.why_it_works || null,
+      risks: polishedPackaging.risks || [],
+      production_checklist: polishedPackaging.production_checklist || [],
       upload_times: polishedUploadTimes,
       cta: polishedCore.cta,
       sources_used: polishedCore.sources_used || sources || [],
