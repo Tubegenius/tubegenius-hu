@@ -363,6 +363,42 @@ export interface VideoIdeaProofSignal {
   created_at: string
 }
 
+export interface VideoIdeaEvent {
+  id: string
+  video_idea_id: string
+  user_id: string
+  event_type: string
+  source_tool: string | null
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface MemoryProofSignalSummary {
+  strong: number
+  medium: number
+  weak: number
+  rejected: number
+  items: Array<{
+    signal_type: VideoIdeaProofSignal['signal_type']
+    title: string | null
+    url: string | null
+    strength: VideoIdeaProofSignal['strength']
+    source_tool: string | null
+  }>
+}
+
+export interface MemoryOutcomeMatch {
+  topic: string
+  workflow_status: VideoIdeaWorkflowStatus
+  updated_at: string
+  overlap: number
+}
+
+export interface MemoryInsight {
+  positive?: MemoryOutcomeMatch
+  negative?: MemoryOutcomeMatch
+}
+
 // ─── Video Package — mentett, visszanézhető generálás ───
 export interface VideoPackageRecord {
   id: string

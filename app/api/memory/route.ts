@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
-import { ensureVideoIdea, linkVideoIdeaToLegacyRecord, logVideoIdeaEvent } from '@/lib/video-ideas/video-idea-service'
-import type { TopicState } from '@/types'
+import {
+  ensureVideoIdea,
+  linkVideoIdeaToLegacyRecord,
+  logVideoIdeaEvent,
+  mapMemoryStateToWorkflowStatus,
+  setVideoIdeaWorkflowStatus,
+  fetchDecisiveVideoIdeas,
+  matchRelatedOutcomes,
+} from '@/lib/video-ideas/video-idea-service'
+import type { TopicState, MemoryProofSignalSummary, MemoryInsight, VideoIdeaProofSignal, VideoIdeaEvent } from '@/types'
 
 // GET: temak listazasa
 export async function GET(request: NextRequest) {
@@ -34,7 +42,78 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ items: data })
+  const items = data || []
+  const enriched = await enrichMemoryItems(admin, user.id, items)
+
+  return NextResponse.json({ items: enriched })
+}
+
+// Egy request-en belul egyszer keri le a proof signal-okat, eseményeket es a
+// lezart-allapotu otlet-poolt, majd mindezt in-memory osztja szet a tetelek kozott —
+// igy nem N+1 lekerdezes fut le, hanem konstans darabszamu.
+async function enrichMemoryItems(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  items: Array<Record<string, unknown>>
+) {
+  const videoIdeaIds = Array.from(
+    new Set(items.map(item => item.video_idea_id as string | null).filter((id): id is string => !!id))
+  )
+
+  const signalsByIdea = new Map<string, VideoIdeaProofSignal[]>()
+  const eventsByIdea = new Map<string, VideoIdeaEvent[]>()
+
+  if (videoIdeaIds.length > 0) {
+    const [{ data: signals }, { data: events }] = await Promise.all([
+      admin.from('video_idea_proof_signals').select('*').in('video_idea_id', videoIdeaIds),
+      admin.from('video_idea_events').select('*').in('video_idea_id', videoIdeaIds).order('created_at', { ascending: false }),
+    ])
+    for (const signal of (signals as VideoIdeaProofSignal[] | null) || []) {
+      const list = signalsByIdea.get(signal.video_idea_id) || []
+      list.push(signal)
+      signalsByIdea.set(signal.video_idea_id, list)
+    }
+    for (const event of (events as VideoIdeaEvent[] | null) || []) {
+      const list = eventsByIdea.get(event.video_idea_id) || []
+      if (list.length < 5) list.push(event)
+      eventsByIdea.set(event.video_idea_id, list)
+    }
+  }
+
+  const decisivePool = await fetchDecisiveVideoIdeas(admin, userId)
+
+  return items.map(item => {
+    const videoIdeaId = item.video_idea_id as string | null
+    const signals = (videoIdeaId ? signalsByIdea.get(videoIdeaId) : undefined) || []
+    const proofSignals: MemoryProofSignalSummary = {
+      strong: signals.filter(s => s.strength === 'strong').length,
+      medium: signals.filter(s => s.strength === 'medium').length,
+      weak: signals.filter(s => s.strength === 'weak').length,
+      rejected: signals.filter(s => s.strength === 'rejected').length,
+      items: signals.slice(0, 5).map(s => ({
+        signal_type: s.signal_type,
+        title: s.title,
+        url: s.url,
+        strength: s.strength,
+        source_tool: s.source_tool,
+      })),
+    }
+
+    const match = matchRelatedOutcomes(item.topic as string, item.platform as string | null, decisivePool, videoIdeaId)
+    const insight: MemoryInsight | null = match.positive || match.negative
+      ? {
+          positive: match.positive && { topic: match.positive.topic, workflow_status: match.positive.workflow_status, updated_at: match.positive.updated_at, overlap: match.positive.overlap },
+          negative: match.negative && { topic: match.negative.topic, workflow_status: match.negative.workflow_status, updated_at: match.negative.updated_at, overlap: match.negative.overlap },
+        }
+      : null
+
+    return {
+      ...item,
+      proof_signals: proofSignals,
+      events: videoIdeaId ? eventsByIdea.get(videoIdeaId) || [] : [],
+      insight,
+    }
+  })
 }
 
 // POST: tema mentese/frissitese
@@ -148,6 +227,26 @@ export async function PATCH(request: NextRequest) {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  // Allapotvaltas eseten a linkelt Video Idea workflow_status-at is szinkronizaljuk,
+  // hogy a memoria-mozgas a kozponti adatmodellben (es a jovobeli tanulasi mintaban) is lathato legyen.
+  if (state && data?.video_idea_id) {
+    const targetStatus = mapMemoryStateToWorkflowStatus(state as 'saved' | 'in_progress' | 'completed' | 'rejected')
+    const result = await setVideoIdeaWorkflowStatus(admin, {
+      userId: user.id,
+      videoIdeaId: data.video_idea_id,
+      workflowStatus: targetStatus,
+    })
+    if (result.success && result.previous !== targetStatus) {
+      await logVideoIdeaEvent(admin, {
+        userId: user.id,
+        videoIdeaId: data.video_idea_id,
+        eventType: 'state_changed',
+        sourceTool: 'creator_memory',
+        payload: { from: result.previous, to: targetStatus, memory_state: state },
+      })
+    }
   }
 
   return NextResponse.json({ item: data })

@@ -2,13 +2,29 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import type { CreatorMemoryItem, TopicState } from '@/types'
+import type { CreatorMemoryItem, TopicState, MemoryProofSignalSummary, MemoryInsight, VideoIdeaEvent } from '@/types'
 import { scoreLabel, scoreLabelColor } from '@/lib/score-utils'
 
 type MemoryItemExtended = CreatorMemoryItem & {
   audit_score?: number | null
   audit_id?: string | null
   video_package_id?: string | null
+  proof_signals?: MemoryProofSignalSummary
+  events?: VideoIdeaEvent[]
+  insight?: MemoryInsight | null
+}
+
+const EVENT_LABELS: Record<string, { label: string; icon: string }> = {
+  idea_saved: { label: 'Elmentve', icon: '📌' },
+  idea_rejected: { label: 'Elutasítva', icon: '⛔' },
+  state_changed: { label: 'Állapot módosítva', icon: '🔄' },
+  viral_score_completed: { label: 'Virális esély kiszámolva', icon: '📈' },
+  similar_videos_completed: { label: 'Piaci bizonyítékok keresve', icon: '🎬' },
+  video_package_created: { label: 'Gyártási csomag készült', icon: '🎁' },
+}
+
+function eventLabel(eventType: string) {
+  return EVENT_LABELS[eventType] || { label: eventType, icon: '•' }
 }
 
 interface AuditSummary {
@@ -61,8 +77,13 @@ const PLATFORM_ICONS: Record<string, string> = {
 
 function MemoryCard({ item, onUpdate }: { item: MemoryItemExtended; onUpdate: () => void }) {
   const [updating, setUpdating] = useState(false)
+  const [showTimeline, setShowTimeline] = useState(false)
   const config = STATE_CONFIG[item.state]
   const searchTerm = item.search_keyword || item.topic
+  const signals = item.proof_signals
+  const hasSignals = !!signals && (signals.strong + signals.medium + signals.weak + signals.rejected) > 0
+  const insight = item.insight
+  const events = item.events || []
 
   async function changeState(newState: TopicState) {
     setUpdating(true)
@@ -99,6 +120,50 @@ function MemoryCard({ item, onUpdate }: { item: MemoryItemExtended; onUpdate: ()
             )}
           </div>
           <h3 className="font-medium text-sm leading-snug mb-2" style={{ color: '#F8FAFC' }}>{item.topic}</h3>
+
+          {insight?.positive && (
+            <div className="text-xs px-2.5 py-1.5 rounded-lg mb-2" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#4ADE80' }}>
+              💡 Hasonló téma korábban bejött nálad: „{insight.positive.topic}"
+            </div>
+          )}
+          {insight?.negative && (
+            <div className="text-xs px-2.5 py-1.5 rounded-lg mb-2" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#FBBF24' }}>
+              ⚠️ Hasonló témát már elutasítottál: „{insight.negative.topic}"
+            </div>
+          )}
+
+          {hasSignals && signals && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap text-xs" style={{ color: '#94A3B8' }}>
+              <span>🧾 Bizonyítékok:</span>
+              {signals.strong > 0 && <span style={{ color: '#4ADE80' }}>{signals.strong} erős</span>}
+              {signals.medium > 0 && <span style={{ color: '#FBBF24' }}>{signals.medium} közepes</span>}
+              {signals.weak > 0 && <span style={{ color: '#94A3B8' }}>{signals.weak} gyenge</span>}
+              {signals.rejected > 0 && <span style={{ color: '#EF4444' }}>{signals.rejected} elutasított</span>}
+            </div>
+          )}
+
+          {events.length > 0 && (
+            <div className="mb-2">
+              <button onClick={() => setShowTimeline(v => !v)}
+                className="text-xs underline decoration-dotted" style={{ color: '#94A3B8' }}>
+                {showTimeline ? 'Idővonal elrejtése' : `Idővonal megtekintése (${events.length})`}
+              </button>
+              {showTimeline && (
+                <ul className="mt-1.5 space-y-1">
+                  {events.map(event => {
+                    const { label, icon } = eventLabel(event.event_type)
+                    return (
+                      <li key={event.id} className="text-xs flex items-center gap-1.5" style={{ color: '#CBD5E1' }}>
+                        <span>{icon}</span>
+                        <span>{label}</span>
+                        <span style={{ color: '#64748B' }}>· {new Date(event.created_at).toLocaleDateString('hu-HU')}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-4 text-xs mb-3 flex-wrap" style={{ color: '#CBD5E1' }}>
             {item.opportunity_score != null && (

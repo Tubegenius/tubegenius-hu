@@ -2,8 +2,8 @@
 
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
-**Utolsó frissítés**: 2026-07-08 (session végén)
-**Utolsó commit ebben a körben**: `864c8c1`
+**Utolsó frissítés**: 2026-07-08 (új session, folytatás)
+**Utolsó commit ebben a körben**: `864c8c1` (a mai új munka — Phase 1 #10 mélyítés — MÉG NINCS commitolva, ld. lent)
 
 ---
 
@@ -20,7 +20,7 @@
 
 | Fázis | Állapot |
 |---|---|
-| **PHASE 1 — Creator OS alap** | 8/12 kész, 3/12 részleges, 1/12 nincs elkezdve |
+| **PHASE 1 — Creator OS alap** | 9/12 kész, 2/12 részleges, 1/12 nincs elkezdve |
 | **PHASE 2 — Versenyképes platform funkciók** | 0/10 — egyik sincs elkezdve |
 | **PHASE 3 — Globális SaaS / Agency** | 0/10 — egyik sincs elkezdve (ez várható is volt ezen a ponton) |
 
@@ -39,7 +39,7 @@
 | 7 | Similar Videos proof signal mentés | ✅ Kész | `app/api/similar-videos/route.ts` — sikeres keresésnél `ensureVideoIdea` + proof signal (`signal_type: similar_video`) + `similar_videos_completed` event. Élőben tesztelve. |
 | 8 | Viral Score magyarázható eredményoldal | ✅ Kész | `app/api/viral-score/route.ts` — freshness, proof_strength, niche_fit, risk_level (backend számolt) + hook_potential, audience_curiosity, platform_fit, production_difficulty (Claude-ítélt, valós adatra alapozva). Frontend: "Miért ez a pontszám?" kártya. Élőben tesztelve valós adattal. |
 | 9 | Video Package prémium eredményoldal | ✅ Kész (platform-specifikus verziók nélkül) | 3 hook (volt 1), thumbnail_concept, pinned_comment, why_it_works, risks, production_checklist, "Naptárba mentés" gomb (→ `/api/video-ideas` PATCH `calendar_status`). Élőben tesztelve, DB-ben ellenőrizve. Hiányzik: platform-specifikus verziók (külön funkció), "későbbi audit" gomb (tudatosan kihagyva — nincs mit auditálni publikálás előtt). |
-| 10 | Creator Memory státuszokkal | ⚠️ Részleges, NEM mélyítve | Alap state (saved/in_progress/completed/rejected) megvan, `video_idea_id` kapcsolat megvan (korábbi Codex-kör), de: nincs proof signal/event szintű integráció, nincs "ez korábban bejött nálad" tanulás-logika. **Ez a következő ajánlott lépés.** |
+| 10 | Creator Memory státuszokkal | ✅ Mélyítve (2026-07-08, második kör) | `app/api/memory` PATCH mostmár szinkronizálja a linkelt `video_ideas.workflow_status`-t (`saved→validated`, `in_progress→validating`, `completed→published`, `rejected→rejected`) és logol egy `state_changed` eseményt (`lib/video-ideas/video-idea-service.ts: setVideoIdeaWorkflowStatus`). A `/dashboard/memory` oldal és a `CreatorMemoryPanel` (utóbbi jelenleg NINCS bekötve egyetlen oldalba sem — orphan komponens) mostmár megjeleníti a proof signal összesítőt (erős/közepes/gyenge/elutasított darabszám) és egy kibontható esemény-idővonalat kártyánként. Új: `matchRelatedOutcomes` (`lib/video-ideas/video-idea-service.ts`) topic-szó-átfedés (Jaccard) alapján megkeresi a user korábbi `published`/`audited`/`rejected` állapotú Video Idea-i között a leghasonlóbbat, és `💡 Hasonló téma korábban bejött nálad` / `⚠️ Hasonló témát már elutasítottál` jelzést ad — élőben tesztelve valós adaton, működik. **Amit ez NEM tartalmaz**: nincs valós YouTube performance-alapú tanulás (az OAuth/csatorna-analytics Phase 3-as), a hasonlóság-keresés csak topic-szöveg átfedésen alapul (niche mező gyakorlatilag sosem töltődik ki egyetlen aktív route-ból sem, ezért nem használható matching-alapnak). |
 | 11 | language / market / platform mezők | ⚠️ Részleges | `video_ideas` táblában megvan (language/market/country/currency/timezone). **A Stripe árazás VÁLTOZATLANUL kőkeményen HUF-ra hardkódolva** (`lib/stripe.ts`, `app/dashboard/credits/page.tsx`). Nincs currency/market selector a UI-n. Multi-currency-hez **valós Stripe termékek/árak létrehozása szükséges a Stripe dashboardon — ez a userre vár, nem kódolható meg helyette.** |
 | 12 | AI provider layer alap | ❌ Nincs elkezdve | Minden route közvetlenül `new Anthropic(...)`-ot hív. Nincs absztrakciós réteg. A `paid_results` tábla már tartalmazza a `provider`/`model`/`prompt_template_id`/`prompt_version`/`estimated_cost` oszlopokat (migráció 021), de **egyetlen route sem tölti ki őket** — ellenőrizve, megerősítve. |
 
@@ -76,10 +76,10 @@ English UI, Stripe globális pricing, YouTube OAuth (saját csatorna analytics),
 
 ## KÖVETKEZŐ LÉPÉS JAVASLAT
 
-A user korábban ezt a sorrendet hagyta jóvá: **"haladjunk sorban, Phase 1, Phase 2, Phase 3"**. A Phase 1-ből 3 tétel maradt:
+A user korábban ezt a sorrendet hagyta jóvá: **"haladjunk sorban, Phase 1, Phase 2, Phase 3"**. A Phase 1-ből 2 tétel maradt:
 
-1. **#10 Creator Memory mélyítés** — ezt javaslom ELŐSZÖR, mert nem érint minden route-ot, és nincs külső (Stripe) függősége. Ez a legkisebb kockázatú maradék tétel.
-2. **#12 AI provider layer** — utána, mert keresztmetszeti refaktor, érdemes vele külön foglalkozni, esetleg megbeszélni előbb a terjedelmét.
+1. ~~**#10 Creator Memory mélyítés**~~ — **KÉSZ** (2026-07-08, második kör).
+2. **#12 AI provider layer** — javasolt következő lépés, mert keresztmetszeti refaktor, érdemes vele külön foglalkozni, esetleg megbeszélni előbb a terjedelmét (minden Claude-hívást érintő route-ot módosítana).
 3. **#11 Multi-currency** — csak akkor zárható le teljesen, ha a user létrehozta a Stripe termékeket. Addig legfeljebb a kód-oldali előkészítés (selector UI, market-alapú ár-lookup logika) mehet.
 
 Utána jöhet a **Phase 2** — itt érdemes megkérdezni a usert, melyik modullal kezdjük (Keyword Research vagy Competitor Tracker tűnik a legértékesebbnek a Command Center hiányzó két szekciója miatt).
@@ -100,6 +100,21 @@ a38fef2 feat: rename tool-jargon UI labels to creator-friendly names (Phase 1 #3
 Minden commit előtt/után lefutott: `npx tsc --noEmit --incremental false` + `npm run build`, és a legtöbb változtatást élő böngészős teszttel (bejelentkezve, valós Similar Videos/Viral Score/Video Package futtatással, DB-ből közvetlenül ellenőrizve Supabase REST-en) is megerősítettem, nem csak build-del.
 
 **Semmi nincs push-olva** — a user nem kérte, minden commit lokális.
+
+---
+
+## EBBEN A SESSION-BEN TÖRTÉNT (2026-07-08, második kör) — Phase 1 #10 mélyítés
+
+Módosított/bővített fájlok (MÉG NINCS COMMITOLVA — a user nem kérte):
+- `types/index.ts` — `VideoIdeaEvent`, `MemoryProofSignalSummary`, `MemoryOutcomeMatch`, `MemoryInsight` típusok hozzáadva.
+- `lib/video-ideas/video-idea-service.ts` — `mapMemoryStateToWorkflowStatus`, `setVideoIdeaWorkflowStatus`, `fetchDecisiveVideoIdeas`, `matchRelatedOutcomes` (topic-token Jaccard-átfedés a `published`/`audited`/`rejected` otletek pool-jan).
+- `app/api/memory/route.ts` — GET most proof signal + esemény + insight-tal dúsítja a válaszokat (`enrichMemoryItems`, batch lekérdezéssel, nem N+1). PATCH szinkronizálja a linkelt `video_ideas.workflow_status`-t és logol egy `state_changed` eseményt.
+- `app/dashboard/memory/page.tsx` — insight banner, proof signal chip, kibontható esemény-idővonal a `MemoryCard`-on.
+- `components/dashboard/CreatorMemoryPanel.tsx` — insight egysoros jelzés (ez a komponens jelenleg NINCS bekötve egyetlen oldalba sem, orphan — nem én okoztam, korábbról így volt).
+
+Ellenőrzés: `npx tsc --noEmit --incremental false` ✅, `npm run build` ✅, élő böngészős teszt bejelentkezve (`/dashboard/memory`): proof signal chip és idővonal helyesen jelent meg valós adaton, PATCH state-váltás ("✅ Kész") ténylegesen frissítette a linkelt Video Idea `workflow_status`-át `published`-re és logolt egy `state_changed` eseményt, majd egy másik, hasonló témájú (`"mesterséges intelligencia"` + `"2026"` szóátfedés) memória-tételen ténylegesen megjelent a `💡 Hasonló téma korábban bejött nálad` insight. A tesztelés után a state-et visszaállítottam `in_progress`-re (a workflow_status emiatt `validating`-re állt, ami helyesebb, mint az eredeti elavult `new_idea` — ez a feature helyes működése, nem hiba).
+
+Tudatos döntés: a `creator_memory` POST-ban (új tétel mentésekor) A RÉGI mapping-et hagytam változatlanul (`rejected→rejected`, `completed→validated`, egyébként `new_idea`) — NEM az új `mapMemoryStateToWorkflowStatus`-t, mert az `in_progress→ready_to_produce` vagy `saved→validated` mappelés összeütközne a Command Center már éles, tesztelt logikájával (`app/api/dashboard/summary/route.ts` `readyIdeas` szűrése `workflow_status === 'ready_to_produce'` alapján, illetve a `validated` állapotot "készíts csomagot" javaslat kiváltására használja). Az új, gazdagabb mapping kizárólag a PATCH (explicit állapotváltás) útvonalon fut, ami korábban semmit nem csinált — ez tisztán additív, nem módosít meglévő, éles viselkedést.
 
 ---
 

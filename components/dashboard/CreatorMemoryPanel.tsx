@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import type { CreatorMemoryItem } from '@/types'
+import type { CreatorMemoryItem, MemoryInsight } from '@/types'
+
+type MemoryItemWithInsight = CreatorMemoryItem & { insight?: MemoryInsight | null }
 
 const stateConfig = {
   saved: { label: 'Mentett', color: 'text-violet', bg: 'bg-violet/10', border: 'border-violet/20' },
@@ -12,7 +14,7 @@ const stateConfig = {
 }
 
 export default function CreatorMemoryPanel({ items: initialItems }: { items: CreatorMemoryItem[] }) {
-  const [items, setItems] = useState<CreatorMemoryItem[]>(initialItems)
+  const [items, setItems] = useState<MemoryItemWithInsight[]>(initialItems)
 
   // Frissítés minden 30 másodpercben
   useEffect(() => {
@@ -73,6 +75,12 @@ export default function CreatorMemoryPanel({ items: initialItems }: { items: Cre
                       {item.viral_score && <span className="text-xs text-text-muted">Viral: <span className="text-text-secondary font-medium">{item.viral_score}</span></span>}
                       {item.opportunity_score && <span className="text-xs text-text-muted">Lehetőség: <span className="text-text-secondary font-medium">{item.opportunity_score}</span></span>}
                     </div>
+                  )}
+                  {item.insight?.positive && (
+                    <p className="text-xs text-emerald mt-1.5">💡 Hasonló téma korábban bejött nálad</p>
+                  )}
+                  {!item.insight?.positive && item.insight?.negative && (
+                    <p className="text-xs text-amber mt-1.5">⚠️ Hasonló témát már elutasítottál</p>
                   )}
                   {/* Gyors akciók */}
                   <div className="flex gap-2 mt-2">
