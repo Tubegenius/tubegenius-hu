@@ -46,6 +46,25 @@ export async function GET() {
   const tracked = trackedRes.data || []
   const paidResults = paidResultsRes.data || []
   const videoIdeas = videoIdeasRes.data || []
+
+  // Proof signal aggregáció a command centerhez — a cél, hogy a rangsorolás
+  // ne csak a score mezőket, hanem a ténylegesen mögé gyűjtött bizonyítékok
+  // mennyiségét/erősségét is figyelembe vegye (lásd Similar Videos / Viral
+  // Score proof signal bekötés).
+  const videoIdeaIds = videoIdeas.map((idea: { id: string }) => idea.id)
+  const proofSignalsRes = videoIdeaIds.length > 0
+    ? await admin.from('video_idea_proof_signals').select('video_idea_id, strength').in('video_idea_id', videoIdeaIds)
+    : { data: [] as Array<{ video_idea_id: string; strength: string | null }> }
+  const proofSignalMap = new Map<string, { total: number; strong: number; medium: number; weak: number }>()
+  for (const signal of proofSignalsRes.data || []) {
+    const entry = proofSignalMap.get(signal.video_idea_id) || { total: 0, strong: 0, medium: 0, weak: 0 }
+    entry.total += 1
+    if (signal.strength === 'strong') entry.strong += 1
+    else if (signal.strength === 'medium') entry.medium += 1
+    else if (signal.strength === 'weak') entry.weak += 1
+    proofSignalMap.set(signal.video_idea_id, entry)
+  }
+
   function normalizeActivityKey(value: string | null | undefined): string {
     return String(value || '')
       .toLowerCase()
@@ -378,6 +397,17 @@ export async function GET() {
     created_at: string
   }
 
+  function proofBoostFor(idea: VideoIdeaSummary): number {
+    const proof = proofSignalMap.get(idea.id)
+    if (!proof) return 0
+    // Erős bizonyíték számít a legtöbbet, de a darabszám (akár gyenge jelekből
+    // is) önmagában is jelzi, hogy a téma mögött már van valós kutatás — ezért
+    // mindkettő számít, sapkázva, hogy egy témát ne lehessen pusztán sok gyenge
+    // jellel a top fölé tolni egy kevés, de erős jelű téma elé.
+    const weighted = proof.strong * 6 + proof.medium * 3 + proof.weak * 1
+    return Math.min(35, weighted)
+  }
+
   function ideaScore(idea: VideoIdeaSummary): number {
     const opportunity = Number(idea.opportunity_score || 0)
     const viral = Number(idea.viral_score || 0)
@@ -393,7 +423,7 @@ export async function GET() {
       archived: -100,
     }
     const packageBoost = idea.video_package_id ? 30 : 0
-    return Math.round((opportunity * 0.55) + (viral * 0.35) + (statusBoost[String(idea.workflow_status || 'new_idea')] || 0) + packageBoost)
+    return Math.round((opportunity * 0.55) + (viral * 0.35) + (statusBoost[String(idea.workflow_status || 'new_idea')] || 0) + packageBoost + proofBoostFor(idea))
   }
 
   function ideaHref(idea: VideoIdeaSummary): string {
@@ -446,6 +476,7 @@ export async function GET() {
       opportunity_score: topIdea.opportunity_score,
       viral_score: topIdea.viral_score,
       proof_summary: topIdea.proof_summary,
+      proof_signal_count: proofSignalMap.get(topIdea.id)?.total || 0,
       video_package_id: topIdea.video_package_id,
       href: ideaHref(topIdea),
       next_action: topIdeaAction,
@@ -458,6 +489,7 @@ export async function GET() {
       video_package_id: idea.video_package_id,
       opportunity_score: idea.opportunity_score,
       viral_score: idea.viral_score,
+      proof_signal_count: proofSignalMap.get(idea.id)?.total || 0,
       updated_at: idea.updated_at,
     })),
     pipeline: {
