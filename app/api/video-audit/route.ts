@@ -2,7 +2,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
-import { chargeFeature, hasEnoughCredits, CREDIT_COSTS } from '@/lib/credits'
+import { chargeFeature, hasEnoughCredits, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
@@ -17,17 +18,6 @@ import {
   ManualPlatformData,
   BackendScores,
 } from '@/lib/video-audit-scoring'
-
-function extractJson(text: string): unknown {
-  let cleaned = text.replace(/```json|```/g, '').trim()
-  const firstBrace = cleaned.indexOf('{')
-  const lastBrace = cleaned.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1)
-  }
-  try { return JSON.parse(cleaned) }
-  catch (e) { console.error('JSON parse failed:', cleaned.slice(0, 1500)); throw e }
-}
 
 async function fetchYouTubeData(videoId: string): Promise<YouTubeApiData | null> {
   const { getActiveApiKey } = await import('@/lib/youtube-service')
@@ -74,11 +64,22 @@ function extractVideoId(url: string): string | null {
   return null
 }
 
+interface ClaudeInterpretationResult {
+  parsed: Record<string, unknown>
+  inputTokens: number
+  outputTokens: number
+  estimatedCost: number
+  provider: string
+  model: string
+  promptTemplateId: string | null
+  promptVersion: string | null
+}
+
 async function getClaudeInterpretation(
   platform: Platform,
   inputData: YouTubeApiData | ManualPlatformData,
   backendScores: BackendScores,
-): Promise<Record<string, unknown>> {
+): Promise<ClaudeInterpretationResult> {
   const title = 'title' in inputData ? inputData.title : (inputData as ManualPlatformData).title
   const topic = 'topic' in inputData ? (inputData as ManualPlatformData).topic : title
 
@@ -145,22 +146,24 @@ Adj vissza egy JSON objektumot ezzel a struktúrával:
   "platform_specific_tip": "egy soros szoveg"
 }`
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY!,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: MODELS.primary,
-      max_tokens: 1500,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+  const aiCall = await callAIProvider({
+    model: MODELS.primary,
+    maxTokens: 1500,
+    messages: [{ role: 'user', content: prompt }],
+    promptTemplateId: 'video_audit_interpretation',
+    promptVersion: 'v1',
   })
-  const json = await res.json()
-  const text = json.content?.[0]?.text ?? '{}'
-  return extractJson(text) as Record<string, unknown>
+
+  return {
+    parsed: extractJson<Record<string, unknown>>(aiCall.text),
+    inputTokens: aiCall.usage.inputTokens,
+    outputTokens: aiCall.usage.outputTokens,
+    estimatedCost: aiCall.estimatedCost,
+    provider: aiCall.provider,
+    model: aiCall.model,
+    promptTemplateId: aiCall.promptTemplateId,
+    promptVersion: aiCall.promptVersion,
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -229,7 +232,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Claude interpretáció
-    const claudeInterpretation = polishHungarianOutput(await getClaudeInterpretation(platform, inputData, backendScores)) as Record<string, unknown>
+    const aiResult = await getClaudeInterpretation(platform, inputData, backendScores)
+    const claudeInterpretation = polishHungarianOutput(aiResult.parsed) as Record<string, unknown>
+    await logUsage(user.id, 'video_audit', aiResult.model, aiResult.inputTokens, aiResult.outputTokens, { platform })
 
     // Final scores
     const finalScores = computeFinalScores(
@@ -347,6 +352,11 @@ export async function POST(req: NextRequest) {
       creditCost: CREDIT_COSTS.video_audit,
       freshForHours: 24,
       sourceRunId: savedAudit?.id || null,
+      provider: aiResult.provider,
+      model: aiResult.model,
+      promptTemplateId: aiResult.promptTemplateId,
+      promptVersion: aiResult.promptVersion,
+      estimatedCost: aiResult.estimatedCost,
     })
     if (!paidSave.success) {
       console.error('[VideoAudit] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
