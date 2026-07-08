@@ -99,6 +99,19 @@ interface DashboardSummaryLite {
       opportunity_score: number | null
       viral_score: number | null
       proof_summary: string | null
+      proof_signal_count: number
+      proof_signals: Array<{
+        signal_type: string
+        source_tool: string | null
+        title: string | null
+        url: string | null
+        channel_title: string | null
+        view_count: number | null
+        published_at: string | null
+        strength: string | null
+        reason: string | null
+        is_weak_or_rejected: boolean
+      }>
       video_package_id: string | null
       href: string
       next_action: {
@@ -116,6 +129,7 @@ interface DashboardSummaryLite {
       video_package_id: string | null
       opportunity_score: number | null
       viral_score: number | null
+      proof_signal_count: number
       updated_at: string
     }>
     pipeline: {
@@ -661,6 +675,35 @@ function CreatorCommandCenter({ summary }: { summary: DashboardSummaryLite | nul
           ))}
         </div>
       </div>
+
+      {topIdea && topIdea.proof_signals.length > 0 && (
+        <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <p className="text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: '#94A3B8' }}>
+            Bizonyítékok ({topIdea.proof_signal_count})
+          </p>
+          <div className="space-y-1.5">
+            {topIdea.proof_signals.slice(0, 5).map((signal, i) => {
+              const strengthColor = signal.strength === 'strong' ? '#22C55E' : signal.strength === 'medium' ? '#F59E0B' : signal.strength === 'rejected' ? '#EF4444' : '#64748B'
+              const strengthLabel = signal.strength === 'strong' ? 'Erős' : signal.strength === 'medium' ? 'Közepes' : signal.strength === 'rejected' ? 'Elutasított' : 'Gyenge'
+              const Wrapper = signal.url ? 'a' : 'div'
+              return (
+                <Wrapper key={i} {...(signal.url ? { href: signal.url, target: '_blank', rel: 'noopener noreferrer' } : {})}
+                  className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors"
+                  style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${signal.is_weak_or_rejected ? 'rgba(255,255,255,0.05)' : `${strengthColor}20`}`, opacity: signal.is_weak_or_rejected ? 0.65 : 1 }}>
+                  <i className={`ti ${signal.signal_type === 'web_source' ? 'ti-world' : 'ti-player-play'} flex-shrink-0`} style={{ color: strengthColor, fontSize: '14px' }} />
+                  <span className="text-xs truncate flex-1 min-w-0" style={{ color: '#CBD5E1' }}>{signal.title || 'Névtelen forrás'}</span>
+                  {signal.view_count != null && (
+                    <span className="text-[10px] flex-shrink-0" style={{ color: '#64748B' }}>{signal.view_count.toLocaleString('hu-HU')} megtekintés</span>
+                  )}
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0" style={{ color: strengthColor, background: `${strengthColor}18` }}>
+                    {strengthLabel}
+                  </span>
+                </Wrapper>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {command.ready_to_create.length > 0 && (
         <div className="mt-4 pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>

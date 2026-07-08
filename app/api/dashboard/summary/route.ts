@@ -52,17 +52,39 @@ export async function GET() {
   // mennyiségét/erősségét is figyelembe vegye (lásd Similar Videos / Viral
   // Score proof signal bekötés).
   const videoIdeaIds = videoIdeas.map((idea: { id: string }) => idea.id)
+  type ProofSignalRow = {
+    video_idea_id: string
+    signal_type: string
+    source_tool: string | null
+    title: string | null
+    url: string | null
+    channel_title: string | null
+    view_count: number | null
+    published_at: string | null
+    relevance_score: number | null
+    strength: string | null
+    reason: string | null
+    created_at: string
+  }
   const proofSignalsRes = videoIdeaIds.length > 0
-    ? await admin.from('video_idea_proof_signals').select('video_idea_id, strength').in('video_idea_id', videoIdeaIds)
-    : { data: [] as Array<{ video_idea_id: string; strength: string | null }> }
+    ? await admin.from('video_idea_proof_signals')
+        .select('video_idea_id, signal_type, source_tool, title, url, channel_title, view_count, published_at, relevance_score, strength, reason, created_at')
+        .in('video_idea_id', videoIdeaIds)
+        .order('created_at', { ascending: false })
+    : { data: [] as ProofSignalRow[] }
   const proofSignalMap = new Map<string, { total: number; strong: number; medium: number; weak: number }>()
-  for (const signal of proofSignalsRes.data || []) {
+  const proofSignalsByIdea = new Map<string, ProofSignalRow[]>()
+  for (const signal of (proofSignalsRes.data || []) as ProofSignalRow[]) {
     const entry = proofSignalMap.get(signal.video_idea_id) || { total: 0, strong: 0, medium: 0, weak: 0 }
     entry.total += 1
     if (signal.strength === 'strong') entry.strong += 1
     else if (signal.strength === 'medium') entry.medium += 1
     else if (signal.strength === 'weak') entry.weak += 1
     proofSignalMap.set(signal.video_idea_id, entry)
+
+    const list = proofSignalsByIdea.get(signal.video_idea_id) || []
+    list.push(signal)
+    proofSignalsByIdea.set(signal.video_idea_id, list)
   }
 
   function normalizeActivityKey(value: string | null | undefined): string {
@@ -465,6 +487,29 @@ export async function GET() {
   const readyIdeas = activeIdeas.filter(idea => idea.video_package_id || idea.workflow_status === 'ready_to_produce').slice(0, 4)
   const topIdea = activeIdeas[0] || null
   const topIdeaAction = topIdea ? nextActionForIdea(topIdea) : null
+
+  // Proof Signals szekció — miért bízhat a user a top ötletben. Az erős/közepes
+  // jelek elöl, a gyenge/elutasított jelek külön jelölve, hogy a Command Center
+  // ne csak azt mutassa meg, HOGY van bizonyíték, hanem MENNYIRE erős.
+  const STRENGTH_RANK: Record<string, number> = { strong: 3, medium: 2, weak: 1, rejected: 0 }
+  const topIdeaProofSignals = topIdea
+    ? (proofSignalsByIdea.get(topIdea.id) || [])
+        .sort((a, b) => (STRENGTH_RANK[b.strength || ''] ?? -1) - (STRENGTH_RANK[a.strength || ''] ?? -1))
+        .slice(0, 8)
+        .map(signal => ({
+          signal_type: signal.signal_type,
+          source_tool: signal.source_tool,
+          title: signal.title,
+          url: signal.url,
+          channel_title: signal.channel_title,
+          view_count: signal.view_count,
+          published_at: signal.published_at,
+          strength: signal.strength,
+          reason: signal.reason,
+          is_weak_or_rejected: signal.strength === 'weak' || signal.strength === 'rejected',
+        }))
+    : []
+
   const commandCenter = {
     has_video_ideas: videoIdeas.length > 0,
     top_idea: topIdea ? {
@@ -477,6 +522,7 @@ export async function GET() {
       viral_score: topIdea.viral_score,
       proof_summary: topIdea.proof_summary,
       proof_signal_count: proofSignalMap.get(topIdea.id)?.total || 0,
+      proof_signals: topIdeaProofSignals,
       video_package_id: topIdea.video_package_id,
       href: ideaHref(topIdea),
       next_action: topIdeaAction,
