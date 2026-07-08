@@ -13,16 +13,16 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { label: 'Áttekintés', href: '/dashboard/overview', icon: 'ti-layout-dashboard' },
+  { label: 'Creator központ', href: '/dashboard/overview', icon: 'ti-layout-dashboard' },
   { label: 'Trend Feed', href: '/dashboard', icon: 'ti-chart-dots-3' },
-  { label: 'Opportunity Engine', href: '/dashboard/opportunities', icon: 'ti-bulb' },
-  { label: 'Similar Videos', href: '/dashboard/similar-videos', icon: 'ti-player-play' },
-  { label: 'Video Package', href: '/dashboard/video-package', icon: 'ti-package' },
-  { label: 'Video Audit', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },
-  { label: 'Viral Score', href: '/dashboard/viral-score', icon: 'ti-chart-bar' },
+  { label: 'Videólehetőségek', href: '/dashboard/opportunities', icon: 'ti-bulb' },
+  { label: 'Piaci bizonyítékok', href: '/dashboard/similar-videos', icon: 'ti-player-play' },
+  { label: 'Gyártási csomag', href: '/dashboard/video-package', icon: 'ti-package' },
+  { label: 'Videódiagnózis', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },
+  { label: 'Virális esély', href: '/dashboard/viral-score', icon: 'ti-chart-bar' },
   { label: 'Auto Transcript', href: '/dashboard/transcript', icon: 'ti-microphone' },
   { label: 'Script Extractor', href: '/dashboard/script-extractor', icon: 'ti-file-text' },
-  { label: 'Creator Memory', href: '/dashboard/memory', icon: 'ti-brain' },
+  { label: 'Tartalommemória', href: '/dashboard/memory', icon: 'ti-brain' },
   { label: 'Kreditek', href: '/dashboard/credits', icon: 'ti-bolt' },
 ]
 

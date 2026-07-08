@@ -103,7 +103,7 @@ export function buildValidationSummary(input: ValidationInput): ValidationSummar
       explanation: buildExplanation(input.web_source_count, input.video_source_count, webScore, videoScore),
       label: buildLabel(input.web_source_count, input.video_source_count, 'hybrid_validated_trend'),
       cta_primary: { text: 'Videocsomag generalasa', action: 'video_package' },
-      cta_secondary: { text: 'Similar Videos megnyitasa', action: 'similar_videos' },
+      cta_secondary: { text: 'Piaci bizonyitekok megnyitasa', action: 'similar_videos' },
     }
   }
 
@@ -153,6 +153,6 @@ export function buildValidationSummary(input: ValidationInput): ValidationSummar
     explanation: buildExplanation(input.web_source_count, input.video_source_count, webScore, videoScore),
     label: buildLabel(input.web_source_count, input.video_source_count, 'research_required'),
     cta_primary: { text: 'Tovabbi forrasok keresese', action: 'search_more' },
-    cta_secondary: { text: 'Similar Videos keresese', action: 'similar_videos' },
+    cta_secondary: { text: 'Piaci bizonyitekok keresese', action: 'similar_videos' },
   }
 }

@@ -38,5 +38,5 @@ export function validateSpecificFocus(focus: string): FocusValidationResult {
     }
   }
 
-  return { status: 'ok', message: 'Jó fókusz. Az Opportunity Engine pontosabb témákat tud keresni.' }
+  return { status: 'ok', message: 'Jó fókusz. A Videólehetőségek pontosabb témákat tud keresni.' }
 }

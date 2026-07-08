@@ -274,7 +274,7 @@ export default function TranscriptPage() {
               <div className="space-y-2">
                 <Link href={`/dashboard/viral-score?topic=${encodeURIComponent(topicForNextStep)}`} className="btn-secondary w-full justify-center">
                   <i className="ti ti-chart-bar mr-1.5" />
-                  Viral Score
+                  Virális esély
                 </Link>
                 <Link
                   href={`/dashboard/video-package?topic=${encodeURIComponent(topicForNextStep)}&source_context=${encodeURIComponent('auto_transcript')}&mode=${encodeURIComponent('transcript')}`}

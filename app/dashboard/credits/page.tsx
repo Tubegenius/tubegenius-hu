@@ -26,17 +26,17 @@ const TOPUP_PACKS = [
 ]
 
 const CREDIT_COSTS = [
-  { feature: 'Video Package (Shorts)', cost: 2, icon: 'ti-device-mobile' },
-  { feature: 'Video Package (Long)', cost: 6, icon: 'ti-player-play' },
+  { feature: 'Gyártási csomag (Shorts)', cost: 2, icon: 'ti-device-mobile' },
+  { feature: 'Gyártási csomag (Long)', cost: 6, icon: 'ti-player-play' },
   { feature: 'Auto Transcript', cost: 3, icon: 'ti-microphone' },
   { feature: 'Script Extract', cost: 3, icon: 'ti-file-text' },
-  { feature: 'Video Audit', cost: 4, icon: 'ti-stethoscope' },
-  { feature: 'Viral Score', cost: 1, icon: 'ti-chart-bar' },
-  { feature: 'Opportunity Engine', cost: 2, icon: 'ti-bulb' },
-  { feature: 'Heti Top Opportunity', cost: 0, icon: 'ti-chart-dots-3' },
-  { feature: 'Extra Opportunity keresés', cost: 2, icon: 'ti-refresh' },
-  { feature: 'Similar Videos (napi 3 ingyenes)', cost: 0, icon: 'ti-player-play' },
-  { feature: 'Similar Videos (napi 3 felett)', cost: 1, icon: 'ti-player-play' },
+  { feature: 'Videódiagnózis', cost: 4, icon: 'ti-stethoscope' },
+  { feature: 'Virális esély', cost: 1, icon: 'ti-chart-bar' },
+  { feature: 'Videólehetőségek', cost: 2, icon: 'ti-bulb' },
+  { feature: 'Heti Top Videólehetőség', cost: 0, icon: 'ti-chart-dots-3' },
+  { feature: 'Extra videólehetőség-keresés', cost: 2, icon: 'ti-refresh' },
+  { feature: 'Piaci bizonyíték (napi 3 ingyenes)', cost: 0, icon: 'ti-player-play' },
+  { feature: 'Piaci bizonyíték (napi 3 felett)', cost: 1, icon: 'ti-player-play' },
 ]
 
 function formatPrice(n: number) {
@@ -149,7 +149,7 @@ export default function CreditsPage() {
         </p>
         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.15)' }}>
           <i className="ti ti-info-circle" style={{ color: '#3B82F6' }} />
-          <span className="text-sm" style={{ color: '#CBD5E1' }}>Hetente 1 validált Top Opportunity és az első 3 Similar Videos keresés ingyenes. Mélyebb elemzésnél vagy extra futtatásnál kredit szükséges.</span>
+          <span className="text-sm" style={{ color: '#CBD5E1' }}>Hetente 1 validált Top Videólehetőség és az első 3 Piaci bizonyíték keresés ingyenes. Mélyebb elemzésnél vagy extra futtatásnál kredit szükséges.</span>
         </div>
       </div>
 
@@ -309,7 +309,7 @@ export default function CreditsPage() {
           ))}
         </div>
         <p className="text-xs mt-4 text-center" style={{ color: '#94A3B8' }}>
-          Kreditet generálásnál, mélyebb elemzésnél és extra keresésnél használsz. A böngészés, a heti Top Opportunity és a napi Similar Videos alapkeret ingyenes.
+          Kreditet generálásnál, mélyebb elemzésnél és extra keresésnél használsz. A böngészés, a heti Top Videólehetőség és a napi Piaci bizonyíték alapkeret ingyenes.
         </p>
       </div>
     </div>

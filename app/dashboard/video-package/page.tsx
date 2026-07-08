@@ -559,8 +559,8 @@ export default function VideoPackagePage() {
     if (!topic.trim()) return
     if (generationBlockedByOpportunity) {
       setError(opportunityHardBlocked
-        ? 'Ez a téma nem ajánlott gyártásra. Előbb válassz másik Opportunity témát vagy validáld újra.'
-        : 'Ez a téma kutatási státuszú. Készíthetsz előkészítő csomagot, de publikálás előtt validáld Similar Videos vagy Viral Score alapján.'
+        ? 'Ez a téma nem ajánlott gyártásra. Előbb válassz másik Videólehetőség témát vagy validáld újra.'
+        : 'Ez a téma kutatási státuszú. Készíthetsz előkészítő csomagot, de publikálás előtt validáld Piaci bizonyítékok vagy Virális esély alapján.'
       )
       return
     }
@@ -849,7 +849,7 @@ export default function VideoPackagePage() {
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🎬 Video Package Generator</h1>
+        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🎬 Gyártási csomag</h1>
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Platformra szabott, teljes videócsomag — a Creator Profile alapján.</p>
       </div>
 
@@ -912,7 +912,7 @@ export default function VideoPackagePage() {
               </p>
               {opportunityNeedsValidation && (
                 <p className="text-xs mt-2" style={{ color: '#CBD5E1' }}>
-                  Ez még nem elsődleges gyártási ajánlás. A prémium folyamat szerint előbb validáld Similar Videos vagy Viral Score oldalon.
+                  Ez még nem elsődleges gyártási ajánlás. A prémium folyamat szerint előbb validáld a Piaci bizonyítékok vagy Virális esély oldalon.
                 </p>
               )}
               {opportunityContext.risk_flags && opportunityContext.risk_flags.length > 0 && (
@@ -949,7 +949,7 @@ export default function VideoPackagePage() {
                     <a href={`/dashboard/viral-score?topic=${encodeURIComponent(opportunityContext.keyword || topic)}`}
                       className="text-xs px-3 py-1.5 rounded-lg font-medium"
                       style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.22)', color: '#A78BFA' }}>
-                      Viral Score
+                      Virális esély
                     </a>
                     <button onClick={() => { setAllowWeakOpportunityGeneration(true); setError(null) }}
                       className="text-xs px-3 py-1.5 rounded-lg"

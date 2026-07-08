@@ -99,7 +99,7 @@ export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfi
           Top lehetőségek most
         </p>
         <p className="text-xs mt-2" style={{ color: '#64748B' }}>
-          Még nincs friss, validált találat. Tölts be egy ajánlást a Trend Feed-en vagy az Opportunity Engine-ben.
+          Még nincs friss, validált találat. Tölts be egy ajánlást a Trend Feed-en vagy a Videólehetőségeknél.
         </p>
       </div>
     )

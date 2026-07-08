@@ -113,8 +113,8 @@ export async function checkUsagePermission(
       canRun: false,
       reason: 'hard_limit',
       message: feature === 'similar_videos'
-        ? `A napi maximum ${limits.hardLimitDaily} Similar Videos futtatast elereted. Probald ujra holnap.`
-        : `A napi maximum ${limits.hardLimitDaily} Opportunity Engine futtatast elerted. Probald ujra holnap.`,
+        ? `A napi maximum ${limits.hardLimitDaily} Piaci bizonyitek futtatast elereted. Probald ujra holnap.`
+        : `A napi maximum ${limits.hardLimitDaily} Videolehetoseg futtatast elerted. Probald ujra holnap.`,
     }
   }
 
@@ -179,8 +179,8 @@ export async function checkUsagePermission(
     requiresConfirmation: true,
     canRun: true,
     message: feature === 'similar_videos'
-      ? `A napi 3 ingyenes Similar Videos keresésed elfogyott. Ez a futtatás ${limits.creditCost} kreditbe kerül.`
-      : `A heti ingyenes Top Opportunity ajánlásod már megvan. Az extra keresés ${limits.creditCost} kreditbe kerül.`,
+      ? `A napi 3 ingyenes Piaci bizonyíték keresésed elfogyott. Ez a futtatás ${limits.creditCost} kreditbe kerül.`
+      : `A heti ingyenes Top Videólehetőség ajánlásod már megvan. Az extra keresés ${limits.creditCost} kreditbe kerül.`,
   }
 }
 

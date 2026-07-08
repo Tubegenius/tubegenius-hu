@@ -34,7 +34,7 @@ export default function CreatorMemoryPanel({ items: initialItems }: { items: Cre
   return (
     <div className="space-y-4">
       <div>
-        <p className="section-label mb-3">Creator Memory</p>
+        <p className="section-label mb-3">Tartalommemória</p>
         <div className="grid grid-cols-3 gap-2">
           {[
             { label: 'Mentett', count: saved.length, color: 'text-violet' },
@@ -54,7 +54,7 @@ export default function CreatorMemoryPanel({ items: initialItems }: { items: Cre
         {activeItems.length === 0 ? (
           <div className="card text-center py-6">
             <p className="text-2xl mb-2">📌</p>
-            <p className="text-text-muted text-sm">Mentsd el az Opportunity Engine témáit.</p>
+            <p className="text-text-muted text-sm">Mentsd el a Videólehetőségek témáit.</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -77,7 +77,7 @@ export default function CreatorMemoryPanel({ items: initialItems }: { items: Cre
                   {/* Gyors akciók */}
                   <div className="flex gap-2 mt-2">
                     <a href={`/dashboard/viral-score?topic=${encodeURIComponent(item.topic)}`}
-                      className="text-xs text-text-muted hover:text-violet transition-colors">📈 Viral Score</a>
+                      className="text-xs text-text-muted hover:text-violet transition-colors">📈 Virális esély</a>
                     <a href={`/dashboard/similar-videos?topic=${encodeURIComponent(item.topic)}`}
                       className="text-xs text-text-muted hover:text-violet transition-colors ml-2">🎬 Videók</a>
                   </div>

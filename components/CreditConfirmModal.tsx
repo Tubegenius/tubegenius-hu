@@ -11,14 +11,14 @@ interface Props {
 
 export default function CreditConfirmModal({ check, onConfirm, onCancel, loading }: Props) {
   const featureLabels: Record<string, string> = {
-    similar_videos: 'Similar Videos',
-    opportunity_engine: 'Opportunity Engine',
-    'Video Package (Shorts)': 'Video Package (Shorts)',
-    'Video Package (Long)': 'Video Package (Long)',
-    'Video Audit': 'Video Audit',
+    similar_videos: 'Piaci bizonyítékok',
+    opportunity_engine: 'Videólehetőségek',
+    'Video Package (Shorts)': 'Gyártási csomag (Shorts)',
+    'Video Package (Long)': 'Gyártási csomag (Long)',
+    'Video Audit': 'Videódiagnózis',
     'Script Extractor': 'Script Extractor',
     'Auto Transcript': 'Auto Transcript',
-    'Viral Score': 'Viral Score',
+    'Viral Score': 'Virális esély',
     'Trend mély frissítés': 'Trend mély frissítés',
     trend_deep_refresh: 'Trend mély frissítés',
   }

@@ -177,14 +177,14 @@ function EntryPointCards({ stats }: { stats: DashboardStats | null }) {
       color: '#3B82F6', gradient: 'rgba(59,130,246,0.08)',
     },
     {
-      icon: 'ti-chart-bar', title: 'Megéri ez a téma?', sub: 'Viral Score elemzés',
+      icon: 'ti-chart-bar', title: 'Megéri ez a téma?', sub: 'Virális esély elemzés',
       stat: stats?.avg_audit_score != null ? `${stats.avg_audit_score}` : '—',
       statLabel: stats?.avg_audit_score != null ? 'Átlagos Audit Score' : 'Még nincs audit',
       cta: 'Új elemzés indítása', href: '/dashboard/viral-score',
       color: '#8B5CF6', gradient: 'rgba(124,58,237,0.08)',
     },
     {
-      icon: 'ti-stethoscope', title: 'Miért nem megy a videóm?', sub: 'Video Audit elemzés',
+      icon: 'ti-stethoscope', title: 'Miért nem megy a videóm?', sub: 'Videódiagnózis elemzés',
       stat: stats ? `${stats.total_audits}` : '—',
       statLabel: stats?.total_audits ? `${stats.total_audits} elvégzett audit` : 'Még nincs audit',
       cta: 'Videó elemzése', href: '/dashboard/video-audit',
@@ -225,10 +225,10 @@ function EntryPointCards({ stats }: { stats: DashboardStats | null }) {
 
 // ─── Quick Actions ────────────────────────────────────────────
 const quickActions = [
-  { icon: 'ti-chart-bar', label: 'Viral Score', sub: 'Elemzés', href: '/dashboard/viral-score', color: '#8B5CF6' },
-  { icon: 'ti-stethoscope', label: 'Video Audit', sub: 'Elemzés', href: '/dashboard/video-audit', color: '#22C55E' },
+  { icon: 'ti-chart-bar', label: 'Virális esély', sub: 'Elemzés', href: '/dashboard/viral-score', color: '#8B5CF6' },
+  { icon: 'ti-stethoscope', label: 'Videódiagnózis', sub: 'Elemzés', href: '/dashboard/video-audit', color: '#22C55E' },
   { icon: 'ti-file-text', label: 'Script', sub: 'Kinyerés', href: '/dashboard/script-extractor', color: '#F59E0B' },
-  { icon: 'ti-player-play', label: 'Similar Videos', sub: 'Keresés', href: '/dashboard/similar-videos', color: '#3B82F6' },
+  { icon: 'ti-player-play', label: 'Piaci bizonyítékok', sub: 'Keresés', href: '/dashboard/similar-videos', color: '#3B82F6' },
   { icon: 'ti-package', label: 'Videócsomag', sub: 'Generálás', href: '/dashboard/video-package', color: '#EC4899' },
 ]
 
@@ -357,7 +357,7 @@ function getTodayActionMeta(topic: DashboardOpportunityTopic) {
   if (topic.ready_to_produce_status === 'watch') {
     return {
       title: 'Ma ezt validáld, utána gyárts',
-      body: 'A téma ígéretes, de előbb nézd meg a hasonló videókat vagy futtass Viral Score-t, hogy ne gyenge jelre építs.',
+      body: 'A téma ígéretes, de előbb nézd meg a hasonló videókat vagy futtass Virális esély elemzést, hogy ne gyenge jelre építs.',
       outcome: 'Döntés: mehet videócsomagba vagy új téma kell.',
       icon: 'ti-shield-check',
       color: '#F59E0B',
@@ -366,7 +366,7 @@ function getTodayActionMeta(topic: DashboardOpportunityTopic) {
   return {
     title: 'Ma ebből keress erősebb bizonyítékot',
     body: 'Ez még kutatási nyom, nem gyártási ajánlás. A cél most nem a csomagkészítés, hanem piaci bizonyíték gyűjtése.',
-    outcome: 'Erősebb Similar Videos lista vagy elvetett téma.',
+    outcome: 'Erősebb Piaci bizonyíték lista vagy elvetett téma.',
     icon: 'ti-search',
     color: '#F59E0B',
   }
@@ -545,7 +545,7 @@ function BestTopicToday({ topic, onLoad, loading, hasProfile }: {
             <Link href={`/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || topic.title)}`}
               className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
               style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#F59E0B' }}>
-              Validálás Similar Videos
+              Validálás Piaci bizonyítékokkal
             </Link>
           )}
           <Link href="/dashboard/opportunities" className="text-xs" style={{ color: '#CBD5E1' }}>Részletek megnyitása</Link>
@@ -700,7 +700,7 @@ function FirstRunLaunchPad({
     },
     {
       label: 'Bizonyíték ellenőrzése',
-      body: 'Similar Videos és Viral Score segít eldönteni, érdemes-e gyártani.',
+      body: 'Piaci bizonyítékok és Virális esély segít eldönteni, érdemes-e gyártani.',
       state: hasTopic ? 'next' : 'locked',
     },
     {
@@ -726,7 +726,7 @@ function FirstRunLaunchPad({
         </div>
         <Link href="/dashboard/opportunities" className="px-4 py-2 rounded-xl text-sm font-semibold text-center"
           style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
-          Opportunity Engine
+          Videólehetőségek
         </Link>
       </div>
 
@@ -796,13 +796,13 @@ function FirstVideoFlow({
       body: validationDone
         ? 'Ehhez a témához már van validációs jel. Innen dönthető el, mehet-e gyártásba.'
         : topicReady
-        ? 'A jel elég erős, de a Similar Videos tovább erősíti a döntést.'
+        ? 'A jel elég erős, de a Piaci bizonyítékok tovább erősítik a döntést.'
         : topicNeedsValidation
           ? 'Ez még kutatási irány. Előbb nézd meg, vannak-e erős hasonló videók.'
-          : 'A téma után jön a Similar Videos és Viral Score ellenőrzés.',
+          : 'A téma után jön a Piaci bizonyítékok és Virális esély ellenőrzés.',
       state: validationDone ? 'done' : topic ? 'active' : 'locked',
       href: similarHref,
-      cta: hasViralForTopic && !hasSimilarForTopic ? 'Similar Videos' : 'Similar Videos',
+      cta: hasViralForTopic && !hasSimilarForTopic ? 'Piaci bizonyítékok' : 'Piaci bizonyítékok',
       color: '#F59E0B',
     },
     {
@@ -838,8 +838,8 @@ function FirstVideoFlow({
           {topic && (
             <div className="flex flex-wrap gap-2 mt-3">
               {[
-                { label: 'Similar Videos', done: hasSimilarForTopic },
-                { label: 'Viral Score', done: hasViralForTopic },
+                { label: 'Piaci bizonyítékok', done: hasSimilarForTopic },
+                { label: 'Virális esély', done: hasViralForTopic },
                 { label: 'Videócsomag', done: hasPackageForTopic },
               ].map(item => (
                 <span key={item.label} className="text-xs px-2 py-1 rounded-full"
@@ -860,7 +860,7 @@ function FirstVideoFlow({
           {topic && (
             <Link href={viralHref} className="px-4 py-2 rounded-xl text-sm"
               style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', color: '#A78BFA' }}>
-              Viral Score
+              Virális esély
             </Link>
           )}
         </div>
@@ -911,7 +911,7 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
       <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
-            <i className="ti ti-bulb mr-1.5" style={{ color: '#3B82F6' }} />Opportunity Engine
+            <i className="ti ti-bulb mr-1.5" style={{ color: '#3B82F6' }} />Videólehetőségek
           </h3>
           <Link href="/dashboard/opportunities" className="text-xs" style={{ color: '#3B82F6' }}>Megnyitás →</Link>
         </div>
@@ -942,7 +942,7 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
       <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
-            <i className="ti ti-chart-bar mr-1.5" style={{ color: '#8B5CF6' }} />Viral Score
+            <i className="ti ti-chart-bar mr-1.5" style={{ color: '#8B5CF6' }} />Virális esély
           </h3>
         </div>
         <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>Írd be a videó ötleted, adj kulcsszavakat</p>
@@ -957,7 +957,7 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
         <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
-              <i className="ti ti-stethoscope mr-1.5" style={{ color: '#22C55E' }} />Video Audit
+              <i className="ti ti-stethoscope mr-1.5" style={{ color: '#22C55E' }} />Videódiagnózis
             </h3>
             <Link href="/dashboard/video-audit" className="text-xs" style={{ color: '#3B82F6' }}>Részletek →</Link>
           </div>
@@ -975,7 +975,7 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
       <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
-            <i className="ti ti-brain mr-1.5" style={{ color: '#F59E0B' }} />Creator Memory
+            <i className="ti ti-brain mr-1.5" style={{ color: '#F59E0B' }} />Tartalommemória
           </h3>
           <Link href="/dashboard/memory" className="text-xs" style={{ color: '#3B82F6' }}>Összes →</Link>
         </div>
@@ -1209,7 +1209,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           : cacheOnly && allTopics.length === 0
           ? null
           : data.message || (researchTopics.length > 0
-              ? 'Találtunk kutatási irányokat, de ezen a héten nincs elég erős gyártható téma. Nyisd meg az Opportunity Engine-t a továbbszűkítéshez.'
+              ? 'Találtunk kutatási irányokat, de ezen a héten nincs elég erős gyártható téma. Nyisd meg a Videólehetőségeket a továbbszűkítéshez.'
               : null)
       )
       // Ha nincs production topic, mutassuk a legjobb nem-discovery témákat is
@@ -1367,7 +1367,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
                     <Link href={`/dashboard/viral-score?topic=${encodeURIComponent(bestTopic.keyword || bestTopic.title)}`}
                       className="px-4 py-2.5 rounded-xl text-sm transition-all"
                       style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#F59E0B' }}>
-                      Viral Score ellenőrzés
+                      Virális esély ellenőrzés
                     </Link>
                   )}
                   <Link href={`/dashboard/opportunities?highlight=${encodeURIComponent(bestTopic.id)}`}
@@ -1434,7 +1434,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
             <button onClick={handleManualRefresh} disabled={loading} className="btn-primary text-sm">
               Extra keresés - 2 kredit
             </button>
-            <Link href="/dashboard/opportunities" className="btn-secondary text-sm">Opportunity Engine</Link>
+            <Link href="/dashboard/opportunities" className="btn-secondary text-sm">Videólehetőségek</Link>
           </div>
         </div>
       )}

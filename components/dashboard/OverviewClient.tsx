@@ -17,13 +17,13 @@ function getGreeting(): string {
 
 const quickActions = [
   { icon: 'ti-chart-dots-3', label: 'Trend Feed', sub: 'Mai ajánlás', href: '/dashboard', color: '#3B82F6' },
-  { icon: 'ti-bulb', label: 'Opportunity', sub: 'Elemzés', href: '/dashboard/opportunities', color: '#3B82F6' },
-  { icon: 'ti-player-play', label: 'Similar Videos', sub: 'Keresés', href: '/dashboard/similar-videos', color: '#3B82F6' },
+  { icon: 'ti-bulb', label: 'Videólehetőségek', sub: 'Elemzés', href: '/dashboard/opportunities', color: '#3B82F6' },
+  { icon: 'ti-player-play', label: 'Piaci bizonyítékok', sub: 'Keresés', href: '/dashboard/similar-videos', color: '#3B82F6' },
   { icon: 'ti-package', label: 'Videócsomag', sub: 'Generálás', href: '/dashboard/video-package', color: '#EC4899' },
-  { icon: 'ti-stethoscope', label: 'Video Audit', sub: 'Elemzés', href: '/dashboard/video-audit', color: '#22C55E' },
-  { icon: 'ti-chart-bar', label: 'Viral Score', sub: 'Elemzés', href: '/dashboard/viral-score', color: '#8B5CF6' },
+  { icon: 'ti-stethoscope', label: 'Videódiagnózis', sub: 'Elemzés', href: '/dashboard/video-audit', color: '#22C55E' },
+  { icon: 'ti-chart-bar', label: 'Virális esély', sub: 'Elemzés', href: '/dashboard/viral-score', color: '#8B5CF6' },
   { icon: 'ti-file-text', label: 'Script', sub: 'Kinyerés', href: '/dashboard/script-extractor', color: '#F59E0B' },
-  { icon: 'ti-brain', label: 'Creator Memory', sub: 'Témák', href: '/dashboard/memory', color: '#3B82F6' },
+  { icon: 'ti-brain', label: 'Tartalommemória', sub: 'Témák', href: '/dashboard/memory', color: '#3B82F6' },
 ]
 
 export default function OverviewClient({ displayName, profile }: { displayName: string; profile: CreatorProfile | null }) {

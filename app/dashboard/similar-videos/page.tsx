@@ -481,8 +481,8 @@ export default function SimilarVideosPage() {
         />
       )}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-text-primary mb-1">Virális hasonló videók</h1>
-        <p className="text-text-secondary text-sm">Friss, releváns, virális potenciál alapján rangsorolva.</p>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Piaci bizonyítékok</h1>
+        <p className="text-text-secondary text-sm">Hasonló, friss, releváns videók — virális potenciál alapján rangsorolva.</p>
       </div>
 
       <div className="card mb-6">
@@ -593,7 +593,7 @@ export default function SimilarVideosPage() {
                   Kutatási nyomok: {researchVideos.length}
                 </p>
                 <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
-                  Ezek még nem ajánlott inspirációk. Használd őket iránykeresésre, majd validáld tovább Similar Videos vagy Viral Score alapján.
+                  Ezek még nem ajánlott inspirációk. Használd őket iránykeresésre, majd validáld tovább Piaci bizonyítékok vagy Virális esély alapján.
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 opacity-90">

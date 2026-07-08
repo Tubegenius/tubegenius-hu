@@ -225,7 +225,7 @@ export default function TrackedTrendsPanel() {
         </div>
         <p className="text-sm font-medium" style={{ color: '#F8FAFC' }}>Még nincs követett trendtéma.</p>
         <p className="text-xs mt-1" style={{ color: '#64748B' }}>
-          Ments el egy trendet vagy generálj videócsomagot egy Opportunity Engine találatból.
+          Ments el egy trendet vagy generálj videócsomagot egy Videólehetőségek találatból.
         </p>
       </div>
     )

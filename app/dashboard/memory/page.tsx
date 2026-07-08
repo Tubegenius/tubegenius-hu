@@ -132,7 +132,7 @@ function MemoryCard({ item, onUpdate }: { item: MemoryItemExtended; onUpdate: ()
             <Link href={`/dashboard/viral-score?topic=${encodeURIComponent(searchTerm)}`}
               className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
-              📈 Viral Score
+              📈 Virális esély
             </Link>
             <Link href={`/dashboard/similar-videos?topic=${encodeURIComponent(searchTerm)}`}
               className="text-xs px-3 py-1.5 rounded-lg transition-all"
@@ -304,7 +304,7 @@ export default function CreatorMemoryPage() {
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🧠 Creator Memory</h1>
+        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🧠 Tartalommemória</h1>
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Minden mentett témád és generált videócsomagod egy helyen.</p>
       </div>
 
@@ -338,9 +338,9 @@ export default function CreatorMemoryPage() {
         audits.length === 0 ? (
           <div className="card text-center py-12">
             <p className="text-3xl mb-3">🔍</p>
-            <p style={{ color: '#CBD5E1' }}>Még nincs elvégzett Video Audit.</p>
+            <p style={{ color: '#CBD5E1' }}>Még nincs elvégzett Videódiagnózis.</p>
             <Link href="/dashboard/video-audit" className="btn-primary inline-block mt-4">
-              Video Audit indítása →
+              Videódiagnózis indítása →
             </Link>
           </div>
         ) : (

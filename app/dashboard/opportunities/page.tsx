@@ -617,11 +617,11 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
             <div className="flex gap-2 mt-3 flex-wrap">
               <a href={`/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || displayTitle)}`}
                 className="text-xs px-3 py-1.5 rounded-lg bg-surface-2 border border-border text-text-secondary hover:text-violet hover:border-violet/40 transition-all">
-                🎬 Similar Videos
+                🎬 Piaci bizonyítékok
               </a>
               <a href={`/dashboard/viral-score?topic=${encodeURIComponent(topic.keyword || displayTitle)}`}
                 className="text-xs px-3 py-1.5 rounded-lg bg-surface-2 border border-border text-text-secondary hover:text-violet hover:border-violet/40 transition-all">
-                📈 Viral Score
+                📈 Virális esély
               </a>
               {topic.validation_summary ? (
                 <>
@@ -797,7 +797,7 @@ function DiscoveryLaneCard({ topic, onSearch }: {
             <a href={`/dashboard/viral-score?topic=${encodeURIComponent(topic.keyword || displayTitle)}`}
               className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.25)', color: '#A78BFA' }}>
-              Viral Score
+              Virális esély
             </a>
             <a href={packageUrl} onClick={() => storeOpportunityPackageContext(topic, displayTitle)}
               className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all"
@@ -812,7 +812,7 @@ function DiscoveryLaneCard({ topic, onSearch }: {
             <a href={`/dashboard/similar-videos?topic=${encodeURIComponent(topic.keyword || topic.title)}`}
               className="text-xs px-3 py-1.5 rounded-lg transition-all"
               style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
-              Similar Videos
+              Piaci bizonyítékok
             </a>
           </div>
 
@@ -1011,7 +1011,7 @@ export default function OpportunitiesPage() {
         setLoading(false)
         setPendingGenerate({ profile: prof || undefined, options: { ...options, confirmed: true } })
         setCreditCheck({
-          feature: 'Opportunity Engine',
+          feature: 'Videólehetőségek',
           cost: data.confirmation_cost || 2,
           currency: 'credit',
           currentCredits: 0,
@@ -1097,7 +1097,7 @@ export default function OpportunitiesPage() {
         />
       )}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-text-primary mb-1">Opportunity Engine</h1>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Videólehetőségek</h1>
         <p className="text-text-secondary text-sm">Forrásokkal és YouTube-jelekkel validált creator témaajánlások.</p>
       </div>
 

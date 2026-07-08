@@ -52,13 +52,13 @@ const ACTIVITY_ICON: Record<ActivityItem['type'], { icon: string; color: string 
 
 const ACTIVITY_TYPE_LABEL: Record<ActivityItem['type'], string> = {
   video_package: 'Videócsomag',
-  video_audit: 'Audit',
+  video_audit: 'Diagnózis',
   memory: 'Téma',
-  opportunity: 'Opportunity',
-  similar_videos: 'Similar Videos',
+  opportunity: 'Lehetőség',
+  similar_videos: 'Piaci bizonyíték',
   script_extract: 'Script',
   transcript_extract: 'Transcript',
-  viral_score: 'Viral Score',
+  viral_score: 'Virális esély',
 }
 
 const TREND_BADGE: Record<string, { label: string; color: string; bg: string; icon: string }> = {

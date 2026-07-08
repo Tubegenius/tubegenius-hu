@@ -65,8 +65,8 @@ function viralDecisionMeta(result: ViralScoreResult) {
   const status = result.decision_status || (result.verdict === 'strong' ? 'make_now' : result.verdict === 'moderate' ? 'test_angle' : result.verdict === 'weak' ? 'research' : 'avoid')
   const fallback = {
     make_now: { label: 'Gyártható téma', reason: 'A témában elég erős jel látszik ahhoz, hogy gyártási döntést hozz.', action: 'Készíts videócsomagot, majd válassz erős hookot.', color: '#22C55E', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', icon: 'ti-circle-check' },
-    test_angle: { label: 'Tesztelhető szög', reason: 'Van piaci jel, de érdemes szűkebb angle-t keresni.', action: 'Nézz Similar Videos példákat és csomagold konkrétabb ígéretre.', color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)', icon: 'ti-flask' },
-    research: { label: 'Kutatás kell', reason: 'A jel még gyenge vagy bizonytalan.', action: 'Szűkítsd a keresést, majd validáld Similar Videos vagy webes forrás alapján.', color: '#60A5FA', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)', icon: 'ti-search' },
+    test_angle: { label: 'Tesztelhető szög', reason: 'Van piaci jel, de érdemes szűkebb angle-t keresni.', action: 'Nézz Piaci bizonyíték példákat és csomagold konkrétabb ígéretre.', color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)', icon: 'ti-flask' },
+    research: { label: 'Kutatás kell', reason: 'A jel még gyenge vagy bizonytalan.', action: 'Szűkítsd a keresést, majd validáld Piaci bizonyíték vagy webes forrás alapján.', color: '#60A5FA', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)', icon: 'ti-search' },
     avoid: { label: 'Most nem ajánlott', reason: 'Nincs elég erős adat ahhoz, hogy erre építs.', action: 'Próbálj más megfogalmazást vagy tágabb témát.', color: '#F43F5E', bg: 'rgba(244,63,94,0.08)', border: 'rgba(244,63,94,0.2)', icon: 'ti-alert-triangle' },
   }[status]
 
@@ -117,14 +117,14 @@ export default function ViralScorePage() {
       const res = await fetch(`/api/viral-score?paidResultId=${id}`)
       const data = await res.json()
       if (!res.ok || data.error) {
-        setError(data.error || 'A Viral Score eredmény nem található.')
+        setError(data.error || 'A Virális esély eredmény nem található.')
         return
       }
       setTopic(data.topic || initialTopic)
       setResult(data)
       sessionStorage.setItem('willviral_viral_score_state', JSON.stringify({ topic: data.topic || initialTopic, result: data }))
     } catch {
-      setError('Hiba a mentett Viral Score betöltésekor.')
+      setError('Hiba a mentett Virális esély betöltésekor.')
     } finally {
       setLoading(false)
     }
@@ -249,13 +249,13 @@ export default function ViralScorePage() {
         viral_score: result.score,
       }),
     })
-    alert('Téma mentve a Creator Memory-ba!')
+    alert('Téma mentve a Tartalommemóriába!')
   }
 
   return (
     <div className="max-w-2xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-text-primary mb-1">Viral Score</h1>
+        <h1 className="text-2xl font-bold text-text-primary mb-1">Virális esély</h1>
         <p className="text-text-secondary text-sm">Megéri ez a téma? Valós YouTube adatok alapján.</p>
       </div>
 
@@ -461,7 +461,7 @@ export default function ViralScorePage() {
               href={`/dashboard/similar-videos?topic=${encodeURIComponent(result.topic)}`}
               className="btn-secondary flex-1 text-center"
             >
-              🎬 Similar Videos →
+              🎬 Piaci bizonyítékok →
             </a>
             <a
               href={`/dashboard/video-package?topic=${encodeURIComponent(result.topic)}`}

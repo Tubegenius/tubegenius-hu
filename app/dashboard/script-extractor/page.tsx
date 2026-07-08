@@ -251,7 +251,7 @@ export default function ScriptExtractorPage() {
               <CopyButton text={`https://youtube.com/watch?v=${result.video_id}`} label="📋 Link másolása" />
               <CopyButton text={fullText} label="📋 Elemzés másolása" />
               <a href={`/dashboard/viral-score?topic=${encodeURIComponent(result.title)}`}
-                className="btn-secondary text-sm">📈 Viral Score</a>
+                className="btn-secondary text-sm">📈 Virális esély</a>
             </div>
           </div>
 

@@ -343,7 +343,7 @@ export default function VideoAuditPage() {
 
       {/* Header */}
       <div className="mb-8">
-        <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-2">Videó Audit</div>
+        <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-2">Videódiagnózis</div>
         <h1 className="text-3xl font-black tracking-tight text-white leading-tight mb-2">
           {result ? result.video_title || 'Audit eredmény' : 'Elemezd a videódat'}
         </h1>
