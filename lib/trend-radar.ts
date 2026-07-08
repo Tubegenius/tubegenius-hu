@@ -7,6 +7,8 @@ import type { NicheCategory } from './niche-seeds'
 
 import { youtubeSearch, youtubeStats, getEffectiveBudget, startNewRequest, type YouTubeSearchItem as YTSearchItem } from './youtube-service'
 import { recordVideoSnapshots, recordTrendCandidates } from './youtube-snapshot'
+import { callAIProvider, extractJson } from './services/ai-provider-service'
+import { MODELS } from './models'
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY!
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!
@@ -386,26 +388,14 @@ Válaszolj KIZÁRÓLAG valid JSON-nal, más szöveg nélkül:
 }`
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+    const aiCall = await callAIProvider({
+      model: MODELS.fast,
+      maxTokens: 300,
+      messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: 'trend_radar_topic_rewrite',
+      promptVersion: 'v1',
     })
-    const data = await res.json()
-    const text = data.content?.[0]?.text || ''
-    const cleaned = text.replace(/```json|```/g, '').trim()
-    const firstBrace = cleaned.indexOf('{')
-    const lastBrace = cleaned.lastIndexOf('}')
-    if (firstBrace === -1 || lastBrace === -1) return null
-    const parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as Partial<HaikuRewriteResult>
+    const parsed = extractJson<Partial<HaikuRewriteResult>>(aiCall.text)
 
     if (!parsed.searchable_topic || !parsed.display_topic) return null
 

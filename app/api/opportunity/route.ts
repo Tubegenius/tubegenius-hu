@@ -2,8 +2,8 @@
 // WillViral — Opportunity Engine v4 (Core Trust Engine)
 
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import {
   buildTrendCandidates,
@@ -27,19 +27,6 @@ import {
 } from '@/lib/core-trust-engine'
 import { buildCacheKey, buildTrendCacheKey } from '@/lib/core-trust-engine/cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
-
-function extractJson(text: string): unknown {
-  let cleaned = text.replace(/```json|```/g, '').trim()
-  const firstBrace = cleaned.indexOf('{')
-  const lastBrace = cleaned.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1)
-  }
-  try { return JSON.parse(cleaned) }
-  catch (e) { console.error('JSON parse failed:', cleaned.slice(0, 1500)); throw e }
-}
 
 // ── Fallback topic builders (research lanes, broad discovery) ────
 
@@ -644,6 +631,7 @@ export async function POST(request: NextRequest) {
 
     // ── 6. Claude explanation ────────────────────────────────
     let claudeExplanations: Array<{ index: number; title: string; description: string; hook: string }> = []
+    let opportunityAiCall: Awaited<ReturnType<typeof callAIProvider>> | null = null
 
     if (visibleCandidates.length > 0) {
       const explainPrompt = `Te egy magyar creator intelligence rendszer vagy.
@@ -711,15 +699,17 @@ KRITIKUS JSON SZABÁLYOK:
   ]
 }`
 
-      const message = await anthropic.messages.create({
+      const aiCall = await callAIProvider({
         model: MODELS.fast,
-        max_tokens: 2000,
+        maxTokens: 2000,
         messages: [{ role: 'user', content: explainPrompt }],
+        promptTemplateId: 'opportunity_engine_explanations',
+        promptVersion: 'v1',
       })
 
-      const responseText = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
-      const explained = extractJson(responseText) as { explanations?: typeof claudeExplanations }
+      const explained = extractJson<{ explanations?: typeof claudeExplanations }>(aiCall.text)
       claudeExplanations = explained.explanations || []
+      opportunityAiCall = aiCall
     }
 
     // ── 7. Apply safe output + convert to OpportunityTopic ───
@@ -884,6 +874,16 @@ KRITIKUS JSON SZABÁLYOK:
         summaryJson: { topic_count: topics.length, pool_count: poolTopics.length, niche },
         creditCost: creditsCharged,
         freshForHours: 24,
+        // opportunityAiCall csak akkor van kitoltve, ha ebben a futasban tenyleg
+        // volt magyarazo Claude-hivas (visibleCandidates.length > 0) — cache-talalat
+        // vagy nulla validalt candidate eseten nincs megbizhato provider/model adat.
+        ...(opportunityAiCall ? {
+          provider: opportunityAiCall.provider,
+          model: opportunityAiCall.model,
+          promptTemplateId: opportunityAiCall.promptTemplateId,
+          promptVersion: opportunityAiCall.promptVersion,
+          estimatedCost: opportunityAiCall.estimatedCost,
+        } : {}),
       })
       if (!paidSave.success) {
         console.error('[Opportunity] KRITIKUS: paid_results mentés sikertelen:', paidSave.error)
