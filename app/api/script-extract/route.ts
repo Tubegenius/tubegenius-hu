@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { getUserId, logUsage, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 import { getActiveApiKey } from '@/lib/youtube-service'
 
 function extractVideoId(url: string): string | null {
@@ -42,17 +40,6 @@ async function tryTranscriptExtraction(videoId: string): Promise<{ available: bo
   } catch {
     return { available: false, text: null }
   }
-}
-
-function extractJson(text: string): unknown {
-  let cleaned = text.replace(/```json|```/g, '').trim()
-  const firstBrace = cleaned.indexOf('{')
-  const lastBrace = cleaned.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1)
-  }
-  try { return JSON.parse(cleaned) }
-  catch (e) { console.error('JSON parse failed:', cleaned.slice(0, 2000)); throw e }
 }
 
 export async function POST(request: NextRequest) {
@@ -171,21 +158,22 @@ Valaszolj KIZAROLAG valid JSON-ban:
 }`
     }
 
-    const message = await anthropic.messages.create({
+    const aiCall = await callAIProvider({
       model: MODELS.primary,
-      max_tokens: 2500,
+      maxTokens: 2500,
       messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: transcriptResult.available ? 'script_extract_transcript' : 'script_extract_metadata_only',
+      promptVersion: 'v1',
     })
 
-    const responseText = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
-    const analysis = extractJson(responseText) as {
+    const analysis = extractJson<{
       hook: string
       structure: Array<{ timestamp: string; label: string; content: string; type: string }>
       key_points: string[]
       success_factors: string
-    }
+    }>(aiCall.text)
 
-    await logUsage(userId, 'script_extract', MODELS.primary, message.usage.input_tokens, message.usage.output_tokens, { videoId, transcript_available: transcriptResult.available })
+    await logUsage(userId, 'script_extract', MODELS.primary, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { videoId, transcript_available: transcriptResult.available })
     const charge = await chargeFeature(userId, 'script_extract', { videoId })
     if (!charge.success) {
       return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
@@ -226,6 +214,11 @@ Valaszolj KIZAROLAG valid JSON-ban:
       summaryJson: { title: snippet.title, videoId, transcript_available: transcriptResult.available },
       creditCost: CREDIT_COSTS.script_extract,
       freshForHours: 24,
+      provider: aiCall.provider,
+      model: aiCall.model,
+      promptTemplateId: aiCall.promptTemplateId,
+      promptVersion: aiCall.promptVersion,
+      estimatedCost: aiCall.estimatedCost,
     })
     if (!paidSave.success) {
       console.error('[ScriptExtract] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
