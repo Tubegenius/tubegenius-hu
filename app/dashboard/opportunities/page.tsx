@@ -375,7 +375,7 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
           body: JSON.stringify({ topic: displayTitle, feedback_type: 'request_similar', opportunity_score: topic.opportunity_score, niche_cluster: topic.niche_cluster }),
         })
       } else {
-        setSimilarError('Nem sikerült alternatív szöget találni — próbáld újra.')
+        setSimilarError(res.status === 402 ? (data.error || 'Nincs elegendő kredited ehhez a művelethez.') : 'Nem sikerült alternatív szöget találni — próbáld újra.')
       }
     } catch {
       setSimilarError('Kapcsolati hiba — próbáld újra.')
@@ -1069,6 +1069,9 @@ export default function OpportunitiesPage() {
         const data = await res.json()
         if (res.ok) {
           finalTopic = { ...next, title: data.title, description: data.description, needs_explanation: false }
+        } else if (res.status === 402) {
+          setError(data.error || 'Nincs elegendő kredited ehhez a művelethez.')
+          return
         }
       } catch {}
     }

@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
-import { getUserId, logUsage } from '@/lib/credits'
+import { getUserId, logUsage, chargeFeature, hasEnoughCredits } from '@/lib/credits'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import type { OpportunityScoreBreakdown, SimilarVideo } from '@/types'
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
 
 // Lazy magyarázat-generálás egy pool candidate-hoz (amikor "Mutass mást" előhívja).
 // NULLA YouTube hívás — a candidate adatai (score_breakdown, evidence_videos) már megvannak a cache-ből.
@@ -18,6 +16,13 @@ export async function POST(request: NextRequest) {
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    // Korabban ez a route nem vont le kreditet, pedig van ra definialt ar
+    // (CREDIT_COSTS.opportunity_explain) — ez hiba volt, nem szandekos ingyenesseg.
+    const enoughCredits = await hasEnoughCredits(userId, 'opportunity_explain')
+    if (!enoughCredits) {
+      return NextResponse.json({ error: 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
+    }
 
     const breakdown = score_breakdown as OpportunityScoreBreakdown
     const videos = (evidence_videos || []) as SimilarVideo[]
@@ -47,26 +52,22 @@ KRITIKUS JSON SZABÁLYOK:
 Válaszolj KIZÁRÓLAG valid JSON-ban:
 {"title": "Konkrét magyar videótéma", "description": "1-2 mondatos magyar indoklás"}`
 
-    const message = await anthropic.messages.create({
+    const aiCall = await callAIProvider({
       model: MODELS.fast,
-      max_tokens: 400,
+      maxTokens: 400,
       messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: 'opportunity_explain_pool',
+      promptVersion: 'v1',
     })
 
-    const responseText = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
-    const cleaned = responseText.replace(/```json|```/g, '').trim()
-    const firstBrace = cleaned.indexOf('{')
-    const lastBrace = cleaned.lastIndexOf('}')
-    const jsonStr = firstBrace !== -1 && lastBrace !== -1 ? cleaned.slice(firstBrace, lastBrace + 1) : cleaned
-    let result: { title: string; description: string }
-    try {
-      result = JSON.parse(jsonStr)
-    } catch (e) {
-      console.error('JSON parse failed. Raw response:', cleaned.slice(0, 1000))
-      throw e
-    }
+    const result = extractJson<{ title: string; description: string }>(aiCall.text)
 
-    await logUsage(userId, 'opportunity_explain', MODELS.fast, message.usage.input_tokens, message.usage.output_tokens, { type: 'pool_explain', keyword })
+    await logUsage(userId, 'opportunity_explain', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { type: 'pool_explain', keyword })
+
+    const chargeResult = await chargeFeature(userId, 'opportunity_explain', { type: 'pool_explain', keyword })
+    if (!chargeResult.success) {
+      return NextResponse.json({ error: chargeResult.error || 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
+    }
 
     return NextResponse.json({ title: result.title, description: result.description })
   } catch (error) {
