@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import type { ViralScoreResult, VideoCardData } from '@/types'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
-import { scoreLabel, scoreLabelColor } from '@/lib/score-utils'
+import { scoreLabel, scoreLabelColor, scoreColor } from '@/lib/score-utils'
 import VideoCardActions from '@/components/VideoCardActions'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
@@ -390,6 +390,38 @@ export default function ViralScorePage() {
                   <p className="text-text-primary font-semibold">{item.value}</p>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Magyarázható score-bontás */}
+          <div className="card">
+            <p className="section-label mb-1">Miért ez a pontszám?</p>
+            <p className="text-xs text-text-muted mb-4">A fő szám mögötti tényezők — nem csak azt mutatja, MENNYIRE virális, hanem hogy MIÉRT.</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: 'Friss adat', value: result.breakdown.freshness },
+                { label: 'Bizonyíték erőssége', value: result.breakdown.proof_strength },
+                { label: 'Hook potenciál', value: result.breakdown.hook_potential },
+                { label: 'Kíváncsiság', value: result.breakdown.audience_curiosity },
+                { label: 'Platform illeszkedés', value: result.breakdown.platform_fit },
+                { label: 'Gyárthatóság', value: result.breakdown.production_difficulty != null ? 100 - result.breakdown.production_difficulty : undefined, sub: 'Könnyebb legyártani, ha magas' },
+                ...(result.breakdown.niche_fit != null ? [{ label: 'Niche illeszkedés', value: result.breakdown.niche_fit }] : []),
+              ].filter(item => item.value != null).map(item => (
+                <div key={item.label} className="bg-surface-2 rounded-lg p-3">
+                  <p className="text-text-muted text-xs mb-1">{item.label}</p>
+                  <p className="text-lg font-bold" style={{ color: scoreColor(item.value as number) }}>{item.value}/100</p>
+                </div>
+              ))}
+              {result.breakdown.risk_level && (
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <p className="text-text-muted text-xs mb-1">Kockázati szint</p>
+                  <p className="text-lg font-bold" style={{
+                    color: result.breakdown.risk_level === 'low' ? '#22C55E' : result.breakdown.risk_level === 'medium' ? '#F59E0B' : '#EF4444',
+                  }}>
+                    {result.breakdown.risk_level === 'low' ? 'Alacsony' : result.breakdown.risk_level === 'medium' ? 'Közepes' : 'Magas'}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

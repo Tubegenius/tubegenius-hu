@@ -2,6 +2,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { MODELS } from '@/lib/models'
 import { calcEngagementRate, calcTrendVelocity, calcViewOutlierScore, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
+import { calculateNicheFit } from '@/lib/niche-fit'
 import type { SimilarVideo } from '@/types'
 import { getUserId, logUsage, chargeFeature, hasEnoughCredits } from '@/lib/credits'
 import type { ViralScoreResult, ViralScoreConfidence } from '@/types'
@@ -126,6 +127,33 @@ function calcBackendViralScore(videos: YouTubeVideoStats[], avgViews: number, to
   return Math.round(Math.max(0, Math.min(100, total)))
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// Átlagos videókor -> friss/elavult jelzés, ugyanazokkal a küszöbökkel, mint
+// a Similar Videos freshnessScore-ja (lásd similar-videos/route.ts).
+function calcFreshnessScore(videos: YouTubeVideoStats[]): number {
+  if (videos.length === 0) return 0
+  const avgAgeDays = videos.reduce((sum, v) => sum + Math.max(0, (Date.now() - new Date(v.publishedAt).getTime()) / DAY_MS), 0) / videos.length
+  if (avgAgeDays <= 7) return 100
+  if (avgAgeDays <= 30) return 85
+  if (avgAgeDays <= 90) return 65
+  if (avgAgeDays <= 180) return 40
+  return 15
+}
+
+// Mennyire erős maga a bizonyíték-mennyiség (nem a virális esély, hanem hogy
+// mennyire megbízható az, amiből a score született).
+function calcProofStrength(confidence: ViralScoreConfidence, webBuzzScore: number | null): number {
+  const base: Record<ViralScoreConfidence, number> = { magas: 90, közepes: 65, alacsony: 35, nagyon_alacsony: 10 }
+  return webBuzzScore !== null ? Math.round(base[confidence] * 0.7 + webBuzzScore * 0.3) : base[confidence]
+}
+
+function calcRiskLevel(riskFlagCount: number): 'low' | 'medium' | 'high' {
+  if (riskFlagCount >= 2) return 'high'
+  if (riskFlagCount === 1) return 'medium'
+  return 'low'
+}
+
 function getVerdict(score: number): 'strong' | 'moderate' | 'weak' | 'avoid' {
   if (score >= 70) return 'strong'
   if (score >= 45) return 'moderate'
@@ -196,6 +224,9 @@ export async function POST(request: NextRequest) {
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const { data: profileRow } = await createAdminClient().from('profiles').select('niche').eq('user_id', userId).single()
+    const userNiche = profileRow?.niche || ''
 
     // ─── Perzisztens, user-szintű eredmény-cache ─────────────────
     // Amit a user egyszer kredittel lefuttatott, azt bármikor újra meg
@@ -375,11 +406,22 @@ export async function POST(request: NextRequest) {
     const trendMomentum = calcTrendVelocity(videoStats)
     const competitionLevel = Math.round(Math.min(100, (Math.log10(totalResults + 1) / Math.log10(500_000)) * 100))
 
-    // ─── Claude — CSAK magyarázat a meglévő számokból ───
-    const prompt = `A backend rendszer a következő valós YouTube adatokat számolta ki egy témára. Te CSAK ezeket az adatokat magyarázod magyarul — NEM adsz saját score-t.
+    // ─── Magyarázható score-bontás — a cél, hogy a Viral Score ne csak egy
+    // szám legyen, hanem lássa a creator, MIÉRT ez a szám (lásd Creator OS terv,
+    // "Viral Score legyen magyarázható döntési pontszám"). ───
+    const freshnessScore = calcFreshnessScore(videoStats)
+    const proofStrength = calcProofStrength(confidence, webBuzzScore)
+    const riskLevel = calcRiskLevel(decision.risk_flags.length)
+    const nicheFitScore = userNiche
+      ? Math.round(videoStats.reduce((sum, v) => sum + calculateNicheFit({ title: v.title, channelTitle: v.channelTitle }, userNiche).score, 0) / Math.max(1, videoStats.length))
+      : null
+
+    // ─── Claude — magyarázat + a valós adatokból megítélhető minőségi tényezők ───
+    const prompt = `A backend rendszer a következő valós YouTube adatokat számolta ki egy témára. Te CSAK ezeket az adatokat magyarázod magyarul — NEM adsz saját 0-100 fő score-t, az már megvan.
 
 TÉMA: "${topic}"
 RÉGIÓ: ${region || 'HU'}
+PLATFORM: ${platform || 'youtube'}
 
 BACKEND SZÁMOK:
 - Viral Score: ${score}/100 (verdict: ${verdict})
@@ -389,15 +431,24 @@ BACKEND SZÁMOK:
 - Átlagos komment: ${Math.round(avgComments).toLocaleString()}
 - Trend momentum: ${trendMomentum}/100 (friss videók aránya)
 - Verseny szint: ${competitionLevel}/100
+- Friss adat: ${freshnessScore}/100
 - Összes találat a piacon: ${totalResults.toLocaleString()}
 ${webBuzzScore !== null ? `- Webes visszhang (hírek/cikkek): ${webBuzzScore}/100 (${serperResults.length} releváns webes találat)` : '- Webes visszhang: nem elérhető ehhez a futtatáshoz'}
 
+TOP VIDEÓ CÍMEK (ebből ítéld meg a hook/kíváncsiság/platform-illeszkedés/gyárthatóság tényezőket):
+${videoStats.slice(0, 8).map(v => `- "${v.title}" (${v.viewCount.toLocaleString()} megtekintés)`).join('\n')}
+
 FELADAT:
-Írj egy 2-3 mondatos magyar ajánlást a fenti SZÁMOK alapján. Magyarázd el mit jelentenek ezek a számok a creator számára. NE adj más score-t, NE mondj ellent a fenti verdict-nek.
+1. Írj egy 2-3 mondatos magyar ajánlást a fenti SZÁMOK alapján. Magyarázd el mit jelentenek ezek a számok a creator számára. NE adj más 0-100 fő score-t, NE mondj ellent a fenti verdict-nek.
 Ha a webes lefedettségre hivatkozol, PONTOSAN a "webes visszhang" kifejezést használd — NE találj ki hozzá szinonimát vagy új összetett szót.
+2. A fenti top videócímek alapján, KIZÁRÓLAG a valós adatra támaszkodva (ne találgass), adj 0-100 közötti becslést az alábbi 4 tényezőre:
+   - hook_potential: mennyire erős hook/csavart ígérnek a legjobban teljesítő címek
+   - audience_curiosity: mennyire kíváncsiságvezérelt a téma a címek alapján
+   - platform_fit: mennyire illik ez a téma a "${platform || 'youtube'}" platformhoz a videók stílusa/hossza alapján
+   - production_difficulty: mennyire nehéz ezt legyártani (0 = nagyon egyszerű, 100 = nagyon nehéz/erőforrás-igényes), a téma jellege alapján (pl. szükséges-e szakértelem, speciális felvétel, sok kutatás)
 
 Válaszolj KIZÁRÓLAG valid JSON-ban:
-{"recommendation": "2-3 mondatos magyar ajánlás a backend számok alapján"}`
+{"recommendation": "2-3 mondatos magyar ajánlás a backend számok alapján", "hook_potential": 0, "audience_curiosity": 0, "platform_fit": 0, "production_difficulty": 0}`
 
     const message = await anthropic.messages.create({
       model: MODELS.fast,
@@ -408,6 +459,11 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     const responseText = message.content.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join('')
     const aiResult = JSON.parse(responseText.replace(/```json|```/g, '').trim())
     const polishedRecommendation = polishHungarianText(String(aiResult.recommendation || ''))
+    const clampScore = (value: unknown) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)))
+    const hookPotential = clampScore(aiResult.hook_potential)
+    const audienceCuriosity = clampScore(aiResult.audience_curiosity)
+    const platformFit = clampScore(aiResult.platform_fit)
+    const productionDifficulty = clampScore(aiResult.production_difficulty)
 
     await logUsage(userId, 'viral_score', MODELS.fast, message.usage.input_tokens, message.usage.output_tokens, { topic })
 
@@ -445,9 +501,22 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
         trend_momentum: trendMomentum,
         competition_level: competitionLevel,
         web_buzz: webBuzzScore,
+        freshness: freshnessScore,
+        proof_strength: proofStrength,
+        niche_fit: nicheFitScore,
+        risk_level: riskLevel,
+        hook_potential: hookPotential,
+        audience_curiosity: audienceCuriosity,
+        platform_fit: platformFit,
+        production_difficulty: productionDifficulty,
       },
       recommendation: polishedRecommendation,
       verdict,
+      decision_status: decision.decision_status,
+      decision_label: decision.decision_label,
+      decision_reason: decision.decision_reason,
+      next_action: decision.next_action,
+      risk_flags: decision.risk_flags,
       videos: topVideos,
       web_sources: serperResults.slice(0, 3).map(s => ({ title: s.title, url: s.link, source: s.source, date: s.date })),
     }

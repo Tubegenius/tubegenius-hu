@@ -230,6 +230,15 @@ export interface ViralScoreBreakdown {
   // null = a Serper webes jel nem volt elérhető ehhez a futtatáshoz (API hiba/kulcs
   // hiánya) — ilyenkor a score az eredeti, csak YouTube-alapú súlyozással készült.
   web_buzz: number | null
+  // Magyarázható score-bontás (Creator OS terv) — miért ez a fő score, nem csak mi.
+  freshness?: number
+  proof_strength?: number
+  niche_fit?: number | null
+  risk_level?: 'low' | 'medium' | 'high'
+  hook_potential?: number
+  audience_curiosity?: number
+  platform_fit?: number
+  production_difficulty?: number
 }
 
 export type ViralScoreConfidence = 'magas' | 'közepes' | 'alacsony' | 'nagyon_alacsony'
