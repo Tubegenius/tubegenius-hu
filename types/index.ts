@@ -336,6 +336,8 @@ export interface VideoIdea {
   video_package_id: string | null
   audit_result_id: string | null
   calendar_status: string | null
+  scheduled_publish_date: string | null
+  calendar_notes: string | null
   publish_status: string | null
   workflow_status: VideoIdeaWorkflowStatus
   paid_result_reference: string | null

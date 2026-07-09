@@ -91,7 +91,7 @@ export async function PATCH(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-  const { id, workflow_status, calendar_status, publish_status } = await request.json()
+  const { id, workflow_status, calendar_status, publish_status, scheduled_publish_date, calendar_notes } = await request.json()
   if (!id) return NextResponse.json({ error: 'Video Idea azonosító kötelező' }, { status: 400 })
   if (workflow_status && !isWorkflowStatus(workflow_status)) {
     return NextResponse.json({ error: 'Érvénytelen workflow státusz' }, { status: 400 })
@@ -101,6 +101,8 @@ export async function PATCH(request: NextRequest) {
   if (workflow_status) update.workflow_status = workflow_status
   if (calendar_status !== undefined) update.calendar_status = calendar_status
   if (publish_status !== undefined) update.publish_status = publish_status
+  if (scheduled_publish_date !== undefined) update.scheduled_publish_date = scheduled_publish_date
+  if (calendar_notes !== undefined) update.calendar_notes = calendar_notes
 
   const admin = createAdminClient()
   const { data, error } = await admin
