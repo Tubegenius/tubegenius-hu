@@ -180,14 +180,17 @@ Minden fázis külön commit, külön build+tsc ellenőrzés, és — ahol érte
 - `api/opportunity-explain` és `api/opportunity-similar` átállítása `callAIProvider()`-re, ÉS **egyúttal kijavítva a #6 hibát** (tényleges kredit-levonás bekötése) — ezt érdemes külön megbeszélni a userrel, mert ez bevétel-növelő viselkedésváltozás, nem csak refaktor (a user eddig ingyen kapta ezt a műveletet).
 - Ez a 2 route a legkisebb (76-82 sor), legkevesebb függőségű a 9 AI-hívó route közül — ideális "bizonyítsd be, hogy működik" lépés éles forgalommal.
 
-### Fázis C — A nagy, kredit-terhelő route-ok egyenként
-Sorrend a kockázat/érték arány szerint, **egyesével, nem egyszerre**:
-1. `viral-score` (már a mai session-ben is bővítettük a video-idea integrációt, jól ismerjük)
-2. `script-extract` (kis fájl, 1 AI hívás, de javítsuk a "charge after AI succeeds" sorrendet is #12 mellékhatásként)
-3. `video-package` (2 AI hívás, legösszetettebb prompt-logika — ide kell a legtöbb regressziós teszt)
-4. `video-audit` (raw-fetch → SDK migrálás + YouTube-fetch átterelése `lib/youtube-service.ts`-re)
-5. `opportunity` (legnagyobb, két cache-rendszer — ezt hagynám utoljára, itt a legnagyobb a törés esélye)
-6. `similar-videos` (hasonlóan nagy és összetett, szintén utolsók között)
+### Fázis C — ✅ KÉSZ (2026-07-08/09), 6/6 — A nagy, kredit-terhelő route-ok egyenként
+Az 1. tételt (`viral-score`) Claude Code végezte, a 2-6. tételt egy párhuzamosan futó Codex-munkamenet fejezte be, ugyanezt a tervet követve — mindkettő ugyanazt a `callAIProvider()`/`extractJson()` mintát alkalmazta, mindegyiket önállóan élőben tesztelte valós kredit-levonással. Utólagos átvizsgálás (Claude Code, 2026-07-09): mind az 5 Codex-commit diffje átnézve, `tsc --noEmit` + `npm run build` zöld a teljes kombinált állapoton.
+
+1. ✅ `viral-score` — Claude Code, élőben tesztelve (70→69 kredit)
+2. ✅ `script-extract` — Codex, élőben tesztelve (69→66 kredit), saját `extractJson` eltávolítva
+3. ✅ `video-package` — Codex, élőben tesztelve (66→64 kredit); menet közben talált és a közös `extractJson()`-be javított egy hibát: Claude néha nyers sortörést tesz a `narration` mezőbe, ami eltörte a `JSON.parse`-t — ez most minden route-nak javítva
+4. ✅ `video-audit` — Codex, élőben tesztelve (64→60 kredit); ez volt az egyetlen raw-fetch (nem SDK) route, ÉS soha nem hívott `logUsage`-ot — mindkettőt javította
+5. ✅ `similar-videos` — Codex, élőben tesztelve (60→59 kredit); a Haiku-hívás `lib/similar-query-expansion.ts`-ben lakik, nem a route-ban
+6. ✅ `opportunity` — Codex, élőben tesztelve (59→57 kredit); 2 hívási pont (route + `lib/trend-radar.ts` `rewriteTopicWithHaiku`), utóbbiban egy hardkódolt `'claude-haiku-4-5-20251001'` string helyett most `MODELS.fast`
+
+**Ezzel a teljes repóban 0 route/lib hív már közvetlenül Anthropic API-t** — mind a 9 hívási pont a közös rétegen megy át, és a `paid_results.provider/model/prompt_template_id/prompt_version/estimated_cost` mezők (021-es migráció, korábban örökre üresek) ténylegesen kitöltődnek.
 
 ### Fázis D — Kredit-rendszer egyesítés
 - `credit-service.ts` bevezetése, `lib/credits.ts` és `lib/usage-protection.ts` ráépítése a közös primitívre — ez csak azután, hogy minden AI-hívó route már stabilan megy az új provider-rétegen, mert ez a legkockázatosabb belső mechanika-csere (a `user_credits.balance` optimistic lock).
@@ -208,6 +211,11 @@ Emellett a `checkout.session.completed` (subscription mód) és `customer.subscr
 
 ---
 
-## 7. JAVASOLT KÖVETKEZŐ LÉPÉS
+## 7. ÁLLAPOT (2026-07-09) ÉS KÖVETKEZŐ LÉPÉS
 
-Azt javaslom, hogy **Fázis A-val kezdjünk** (nulla route-kockázat, tiszta alapozás), utána álljunk meg és nézzük át együtt, mielőtt bármelyik éles, kredit-terhelő route-hoz hozzányúlnánk (Fázis B/C). A Fázis F-et (Stripe webhook idempotencia) pedig érdemes lenne mielőbb, ettől a refaktortól függetlenül napirendre venni, mert ez valós bevétel-kockázat, nem csak kód-tisztaság.
+Fázis A, B, C és F **mind kész** — a teljes eredeti terv (Phase 1 #12 AI provider layer alap) le van zárva. Ami NEM indult el, tudatos döntés alapján:
+
+- **Fázis D** (kredit-rendszer egyesítés — `lib/credits.ts` + `lib/usage-protection.ts` közös primitívre) — nem sürgető, a rendszer működik a két párhuzamos rendszerrel is.
+- **Fázis E** (#7 `video-packages` nincs kredit/paid_results védve, #8 `deep-refresh` nem-atomi+nincs input-hash) — üzleti döntést igényel, mielőtt hozzányúlnék.
+
+Ezekre nincs azonnali javaslat — a mesterterv (`CREATOR_OS_PLAN_STATUS.md`) szerinti következő lépés a **Phase 2** megkezdése (Keyword Research vagy Competitor Tracker), amihez a usernek kell választania.

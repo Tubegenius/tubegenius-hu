@@ -84,9 +84,9 @@ A user korábban ezt a sorrendet hagyta jóvá: **"haladjunk sorban, Phase 1, Ph
 2. ~~**#12 AI provider layer alap**~~ — **KÉSZ a core-refaktor szintjén** (2026-07-08, harmadik kör): mind a 9 AI-hívó route/lib átállítva a közös rétegre, `paid_results` provider/model/cost mezői élesben töltődnek. Amit a master terv eredeti #12 tétele még kér, de EZ a kör nem csinált meg (tudatosan, külön döntés kell): OpenAI mint második provider bekötése az absztrakcióba (jelenleg csak `'anthropic'` van implementálva, típusban van hely `'openai'`-nak), `prompt_templates` tábla/verziózás (jelenleg a `promptTemplateId`/`promptVersion` csak string literál minden hívásnál, nincs mögötte adatbázis), Fázis D (`lib/credits.ts` + `lib/usage-protection.ts` egyesítése egy közös kredit-primitívre).
 3. **#11 Multi-currency** — csak akkor zárható le teljesen, ha a user létrehozta a Stripe termékeket. Addig legfeljebb a kód-oldali előkészítés (selector UI, market-alapú ár-lookup logika) mehet.
 
-Az audit (lásd [AI_PROVIDER_LAYER_REFACTOR_PLAN.md](AI_PROVIDER_LAYER_REFACTOR_PLAN.md)) 12 önálló hibát/rést is talált, amikből a legsúlyosabb — **Stripe webhook nem idempotens** (5. szakasz) — továbbra is nyitott, valós bevétel-kockázat, érdemes külön, soron kívül napirendre venni, nem csak Phase 2 előtt.
+Az audit (lásd [AI_PROVIDER_LAYER_REFACTOR_PLAN.md](AI_PROVIDER_LAYER_REFACTOR_PLAN.md)) 13 önálló hibát/rést is talált. A legsúlyosabb — **Stripe webhook nem idempotens + a `user_credits` séma sosem egyezett a webhook kódjával** — **KÉSZ (2026-07-09)**, ld. Fázis F. Nyitva maradt, tudatosan: Fázis D (kredit-rendszer egyesítés) és Fázis E (#7 `video-packages`, #8 `deep-refresh` kredit-védelmi lyukak — üzleti döntést igényelnek).
 
-Utána jöhet a **Phase 2** — itt érdemes megkérdezni a usert, melyik modullal kezdjük (Keyword Research vagy Competitor Tracker tűnik a legértékesebbnek a Command Center hiányzó két szekciója miatt).
+Ezzel a Phase 1 gyakorlatilag lezárva (10/12 kész, #3 és #11 részleges, mindkettő külső/Phase 2 függőségre vár). **Következő lépés a Phase 2** — itt kell megkérdezni a usert, melyik modullal kezdjünk (Keyword Research vagy Competitor Tracker tűnik a legértékesebbnek a Command Center hiányzó két szekciója miatt).
 
 ---
 
