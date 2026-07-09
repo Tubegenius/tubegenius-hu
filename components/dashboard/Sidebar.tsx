@@ -17,6 +17,7 @@ const navItems = [
   { label: 'Trend Feed', href: '/dashboard', icon: 'ti-chart-dots-3' },
   { label: 'Videólehetőségek', href: '/dashboard/opportunities', icon: 'ti-bulb' },
   { label: 'Kulcsszókutató', href: '/dashboard/keyword-research', icon: 'ti-tags' },
+  { label: 'Versenytársfigyelő', href: '/dashboard/competitors', icon: 'ti-target-arrow' },
   { label: 'Piaci bizonyítékok', href: '/dashboard/similar-videos', icon: 'ti-player-play' },
   { label: 'Gyártási csomag', href: '/dashboard/video-package', icon: 'ti-package' },
   { label: 'Videódiagnózis', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },

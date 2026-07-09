@@ -56,8 +56,8 @@
 | # | Modul | Állapot | Megjegyzés |
 |---|---|---|---|
 | 1 | Keyword Research | ✅ Kész (2026-07-09) | `lib/keyword-research.ts` (Serper relatedSearches/peopleAlsoAsk), `app/api/keyword-research/route.ts` (valós YouTube-adat + `buildScoreBreakdown` — nem talált szám, `callAIProvider` a klaszterezéshez), `app/dashboard/keyword-research/page.tsx`. 1 kredit, input-hash cache, `CreditConfirmModal`. Élőben tesztelve: valós keresés (25 YouTube találat), 10 konkrét kulcsszó-javaslat, 1 kredit levonva (57→56), ismételt keresés ingyenes cache-ből, "Mentés Video Idea-ként" működik. |
-| 2 | Competitor Tracker | ⏳ Következő | |
-| 3 | Outlier Detector | Nincs elkezdve | |
+| 2 | Competitor Tracker | ✅ Kész (2026-07-09) | `lib/competitor-tracker.ts` (`resolveChannel` — URL/@handle/channel ID/névkeresés; `fetchChannelRecentVideos` — kvóta-hatékony `channels`+`playlistItems`+`videos` lánc, 3 egység/ellenőrzés a `search.list` 100 egysége helyett). `app/api/competitors` (GET/POST/DELETE), `app/api/competitors/[id]/refresh`, `app/api/competitors/save-signal` (outlier → `video_idea_proof_signals`, `signal_type: competitor_video`). `app/dashboard/competitors/page.tsx`. 1 kredit hozzáadásért/frissítésért. Élőben tesztelve valós csatornával (@mkbhd → Marques Brownlee, 21.1M feliratkozó): hozzáadás (56→55 kredit), duplikáció-védelem (409), frissítés (55→54), proof signal mentés, törlés — mind hibátlan. |
+| 3 | Outlier Detector | ✅ Kész, a Competitor Trackerbe építve (2026-07-09) | Nem külön oldal — a `fetchChannelRecentVideos` minden versenytárs-videóra kiszámolja az `outlier_ratio`-t a csatorna saját átlagához képest (`is_outlier` ha ≥2x), és a UI kiemeli 🔥 jelöléssel. Ugyanaz az adatforrás, külön oldal csak duplikálná. |
 | 4 | Title Studio | Nincs elkezdve | |
 | 5 | Thumbnail Studio | Nincs elkezdve | |
 | 6 | SEO / Upload Optimizer | Nincs elkezdve | |
