@@ -14,10 +14,11 @@ Konkrét, eddig nem dokumentált hibák/rések, amiket az audit talált (ezek NE
 
 | # | Hiba | Hol | Súlyosság |
 |---|---|---|---|
-| 1 | **Stripe webhook nincs idempotens** — nincs `event.id` dedup, egy Stripe retry duplán jóváírhat kreditet | `app/api/stripe/webhook/route.ts` | 🔴 Kritikus, billing |
-| 2 | Webhook dev-mode signature bypass — ha `STRIPE_WEBHOOK_SECRET` vagy a header hiányzik, ellenőrzés nélkül fut le a payload | `app/api/stripe/webhook/route.ts` | 🔴 Kritikus, csak env-hiba esetén él |
-| 3 | Webhook hibát nyel, mégis 200-at ad vissza — DB hiba esetén a user fizet, kreditet nem kap, Stripe nem próbálja újra | `app/api/stripe/webhook/route.ts` | 🔴 Kritikus, billing |
-| 4 | Top-up/renewal kredit-jóváírás **read-then-write, nem atomi** — versenyhelyzetben kredit veszhet el | `app/api/stripe/webhook/route.ts` | 🟠 Magas, billing |
+| 1 | ✅ **JAVÍTVA (2026-07-09)** — Stripe webhook nincs idempotens — nincs `event.id` dedup, egy Stripe retry duplán jóváírhat kreditet | `app/api/stripe/webhook/route.ts` | 🔴 Kritikus, billing |
+| 2 | ✅ **JAVÍTVA (2026-07-09)** — Webhook dev-mode signature bypass — ha `STRIPE_WEBHOOK_SECRET` vagy a header hiányzik, ellenőrzés nélkül fut le a payload | `app/api/stripe/webhook/route.ts` | 🔴 Kritikus, csak env-hiba esetén él |
+| 3 | ✅ **JAVÍTVA (2026-07-09)** — Webhook hibát nyel, mégis 200-at ad vissza — DB hiba esetén a user fizet, kreditet nem kap, Stripe nem próbálja újra | `app/api/stripe/webhook/route.ts` | 🔴 Kritikus, billing |
+| 4 | ✅ **JAVÍTVA (2026-07-09)** — Top-up/renewal kredit-jóváírás **read-then-write, nem atomi** — versenyhelyzetben kredit veszhet el | `app/api/stripe/webhook/route.ts` | 🟠 Magas, billing |
+| 13 | ✅ **JAVÍTVA (2026-07-09)** — Ennél is súlyosabb, a javítás közben derült ki: a `user_credits` tábla **egyáltalán nem tartalmazott** `topup_credits`/`subscription_credits` oszlopot (csak egy közös `balance`-ot) — a webhook eredeti kódja emiatt SOSEM működött volna hiba nélkül egyetlen éles `checkout.session.completed`/`invoice.payment_succeeded` eseményre sem, a hibát a régi "nyeld el és adj 200-at" logika örökre elrejtette volna | `app/api/stripe/webhook/route.ts`, `supabase/migrations/022_stripe_webhook_hardening.sql` | 🔴🔴 Kritikus, billing — soha nem működött, nem regresszió |
 | 5 | `MODEL_PRICING` táblában elavult modellnevek (`claude-sonnet-4-5`, `claude-3-5-haiku-20241022`) — nem egyeznek a valós `lib/models.ts` ID-kkal, ezért a Haiku-hívások Sonnet-áron lesznek költségbecsülve | `lib/credits.ts` | 🟠 Magas, költségkontroll |
 | 6 | `opportunity-explain` és `opportunity-similar` route **nem von le kreditet** (`CREDIT_COSTS.opportunity_explain = 1` definiálva van, de sosem hívódik a `chargeFeature`) | `app/api/opportunity-explain/route.ts`, `app/api/opportunity-similar/route.ts` | 🟠 Magas, bevétel-kiesés |
 | 7 | `video_package_id`-t mentő route (`video-packages`) **sosem ír `paid_results`-ba**, és nincs kredit-ellenőrzése — teljesen a kliens fegyelmére van bízva, hogy tényleg fizetett generálás után hívja | `app/api/video-packages/route.ts` | 🟠 Magas |
@@ -194,8 +195,16 @@ Sorrend a kockázat/érték arány szerint, **egyesével, nem egyszerre**:
 ### Fázis E — Hiányzó kredit-védelmi lyukak (külön döntés kell userrel)
 - #7 (`video-packages` nincs kredit/paid_results védelem), #8 (`deep-refresh` nem-atomi kredit+nincs input-hash) — ezek üzleti döntést igényelnek (mennyi kreditet vonjunk le, van-e már éles felhasználó, aki megszokta az ingyenes viselkedést), ezért NEM automatikusan javítom, hanem külön felvetem, mielőtt bármit változtatok.
 
-### Fázis F (később, nem most) — Stripe webhook idempotencia + atomi kredit-matematika
-Ez teljesen független az AI provider layertől, de a legsúlyosabb találat volt — javaslom, hogy ezt vegyük fel önálló, soron kívüli tételként, ne várjunk vele a Phase 2/3-ig.
+### Fázis F — ✅ KÉSZ (2026-07-09) — Stripe webhook idempotencia + atomi kredit-matematika
+Önálló, az AI provider layertől független körben elkészült. Migráció: [022_stripe_webhook_hardening.sql](supabase/migrations/022_stripe_webhook_hardening.sql) (`stripe_webhook_events` tábla `event_id` UNIQUE-dedup-hoz + `increment_topup_credits`/`increment_subscription_credits` atomi RPC-k). A user kézzel futtatta le a Supabase SQL Editorban.
+
+A javítás közben derült ki a fenti #13 tétel: a `user_credits` tábla valós sémája (`balance, total_used, plan, monthly_allowance, renews_at, stripe_customer_id, stripe_subscription_id, subscription_status`) **sosem tartalmazott** `topup_credits`/`subscription_credits` oszlopot — a webhook eredeti kódja emiatt minden éles crediting-eseményre hibázott volna. A userrel egyeztetve a döntés: `balance += delta`, renewal-nál a plan `rolloverCap`-jéig korlátozva (`LEAST`).
+
+Élőben tesztelve szimulált (nem valós fizetésből eredő), kitalált user-azonosítós eseményekkel — valós user-adatot egyik teszt sem érintett:
+- `checkout.session.completed` (topup) — idempotencia: 1. hívás feldolgozva, 2. hívás `duplicate: true`, hiba nélkül a javított `balance`-alapú RPC-vel (az első próbálkozás a régi RPC-vel `column "topup_credits" does not exist` hibát dobott — ez bizonyította, hogy a hiba valós, nem elméleti)
+- `invoice.payment_succeeded` (renewal) — ugyanígy idempotens, hibamentes
+
+Emellett a `checkout.session.completed` (subscription mód) és `customer.subscription.updated` ágak is javítva: mostantól a valós `balance`/`monthly_allowance` oszlopokat töltik, nem a nemlétező `subscription_credits`-et.
 
 ---
 

@@ -2,8 +2,10 @@
 
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
-**Utolsó frissítés**: 2026-07-08 (új session, folytatás)
-**Utolsó commit ebben a körben**: `864c8c1` (a mai új munka — Phase 1 #10 mélyítés — MÉG NINCS commitolva, ld. lent)
+**Utolsó frissítés**: 2026-07-09
+**Utolsó commit ebben a körben**: ld. git log — Phase 1 #10 mélyítés, #12 AI provider layer audit+Fázis A/B/C(1/6), és egy önálló, súlyos Stripe webhook billing-hiba javítása (ld. lent).
+
+**KRITIKUS, 2026-07-09-i találat**: a Stripe webhook `user_credits` táblára vonatkozó feltételezése (külön `topup_credits`/`subscription_credits` oszlop) SOSEM egyezett a valós sémával (csak egy közös `balance` van) — a webhook eredeti kódja emiatt minden éles crediting-eseményre (előfizetés-indítás, topup, renewal) hibázott volna, amit a régi "nyeld el a hibát, adj 200-at" logika örökre elrejtett volna. Javítva + élőben tesztelve, ld. [AI_PROVIDER_LAYER_REFACTOR_PLAN.md](AI_PROVIDER_LAYER_REFACTOR_PLAN.md) Fázis F.
 
 ---
 
