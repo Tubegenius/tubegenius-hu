@@ -19,6 +19,14 @@ export type FeatureName =
   | 'video_audit'
   | 'hashtag_caption'
   | 'trend_deep_refresh'
+  | 'keyword_research'
+  | 'competitor_add'
+  | 'competitor_deep_analysis'
+  | 'outlier_scan'
+  | 'title_studio'
+  | 'thumbnail_studio'
+  | 'seo_optimizer'
+  | 'content_gap_finder'
 
 // Credit költségek funkciónként (a spec szerint)
 export const CREDIT_COSTS: Record<FeatureName, number> = {
@@ -31,6 +39,14 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
   trend_deep_refresh: 1,
   video_audit: 4,
   video_package_long: 6,
+  keyword_research: 1,
+  competitor_add: 1,
+  competitor_deep_analysis: 2,
+  outlier_scan: 1,
+  title_studio: 1,
+  thumbnail_studio: 1,
+  seo_optimizer: 1,
+  content_gap_finder: 2,
 }
 
 // A kulcsok a lib/models.ts MODELS ertekeivel egyeznek — korabban itt elavult

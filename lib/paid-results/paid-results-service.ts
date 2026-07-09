@@ -11,6 +11,12 @@ export type PaidToolType =
   | 'transcript_extract'
   | 'content_gap'
   | 'analyzer'
+  | 'keyword_research'
+  | 'competitor_tracker'
+  | 'outlier_detector'
+  | 'title_studio'
+  | 'thumbnail_studio'
+  | 'seo_optimizer'
 
 export type PaidResultCacheStatus = 'fresh' | 'stale_saved' | 'miss'
 

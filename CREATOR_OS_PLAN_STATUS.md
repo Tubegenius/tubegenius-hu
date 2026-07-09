@@ -47,11 +47,24 @@
 
 ---
 
-## PHASE 2 — MÉG SEMMI NINCS ELKEZDVE
+## PHASE 2 — folyamatban (2026-07-09-től), a user kérésére mind a 10 modult megépítjük
 
-Keyword Research, Competitor Tracker, Outlier Detector (önálló modulként), Title Studio, Thumbnail Studio, SEO/Upload Optimizer, Content Calendar (UI — a `calendar_status` mező már ténylegesen frissül a Video Package "Naptárba mentés" gombjától, de nincs Calendar NÉZET/oldal), Video Audit bővítés, Trend Alerts, Content Gap Finder.
+**Séma-alap**: [023_phase2_modules_foundation.sql](supabase/migrations/023_phase2_modules_foundation.sql) — EGY migrációban az összes modulhoz szükséges `paid_results` tool_type bővítés (`keyword_research`, `competitor_tracker`, `outlier_detector`, `title_studio`, `thumbnail_studio`, `seo_optimizer`) + `tracked_competitors`/`tracked_competitor_videos`/`trend_alert_dismissals` táblák. Lefuttatva.
 
-Egyetlen előkészület: a `video_idea_proof_signals.signal_type` enum már tartalmazza a `competitor_video` értéket (a Viral Score wiring használja), tehát az adatmodell készen áll egy jövőbeli Competitor Tracker modulra.
+**Mellékesen talált+javított hiba**: [024_creator_memory_missing_columns.sql](supabase/migrations/024_creator_memory_missing_columns.sql) — a `creator_memory` tábla sosem tartalmazott `source_context`/`quality_status` oszlopot, pedig az `app/api/memory` POST route régóta feltételesen írja ezeket — bármely hívó, ami truthy értéket küldött ezekhez, 500-as hibát kapott csendben. A Keyword Research "Mentés" gombjának élő tesztje leplezte le. Javítva, élőben ellenőrizve.
+
+| # | Modul | Állapot | Megjegyzés |
+|---|---|---|---|
+| 1 | Keyword Research | ✅ Kész (2026-07-09) | `lib/keyword-research.ts` (Serper relatedSearches/peopleAlsoAsk), `app/api/keyword-research/route.ts` (valós YouTube-adat + `buildScoreBreakdown` — nem talált szám, `callAIProvider` a klaszterezéshez), `app/dashboard/keyword-research/page.tsx`. 1 kredit, input-hash cache, `CreditConfirmModal`. Élőben tesztelve: valós keresés (25 YouTube találat), 10 konkrét kulcsszó-javaslat, 1 kredit levonva (57→56), ismételt keresés ingyenes cache-ből, "Mentés Video Idea-ként" működik. |
+| 2 | Competitor Tracker | ⏳ Következő | |
+| 3 | Outlier Detector | Nincs elkezdve | |
+| 4 | Title Studio | Nincs elkezdve | |
+| 5 | Thumbnail Studio | Nincs elkezdve | |
+| 6 | SEO / Upload Optimizer | Nincs elkezdve | |
+| 7 | Content Calendar UI | Nincs elkezdve | A `calendar_status` mező már frissül a Video Package "Naptárba mentés" gombjától, de nincs Calendar NÉZET/oldal. |
+| 8 | Video Audit bővítés | Nincs elkezdve | |
+| 9 | Trend Alerts | Nincs elkezdve | |
+| 10 | Content Gap Finder | Nincs elkezdve | `paid_results.tool_type` már tartalmazza a `content_gap` értéket (021-es migráció). |
 
 ## PHASE 3 — MÉG SEMMI NINCS ELKEZDVE
 
