@@ -4,36 +4,9 @@ import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } fr
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
-import { buildScoreBreakdown, getConfidenceLevel, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
-import { fetchKeywordSignals, buildKeywordClusterPrompt, type RelatedKeywordSuggestion } from '@/lib/keyword-research'
+import { buildScoreBreakdown, getConfidenceLevel } from '@/lib/opportunity-scoring'
+import { fetchKeywordSignals, fetchSeedVideoStats, buildKeywordClusterPrompt, type RelatedKeywordSuggestion } from '@/lib/keyword-research'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
-
-async function fetchSeedVideoStats(seedKeyword: string, region: string): Promise<{ videos: YouTubeVideoStats[]; totalResults: number }> {
-  const regionCode = region === 'HU' ? 'HU' : 'US'
-  const language = region === 'HU' ? 'hu' : 'en'
-  const items = await youtubeSearch(seedKeyword, regionCode, language, 365, 25, 'manualTopicSearch')
-  if (items.length === 0) return { videos: [], totalResults: 0 }
-
-  const videoIds = items.map(i => i.id.videoId)
-  const statsMap = await youtubeStats(videoIds)
-
-  const videos: YouTubeVideoStats[] = items.map(item => {
-    const stats = statsMap.get(item.id.videoId)
-    return {
-      videoId: item.id.videoId,
-      title: item.snippet.title,
-      channelTitle: item.snippet.channelTitle,
-      publishedAt: item.snippet.publishedAt,
-      viewCount: parseInt(stats?.statistics?.viewCount || '0'),
-      likeCount: parseInt(stats?.statistics?.likeCount || '0'),
-      commentCount: parseInt(stats?.statistics?.commentCount || '0'),
-      thumbnailUrl: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '',
-    }
-  })
-
-  return { videos, totalResults: items.length }
-}
 
 export async function POST(request: NextRequest) {
   try {

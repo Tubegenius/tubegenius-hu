@@ -4,7 +4,39 @@
 // Cel: ne csak SEO-lista legyen, hanem creator dontesi eszkoz — valos
 // YouTube+web jelekbol, nem talalt szamokbol.
 
+import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
+import type { YouTubeVideoStats } from '@/lib/opportunity-scoring'
+
 const SERPER_API_KEY = process.env.SERPER_API_KEY
+
+// Megosztott YouTube-adatgyujto — a Keyword Research es a Content Gap Finder
+// (Phase 2 #1 es #10) is ugyanezt hasznalja egy kulcsszo/tema valos
+// YouTube-jelenletenek felmereserehez.
+export async function fetchSeedVideoStats(seedKeyword: string, region: string): Promise<{ videos: YouTubeVideoStats[]; totalResults: number }> {
+  const regionCode = region === 'HU' ? 'HU' : 'US'
+  const language = region === 'HU' ? 'hu' : 'en'
+  const items = await youtubeSearch(seedKeyword, regionCode, language, 365, 25, 'manualTopicSearch')
+  if (items.length === 0) return { videos: [], totalResults: 0 }
+
+  const videoIds = items.map(i => i.id.videoId)
+  const statsMap = await youtubeStats(videoIds)
+
+  const videos: YouTubeVideoStats[] = items.map(item => {
+    const stats = statsMap.get(item.id.videoId)
+    return {
+      videoId: item.id.videoId,
+      title: item.snippet.title,
+      channelTitle: item.snippet.channelTitle,
+      publishedAt: item.snippet.publishedAt,
+      viewCount: parseInt(stats?.statistics?.viewCount || '0'),
+      likeCount: parseInt(stats?.statistics?.likeCount || '0'),
+      commentCount: parseInt(stats?.statistics?.commentCount || '0'),
+      thumbnailUrl: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '',
+    }
+  })
+
+  return { videos, totalResults: items.length }
+}
 
 export interface KeywordSignals {
   relatedSearches: string[]

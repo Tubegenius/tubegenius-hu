@@ -23,6 +23,7 @@ const navItems = [
   { label: 'Thumbnail Studio', href: '/dashboard/thumbnail-studio', icon: 'ti-photo' },
   { label: 'SEO Optimalizáló', href: '/dashboard/seo-optimizer', icon: 'ti-seo' },
   { label: 'Tartalom naptár', href: '/dashboard/calendar', icon: 'ti-calendar' },
+  { label: 'Content Gap Finder', href: '/dashboard/content-gap', icon: 'ti-search-off' },
   { label: 'Piaci bizonyítékok', href: '/dashboard/similar-videos', icon: 'ti-player-play' },
   { label: 'Gyártási csomag', href: '/dashboard/video-package', icon: 'ti-package' },
   { label: 'Videódiagnózis', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },

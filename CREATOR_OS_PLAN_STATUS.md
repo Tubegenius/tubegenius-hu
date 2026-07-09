@@ -3,7 +3,7 @@
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
 **Utolsó frissítés**: 2026-07-09
-**Utolsó commit ebben a körben**: ld. git log — Phase 1 #10 mélyítés, #12 AI provider layer audit+Fázis A/B/C(1/6), és egy önálló, súlyos Stripe webhook billing-hiba javítása (ld. lent).
+**Utolsó commit ebben a körben**: ld. git log — Phase 1 lezárva (#10 mélyítés, #12 AI provider layer teljes), egy önálló, súlyos Stripe webhook billing-hiba javítása, és a teljes Phase 2 (mind a 10 modul) megépítve+élőben tesztelve.
 
 **KRITIKUS, 2026-07-09-i találat**: a Stripe webhook `user_credits` táblára vonatkozó feltételezése (külön `topup_credits`/`subscription_credits` oszlop) SOSEM egyezett a valós sémával (csak egy közös `balance` van) — a webhook eredeti kódja emiatt minden éles crediting-eseményre (előfizetés-indítás, topup, renewal) hibázott volna, amit a régi "nyeld el a hibát, adj 200-at" logika örökre elrejtett volna. Javítva + élőben tesztelve, ld. [AI_PROVIDER_LAYER_REFACTOR_PLAN.md](AI_PROVIDER_LAYER_REFACTOR_PLAN.md) Fázis F.
 
@@ -22,8 +22,8 @@
 
 | Fázis | Állapot |
 |---|---|
-| **PHASE 1 — Creator OS alap** | 10/12 kész, 2/12 részleges, 0/12 nincs elkezdve |
-| **PHASE 2 — Versenyképes platform funkciók** | 0/10 — egyik sincs elkezdve |
+| **PHASE 1 — Creator OS alap** | 10/12 kész, 2/12 részleges (külső függőségre várnak: #3 nav-szerkezet, #11 multi-currency) |
+| **PHASE 2 — Versenyképes platform funkciók** | ✅ 10/10 kész (2026-07-09), mind élőben tesztelve |
 | **PHASE 3 — Globális SaaS / Agency** | 0/10 — egyik sincs elkezdve (ez várható is volt ezen a ponton) |
 
 ---
@@ -47,7 +47,7 @@
 
 ---
 
-## PHASE 2 — folyamatban (2026-07-09-től), a user kérésére mind a 10 modult megépítjük
+## PHASE 2 — ✅ 10/10 KÉSZ (2026-07-09), a user kérésére mind a 10 modult megépítettük egy menetben
 
 **Séma-alap**: [023_phase2_modules_foundation.sql](supabase/migrations/023_phase2_modules_foundation.sql) — EGY migrációban az összes modulhoz szükséges `paid_results` tool_type bővítés (`keyword_research`, `competitor_tracker`, `outlier_detector`, `title_studio`, `thumbnail_studio`, `seo_optimizer`) + `tracked_competitors`/`tracked_competitor_videos`/`trend_alert_dismissals` táblák. Lefuttatva.
 
@@ -64,7 +64,7 @@
 | 7 | Content Calendar UI | ✅ Kész (2026-07-09) | Migráció [025_video_ideas_calendar_fields.sql](supabase/migrations/025_video_ideas_calendar_fields.sql): `video_ideas.scheduled_publish_date`/`calendar_notes` (a mesterterv explicit kérte a publikálási dátumot, ez hiányzott). `app/api/video-ideas` PATCH bővítve. `app/dashboard/calendar/page.tsx` — 3 szekció (Ütemezve/Gyártásra kész, még nincs ütemezve/Legutóbb publikált), dátum+jegyzet mentés, "Publikáltnak jelölés". Nincs kredit, tisztán olvasás/írás a meglévő adatmodellen. Élőben tesztelve: ütemezés mentése, megjelenítés a helyes szekcióban, publikáltnak jelölés — mind hibátlan. |
 | 8 | Video Audit bővítés | ✅ Kész (2026-07-09) — "Channel Audit előkészítés", nem teljes Channel Audit (az OAuth/saját-csatorna-analytics Phase 3-as) | `lib/channel-audit.ts` (`computeDimensionAverages`/`findWeakestDimension`/`computePublishRhythm` — mind backend-számolt, valós `video_audits.final_scores` adatból, nem AI-becslés). `app/api/channel-audit/route.ts`: GET kredit nélkül aggregál (min. 3 audit kell), POST kredit-köteles (2) AI "következő 10 videó" javaslat a valós erős/gyenge témák + leggyengébb dimenzió alapján. `app/dashboard/channel-audit/page.tsx`. Élőben tesztelve valós adaton (4 audit): dimenzió-átlagok helyesen (engagement_quality=28 a leggyengébb), top/bottom auditok helyesen rangsorolva, publikálási ritmus helyesen csoportosítva, 10 konkrét, indokolt témajavaslat generálva. |
 | 9 | Trend Alerts | ✅ Kész (2026-07-09) | `lib/trend-alerts.ts` (`classifyAlerts` — a mar meglevo `trend_status`/`views_delta` snapshot-adatra epul, nincs uj AI/YouTube hivas, nincs kredit; `buildAlertSignature` napi+allapot-alapu, hogy ismetlodo riasztas ne jelenjen meg ujra elutasitas utan, de allapotvaltasnal igen). `app/api/trend-alerts` GET/POST (dismiss → `trend_alert_dismissals`, 023-as migracio). `app/dashboard/trend-alerts/page.tsx`. Élőben tesztelve valós adaton: 1 valódi riasztás talalva ("15 Facts About The Human Body!", +81 056 megtekintés), elutasítás után eltűnik a listából. |
-| 10 | Content Gap Finder | Nincs elkezdve | `paid_results.tool_type` már tartalmazza a `content_gap` értéket (021-es migráció). |
+| 10 | Content Gap Finder | ✅ Kész (2026-07-09) | `lib/content-gap.ts` — a "rés" 2 VALÓS jelforrás összevetéséből: mi már létezik a YouTube-on (`fetchSeedVideoStats`, megosztva a Keyword Research-sel), és mire van tényleges kereslet (`fetchKeywordSignals` — Serper relatedSearches/peopleAlsoAsk). Az AI csak ezt a két valós halmazt veti össze, nem talál ki keresletet. `app/api/content-gap/route.ts`, `app/dashboard/content-gap/page.tsx`. 2 kredit. Élőben tesztelve: 25 létező videó elemezve, 8 konkrét, valós adatra hivatkozó rés-javaslat, 2 kredit levonva pontosan (47→45), mentés+cache-hit működik. |
 
 ## PHASE 3 — MÉG SEMMI NINCS ELKEZDVE
 
