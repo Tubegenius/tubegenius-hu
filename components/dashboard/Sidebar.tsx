@@ -25,6 +25,7 @@ const navItems = [
   { label: 'Piaci bizonyítékok', href: '/dashboard/similar-videos', icon: 'ti-player-play' },
   { label: 'Gyártási csomag', href: '/dashboard/video-package', icon: 'ti-package' },
   { label: 'Videódiagnózis', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },
+  { label: 'Channel Audit', href: '/dashboard/channel-audit', icon: 'ti-chart-histogram' },
   { label: 'Virális esély', href: '/dashboard/viral-score', icon: 'ti-chart-bar' },
   { label: 'Auto Transcript', href: '/dashboard/transcript', icon: 'ti-microphone' },
   { label: 'Script Extractor', href: '/dashboard/script-extractor', icon: 'ti-file-text' },

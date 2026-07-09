@@ -1,0 +1,119 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { MODELS } from '@/lib/models'
+import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
+import { createAdminClient } from '@/lib/supabase-server'
+import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt } from '@/lib/channel-audit'
+import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
+
+const MIN_AUDITS_REQUIRED = 3
+
+// GET — aggregalt Channel Audit elonezet: dimenzio-atlagok, top/bottom
+// auditok, publikalasi ritmus. Kredit nelkul — mar kifizetett auditokat
+// aggregal ujra, nem kesziti el ujra.
+export async function GET() {
+  const userId = await getUserId()
+  if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+  const admin = createAdminClient()
+
+  const [{ data: audits }, { data: publishedIdeas }, { data: profileRow }] = await Promise.all([
+    admin.from('video_audits').select('id, video_title, topic, overall_score, overall_label, final_scores, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
+    admin.from('video_ideas').select('updated_at').eq('user_id', userId).eq('workflow_status', 'published'),
+    admin.from('profiles').select('niche').eq('user_id', userId).single(),
+  ])
+
+  const auditList = audits || []
+  if (auditList.length < MIN_AUDITS_REQUIRED) {
+    return NextResponse.json({
+      has_enough_data: false,
+      audit_count: auditList.length,
+      min_required: MIN_AUDITS_REQUIRED,
+    })
+  }
+
+  const dimensionAverages = computeDimensionAverages(auditList)
+  const weakestDimension = dimensionAverages ? findWeakestDimension(dimensionAverages) : null
+  const sorted = [...auditList].sort((a, b) => b.overall_score - a.overall_score)
+  const topStrong = sorted.slice(0, 3).map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
+  const topWeak = sorted.slice(-3).reverse().map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
+  const publishRhythm = computePublishRhythm(publishedIdeas || [])
+
+  return NextResponse.json({
+    has_enough_data: true,
+    audit_count: auditList.length,
+    dimension_averages: dimensionAverages,
+    weakest_dimension: weakestDimension,
+    top_strong: topStrong,
+    top_weak: topWeak,
+    publish_rhythm: publishRhythm,
+    niche: profileRow?.niche || '',
+  })
+}
+
+// POST — AI-generalt "kovetkezo 10 video" javaslat a valos aggregalt
+// adatra alapozva. Kredit-koteles, nincs input-hash cache (a bemenet
+// (audit-torzenet) idovel valtozik, mindig friss ajanlast akarunk).
+export async function POST() {
+  try {
+    const userId = await getUserId()
+    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const admin = createAdminClient()
+    const { data: audits } = await admin
+      .from('video_audits')
+      .select('video_title, topic, overall_score, final_scores')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50)
+
+    const auditList = audits || []
+    if (auditList.length < MIN_AUDITS_REQUIRED) {
+      return NextResponse.json({ error: `Legalább ${MIN_AUDITS_REQUIRED} Videódiagnózis szükséges ehhez.` }, { status: 400 })
+    }
+
+    const enoughCredits = await hasEnoughCredits(userId, 'channel_audit')
+    if (!enoughCredits) {
+      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.channel_audit} kredit szükséges.` }, { status: 402 })
+    }
+
+    const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
+    const dimensionAverages = computeDimensionAverages(auditList)
+    const weakest = dimensionAverages ? findWeakestDimension(dimensionAverages) : null
+    const sorted = [...auditList].sort((a, b) => b.overall_score - a.overall_score)
+    const strongTopics = sorted.slice(0, 3).map(a => a.topic || a.video_title)
+    const weakTopics = sorted.slice(-3).map(a => a.topic || a.video_title)
+
+    const prompt = buildNextVideosPrompt({
+      weakestDimension: weakest?.label || 'Hook erősség',
+      strongTopics,
+      weakTopics,
+      niche: profileRow?.niche || '',
+    })
+
+    const aiCall = await callAIProvider({
+      model: MODELS.fast,
+      maxTokens: 2000,
+      messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: 'channel_audit_next_videos',
+      promptVersion: 'v1',
+    })
+
+    const suggestions = extractJson<Array<{ topic: string; reasoning: string }>>(aiCall.text)
+
+    await logUsage(userId, 'channel_audit', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, {})
+
+    const charge = await chargeFeature(userId, 'channel_audit', {})
+    if (!charge.success) {
+      return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+    }
+
+    return NextResponse.json({
+      ...(polishHungarianOutput({ suggestions }) as object),
+      _credits_remaining: charge.new_balance,
+    })
+  } catch (error) {
+    console.error('Channel audit next-videos error:', error)
+    return NextResponse.json({ error: 'Javaslat generálása sikertelen. Próbáld újra.' }, { status: 500 })
+  }
+}

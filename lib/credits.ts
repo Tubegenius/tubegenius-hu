@@ -27,6 +27,7 @@ export type FeatureName =
   | 'thumbnail_studio'
   | 'seo_optimizer'
   | 'content_gap_finder'
+  | 'channel_audit'
 
 // Credit költségek funkciónként (a spec szerint)
 export const CREDIT_COSTS: Record<FeatureName, number> = {
@@ -47,6 +48,7 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
   thumbnail_studio: 1,
   seo_optimizer: 1,
   content_gap_finder: 2,
+  channel_audit: 2,
 }
 
 // A kulcsok a lib/models.ts MODELS ertekeivel egyeznek — korabban itt elavult
