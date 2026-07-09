@@ -15,6 +15,7 @@ interface SidebarProps {
 const navItems = [
   { label: 'Creator központ', href: '/dashboard/overview', icon: 'ti-layout-dashboard' },
   { label: 'Trend Feed', href: '/dashboard', icon: 'ti-chart-dots-3' },
+  { label: 'Trend riasztások', href: '/dashboard/trend-alerts', icon: 'ti-bell' },
   { label: 'Videólehetőségek', href: '/dashboard/opportunities', icon: 'ti-bulb' },
   { label: 'Kulcsszókutató', href: '/dashboard/keyword-research', icon: 'ti-tags' },
   { label: 'Versenytársfigyelő', href: '/dashboard/competitors', icon: 'ti-target-arrow' },
