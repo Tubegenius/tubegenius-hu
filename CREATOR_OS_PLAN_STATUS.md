@@ -13,18 +13,20 @@
 
 A user által elrendelt feature freeze után egy 13 szempontos audit (route-ok, kredit/paid_results logika, mobil nézet, mock adat, hardcode-olt magyar logika, hibaüzenetek, core flow) 2 kritikus és 4 súlyos hibát talált. Ezeket egy külön hotfix sprintben javítottuk, prioritás szerint.
 
-**⚠️ NYITOTT, KÉZI LÉPÉS SZÜKSÉGES — [026_paid_results_opportunity_channel_audit.sql](supabase/migrations/026_paid_results_opportunity_channel_audit.sql) MÉG NINCS LEFUTTATVA ÉLESBEN.** A C1 és H3 javítás kódja kész és tesztelve, DE a `paid_results.tool_type` CHECK constraint még nem ismeri az `opportunity_explain`/`channel_audit` értékeket — élőben tesztelve (lásd lent), a mentés emiatt csendben elbukik (a user nem akad el, de nem védett a redundáns kredit-levonástól, amíg ez nincs lefuttatva). **A Supabase SQL Editorban futtasd le ezt a migrációt, mielőtt bármilyen pilot/béta usert ráengedsz a Videólehetőségek "Mutass mást"/"Mutass hasonlót" gombjaira vagy a Channel Auditra.**
+**✅ [026_paid_results_opportunity_channel_audit.sql](supabase/migrations/026_paid_results_opportunity_channel_audit.sql) élesben lefuttatva (2026-07-10), utána C1 és H3 mentés/reopen ciklusa is végponttól végpontig megerősítve élő kredittel — ld. táblázat.**
 
 | # | Hiba | Súlyosság | Állapot |
 |---|---|---|---|
-| C1 | Opportunity "Mutass mást"/"Mutass hasonlót" — nincs CreditConfirmModal, nincs paid_results/input_hash, refresh után elveszett fizetett eredmény | Kritikus | ✅ Kód kész, élőben tesztelve (charge pontosan 1x fut le, dupla kattintás ellen `useRef` zár) — ⚠️ a mentés/reopen a migráció hiánya miatt élesben még nem működik, ld. fent |
+| C1 | Opportunity "Mutass mást"/"Mutass hasonlót" — nincs CreditConfirmModal, nincs paid_results/input_hash, refresh után elveszett fizetett eredmény | Kritikus | ✅ Kész, élőben tesztelve: charge pontosan 1x (33→32), ismételt azonos kérés `from_paid_result:true` nem von újra, GET reopen sem von, dupla kattintás ellen `useRef` zár |
 | C2 | Nyers Supabase/Postgres hiba szivárgott ki 3 helyen (`competitors` GET/DELETE, `trend-alerts` POST dismiss) | Kritikus | ✅ Kész — magyar, általános hibaüzenetre cserélve, a részletes hiba szerver oldalon logolva |
 | H1 | Mobil sidebar sosem csukódott össze, 375px-en a tartalom ~115px sávba szorult | Súlyos | ✅ Kész, élőben tesztelve mobil (375px, hamburger nyit/zár, route-váltáskor auto-zár) és desktop (1280px, statikus sidebar) nézetben is |
 | H2 | SEO Optimalizáló fizetett csomagja sehova nem volt menthető a frontendről (a backend valójában már jól cachelt, csak a frontend nem használta) | Súlyos | ✅ Kész, élőben tesztelve: 1. generálás kredit, ismételt azonos kérés ingyenes (`from_paid_result`), GET-es visszanyitás ingyenes, `force_refresh` ismét kreditet von |
-| H3 | Channel Audit 2 kredites "következő 10 videó" javaslata sehova nem mentődött | Súlyos | ✅ Kód kész (input-hash a jelenlegi audit-mintázatból, GET reopen, force_refresh) — ⚠️ élesben a migráció hiánya miatt még nem tesztelhető végponttól végpontig, ld. fent |
+| H3 | Channel Audit 2 kredites "következő 10 videó" javaslata sehova nem mentődött | Súlyos | ✅ Kész, élőben tesztelve: charge pontosan 2x kredit (32→30), ismételt azonos kérés `from_paid_result:true` nem von újra |
 | H4 | 5 helyen a frontend nem ellenőrizte a `res.ok`-ot, csendben elnyelte a szerverhibát | Súlyos | ✅ Kész mind az 5 helyen (`competitors` load+delete, `trend-alerts` dismiss, `calendar` load, `channel-audit` load) — mindegyik most `res.ok` ellenőrzést és magyar hibaüzenetet kap |
 
-**Tesztelés**: `npx tsc --noEmit --incremental false` ✅ 0 hiba, `npm run build` ✅ sikeres (mind a 69 route legenerálva). Élő böngészős teszt: mobil/desktop sidebar (H1), SEO Optimalizáló teljes ciklus (H2, valós kredittel), Opportunity Explain/Similar charge-biztonság (C1, valós kredittel — a fenti migráció-hiány itt derült ki). Összesen 4 kredit lett elhasználva a user fiókjából a tesztelés során (37→33).
+**Mind a 6 pont (C1, C2, H1–H4) tiszta — a hotfix sprint lezárva, a rendszer megfelel a user által szabott feltételnek a 30–50 témás teszthez.**
+
+**Tesztelés**: `npx tsc --noEmit --incremental false` ✅ 0 hiba, `npm run build` ✅ sikeres (mind a 69 route legenerálva). Élő böngészős/API teszt valós kredittel: H1 mobil+desktop, H2 teljes ciklus (charge→cache-hit→GET reopen→force_refresh), C1 és H3 teljes ciklus (charge→cache-hit→GET reopen) migráció után. Összesen 7 kredit lett elhasználva a user fiókjából a tesztelés során (37→30).
 
 **Tudatosan backlogban maradt (M1–M6, a user kérésére nem ebben a körben)**:
 - **M1+M2**: 5 lib fájl AI promptja (`title-studio`, `thumbnail-studio`, `seo-optimizer`, `channel-audit`, `content-gap`) fixen magyarra van hegesztve, nincs `language` paraméter; 5 frontend oldal fixen `region:'HU'`-t küld a profil piac-mezője helyett. HU-only pilothoz nem blokkoló.
