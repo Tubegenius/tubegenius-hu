@@ -82,20 +82,23 @@ English UI, Stripe globális pricing, YouTube OAuth (saját csatorna analytics),
 
 ## NYITOTT DÖNTÉSEK / KÜLSŐ FÜGGŐSÉGEK (nem tisztán kódolási kérdés)
 
-1. **YouTube Data API kvótanövelési kérelem** — a user beadta-e a `support.google.com/youtube/contact/yt_api_form` űrlapot? (Korábbi session-ben megbeszéltük a szöveget és a javasolt 30 000–50 000 egység/nap kérést.) **Nem tudjuk a jelenlegi státuszát.**
-2. **Egyéni vállalkozás regisztráció** — a usernek még nincs bejegyzett vállalkozói neve, ez blokkolja a `/privacy` és `/terms` oldalak `[CÉGNÉV / EGYÉNI VÁLLALKOZÓ NEVE]` placeholder véglegesítését, és a tényleges pénzbeszedés elindítását. **Státusza ismeretlen.**
-3. **Stripe multi-currency setup** — a Phase 1 #11 teljes lezárásához a usernek kell létrehoznia a nem-HUF Stripe termékeket/árakat a Stripe dashboardon, mielőtt a kód ezekre tudna hivatkozni.
-4. **AI provider layer refaktor terjedelme** (Phase 1 #12) — ez az egyetlen Phase 1 tétel, ami MINDEN Claude-hívást érintő route-ot módosítana (opportunity, viral-score, video-package, script-extract, video-audit). Nagyobb a kockázata, mint bármi eddig — érdemes külön megbeszélni, mielőtt nekiállunk.
+1. **YouTube Data API kvótanövelési kérelem** — a user beadta-e a `support.google.com/youtube/contact/yt_api_form` űrlapot? **Nem tudjuk a jelenlegi státuszát.** Ez most sürgetőbb, mint korábban — a Phase 2 modulok (Competitor Tracker, Content Gap Finder, Keyword Research) mind extra YouTube-hívásokat vezettek be.
+2. **Egyéni vállalkozás regisztráció** — blokkolja a `/privacy`/`/terms` placeholder véglegesítését és a tényleges pénzbeszedést. **Státusza ismeretlen.**
+3. **Stripe multi-currency setup** — a Phase 1 #11 teljes lezárásához a usernek kell létrehoznia a nem-HUF Stripe termékeket/árakat a Stripe dashboardon.
+4. **47 lokális commit még nincs push-olva** a `origin/main`-re (2026-07-09 végén) — a user tudatosan nem kérte a push-t. Push előtt érdemes még egyszer átgondolni a Stripe webhook változást (billing-kritikus), mielőtt éles forgalomba kerül (ha a Vercel a `main`-ről auto-deployol).
+5. **Párhuzamos Codex-munkamenet** — a user időnként egyszerre dolgozik Claude Code-dal és ChatGPT Codex-szel ugyanezen a repón (ld. [[feedback-parallel-ai-tools]] memória). Session elején mindig ellenőrizd a `git status`-t/`git log`-ot váratlan, nem saját commitokért/módosításokért, mielőtt bármit felülírnál.
 
 ---
 
 ## KÖVETKEZŐ LÉPÉS JAVASLAT
 
-A user korábban ezt a sorrendet hagyta jóvá: **"haladjunk sorban, Phase 1, Phase 2, Phase 3"**. A Phase 1-ből 1 tétel maradt:
+A user jóváhagyott sorrendje: **"haladjunk sorban, Phase 1, Phase 2, Phase 3"**.
 
-1. ~~**#10 Creator Memory mélyítés**~~ — **KÉSZ** (2026-07-08, második kör).
-2. ~~**#12 AI provider layer alap**~~ — **KÉSZ a core-refaktor szintjén** (2026-07-08, harmadik kör): mind a 9 AI-hívó route/lib átállítva a közös rétegre, `paid_results` provider/model/cost mezői élesben töltődnek. Amit a master terv eredeti #12 tétele még kér, de EZ a kör nem csinált meg (tudatosan, külön döntés kell): OpenAI mint második provider bekötése az absztrakcióba (jelenleg csak `'anthropic'` van implementálva, típusban van hely `'openai'`-nak), `prompt_templates` tábla/verziózás (jelenleg a `promptTemplateId`/`promptVersion` csak string literál minden hívásnál, nincs mögötte adatbázis), Fázis D (`lib/credits.ts` + `lib/usage-protection.ts` egyesítése egy közös kredit-primitívre).
-3. **#11 Multi-currency** — csak akkor zárható le teljesen, ha a user létrehozta a Stripe termékeket. Addig legfeljebb a kód-oldali előkészítés (selector UI, market-alapú ár-lookup logika) mehet.
+- ✅ **Phase 1** — lezárva (10/12 kész, #3 nav-szerkezet és #11 multi-currency külső függőségre vár, ld. fent).
+- ✅ **Phase 2** — mind a 10 modul kész, élőben tesztelve (2026-07-09).
+- ⏳ **Phase 3 következik** — 10 tétel (English UI, Stripe globális pricing, YouTube OAuth, Analytics dashboard, teljes Channel Audit, AI Coach, Team/Agency workspace, PDF export, böngésző-extension, multi-platform intelligence). Egyik sem indult el, ez a terv szerint is várható volt ezen a ponton.
+
+**Mielőtt Phase 3-at elkezdenéd**: érdemes megkérdezni a usert, melyik tétellel kezdjünk (a YouTube OAuth tűnik a legértékesebbnek, mert az nyitná meg a valós Channel Audit-ot és Analytics dashboardot is — de ez Google OAuth app-review-t is igényelhet, ami időigényes, külső függőség, hasonlóan a YouTube API kvótakéréshez).
 
 Az audit (lásd [AI_PROVIDER_LAYER_REFACTOR_PLAN.md](AI_PROVIDER_LAYER_REFACTOR_PLAN.md)) 13 önálló hibát/rést is talált. A legsúlyosabb — **Stripe webhook nem idempotens + a `user_credits` séma sosem egyezett a webhook kódjával** — **KÉSZ (2026-07-09)**, ld. Fázis F. Nyitva maradt, tudatosan: Fázis D (kredit-rendszer egyesítés) és Fázis E (#7 `video-packages`, #8 `deep-refresh` kredit-védelmi lyukak — üzleti döntést igényelnek).
 
