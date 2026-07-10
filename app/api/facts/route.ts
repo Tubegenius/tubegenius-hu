@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isFactRelevantToTopic } from '@/lib/fact-safety'
 
 interface FactSource {
   title: string
@@ -86,9 +87,13 @@ export async function POST(request: NextRequest) {
       fetchSerper(topic),
     ])
 
+    // A Wikipedia/Google keresés lazán illeszkedhet — pl. "otthoni edzés
+    // kezdőknek"-re egy teljesen kapcsolódás nélküli futballista-életrajzot
+    // adott vissza. A relevancia-ellenőrzés nélkül ez "ellenőrzött tényként"
+    // kerülne be a videócsomagba, ami a Fact Safety Layer fő ígéretét sérti.
     const sources: FactSource[] = []
-    if (wikiResult) sources.push(wikiResult)
-    sources.push(...serperResults)
+    if (wikiResult && isFactRelevantToTopic(topic, wikiResult)) sources.push(wikiResult)
+    sources.push(...serperResults.filter(s => isFactRelevantToTopic(topic, s)))
 
     // Ha semmi nem jött vissza
     if (sources.length === 0) {

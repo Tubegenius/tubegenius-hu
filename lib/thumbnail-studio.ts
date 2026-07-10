@@ -5,6 +5,8 @@
 // szoveg-javaslat, kompozicio, es objektiv szoveg-hosszossag-ellenorzes
 // (a kis thumbnail meret miatt a rovid szoveg kritikus, ez mérheto, nem AI-becsles).
 
+import { STAY_ON_TOPIC_RULE } from './niche-relevance'
+
 export interface ThumbnailTextCheck {
   length: number
   word_count: number
@@ -31,12 +33,11 @@ export interface ThumbnailConcept {
   clutter_risk: 'low' | 'medium' | 'high'
 }
 
-export function buildThumbnailStudioPrompt(input: { topic: string; niche: string; platform: string }): string {
+export function buildThumbnailStudioPrompt(input: { topic: string; niche: string; useNiche: boolean; platform: string }): string {
   return `Egy magyar tartalomgyártónak thumbnail (borítókép) koncepciókat kell javasolnod ehhez a témához — MAGÁT A KÉPET nem generáljuk, csak a koncepciót írjuk le.
 
 TÉMA: "${input.topic}"
-NICHE: ${input.niche || 'általános'}
-PLATFORM: ${input.platform}
+${input.useNiche && input.niche ? `NICHE: ${input.niche}\n` : ''}PLATFORM: ${input.platform}
 
 FELADAT:
 Javasolj 3 KÜLÖNBÖZŐ thumbnail-koncepciót (A/B/C teszthez), mindegyik más vizuális megközelítéssel.
@@ -54,6 +55,8 @@ KRITIKUS SZABÁLYOK:
 - A thumbnail_text legyen VALÓBAN rövid (max 3-4 szó), ne mondat.
 - A 3 koncepció legyen TÉNYLEGESEN különböző vizuálisan, ne csak szöveg-variáns.
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
+- ${STAY_ON_TOPIC_RULE}
+- A szövegek teljesen magyar nyelvűek legyenek, idegen szavak nélkül (kivéve közismert márkanév vagy szakkifejezés).
 
 Válaszolj KIZÁRÓLAG valid JSON tömbben:
 [{"concept_label": "...", "visual_description": "...", "thumbnail_text": "...", "composition_note": "...", "emotion_or_conflict": "...", "contrast_attention_score": 0, "clutter_risk": "low"}]`

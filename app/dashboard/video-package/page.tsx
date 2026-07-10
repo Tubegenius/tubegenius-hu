@@ -268,6 +268,11 @@ export default function VideoPackagePage() {
   const [allowWeakOpportunityGeneration, setAllowWeakOpportunityGeneration] = useState(false)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const pendingActionRef = useRef<(() => void) | null>(null)
+  // `saved`/`savedPackageId` azt jelzi, hogy a csomag be van irva a video_packages
+  // tablaba — ez FRISS generalas utan is igaz (autoSavePackage mindig lefut), nem
+  // csak visszanyitasnal. A "nem vontunk le kreditet" felirat ezert kulon jelzot
+  // hasznal, amit csak a tenyleges (kredit nelkuli) visszanyitasi utak allitanak be.
+  const [reopenedWithoutCharge, setReopenedWithoutCharge] = useState(false)
 
   const isShorts = ['youtube_shorts', 'tiktok', 'instagram_reels', 'facebook_reels'].includes(platform)
   const opportunityStatus = opportunityContext?.ready_to_produce_status
@@ -302,6 +307,7 @@ export default function VideoPackagePage() {
           if (state.result) {
             setResult(state.result)
             setSaved(true)
+            setReopenedWithoutCharge(true)
           }
           if (state.platform) setPlatform(state.platform)
           if (state.videoLength) setVideoLength(state.videoLength)
@@ -421,6 +427,7 @@ export default function VideoPackagePage() {
         if (data.narration_style) setNarrationStyle(data.narration_style)
         setResult(data)
         setSaved(true)
+        setReopenedWithoutCharge(true)
       } else {
         setError(data.error || 'A videócsomag nem található')
       }
@@ -457,6 +464,7 @@ export default function VideoPackagePage() {
         })
         setSaved(true)
         setSavedPackageId(pkg.id)
+        setReopenedWithoutCharge(true)
       }
     } catch (e) {
       console.error('Load saved package error:', e)
@@ -578,6 +586,7 @@ export default function VideoPackagePage() {
     setFactSources([])
     setSaved(false)
     setSavedPackageId(null)
+    setReopenedWithoutCharge(false)
 
     let factBlock: string | null = null
     let sources: { title: string; snippet: string; url: string; source_type: string }[] = []
@@ -1048,10 +1057,15 @@ export default function VideoPackagePage() {
           </div>
         </div>
 
-        {saved && savedPackageId ? (
+        {reopenedWithoutCharge ? (
           <div className="flex items-center gap-2 text-xs mb-1 px-3 py-2 rounded-lg" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22C55E' }}>
             <span>✓</span>
-            <span>Mentett csomag megnyitva — 0 kredit. Újragenerálás új kreditet fogyaszt.</span>
+            <span>Mentett csomag megnyitva — nem vontunk le új kreditet. Újragenerálás új kreditet fogyaszt.</span>
+          </div>
+        ) : saved ? (
+          <div className="flex items-center gap-2 text-xs mb-1 px-3 py-2 rounded-lg" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22C55E' }}>
+            <span>✓</span>
+            <span>Gyártási csomag elkészült és mentésre került. Újragenerálás új kreditet fogyaszt.</span>
           </div>
         ) : (
           <div className="flex items-center justify-between text-xs mb-1" style={{ color: '#94A3B8' }}>

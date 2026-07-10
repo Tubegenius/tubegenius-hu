@@ -37,6 +37,22 @@ A user által elrendelt feature freeze után egy 13 szempontos audit (route-ok, 
 
 ---
 
+## 2026-07-10 — 30 TÉMÁS TESZT + MINŐSÉGI STABILIZÁLÁS (P0/P1)
+
+A Hotfix Sprint lezárása után egy 30 témás élő teszt (1 teljes core-flow kör + 22 önálló Title Studio futás, valós kredittel) 4 új hibát talált — mind tartalomminőségi/bizalmi jellegű, nem billing- vagy route-hiba. Ezeket egy célzott P0/P1 körben javítottuk:
+
+| # | Hiba | Prioritás | Állapot |
+|---|---|---|---|
+| Niche-szivárgás | A profil niche-e (pl. "AI, orvostudomány") indokolatlanul beszivárgott teljesen más témájú Title Studio/SEO/Thumbnail Studio generálásokba (~55% gyakoriság a tesztben) | P0 | ✅ Kész — új [lib/niche-relevance.ts](lib/niche-relevance.ts) `shouldUseProfileNiche()` relevancia-kapu, a niche csak akkor kerül a promptba, ha a téma ténylegesen kapcsolódik hozzá (szó-egyezés vagy ≥5 karakteres közös prefix a téma és niche/main_category/specific_focus tokenjei között). Érintve: `lib/title-studio.ts`, `lib/seo-optimizer.ts`, `lib/thumbnail-studio.ts` + a 3 route.ts |
+| Fact Safety irreleváns tény | A Gyártási csomag `verified_facts`-ba bekerült egy teljesen kapcsolódás nélküli Wikipedia-tény (egy futballista életrajza egy edzős videóhoz) | P0 | ✅ Kész — a gyökérok az `app/api/facts/route.ts` laza Wikipedia/Serper keresése volt, relevancia-ellenőrzés nélkül. Új `isFactRelevantToTopic()` (`lib/fact-safety.ts`) a forrásokat a témával összeveti, mielőtt bekerülnének a `sources`/`fact_block`-ba; a `buildVerifiedFactBlock()` is szűri a web/YouTube forrásokat (defense-in-depth az Opportunity-kontextusos útvonalhoz) |
+| Félrevezető "0 kredit" szöveg | A Gyártási csomag oldal friss, fizetett generálás után is "0 kredit"-et írt | P1 | ✅ Kész — új `reopenedWithoutCharge` állapot (`app/dashboard/video-package/page.tsx`) csak a valódi kredit nélküli visszanyitási utaknál (`loadPaidResult`, `loadSavedPackage`, sessionStorage-visszaállítás) igaz; friss generálás után külön, nem félrevezető szöveg ("Gyártási csomag elkészült és mentésre került.") |
+| Idegen szó magyar címben | "...amit az AI descobrált..." — portugál/spanyol szó egy magyar címben | P1 | ✅ Kész — `validateHungarianTitle()`/`sanitizeHungarianTitle()` (`lib/title-studio.ts`), determinisztikus feketelista-alapú csere AI-hívás nélkül + prompt-szintű megerősítés mindhárom (Title/SEO/Thumbnail Studio) promptban |
+| Kredit-levonás versenyhelyzetben | `chargeFeature()` (`lib/credits.ts`) optimista zárolása retry nélkül — párhuzamos kérések egy része feleslegesen elbukik ("Próbáld újra"), dupla levonás nélkül | P2 | ⏳ Backlogban — javaslat: 2-3 rövid retry, kis jitterrel, friss balance újraolvasással, ugyanazzal az atomi `WHERE balance = X` feltétellel (nem szabad dupla levonást engedni retry közben sem). Rendszerszintű, minden `chargeFeature()`-t használó fizetős funkciót érint |
+
+**Tesztelés**: `npx tsc --noEmit --incremental false` ✅, `npm run build` ✅. Célzott újrateszt: 10 témás niche-szivárgás lista (8 irreleváns + 2 releváns téma a profil niche-éhez).
+
+---
+
 ## HOGYAN HASZNÁLD EZT A FÁJLT
 
 1. Nézd meg a "PHASE 1 RÉSZLETES ÁLLAPOT" táblázatot — ott van, mi kész, mi részleges, mi nincs.

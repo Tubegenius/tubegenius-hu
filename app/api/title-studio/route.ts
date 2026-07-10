@@ -4,13 +4,14 @@ import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } fr
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { computeTitleHeuristics, buildTitleStudioPrompt, type TitleVariation } from '@/lib/title-studio'
+import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle, sanitizeHungarianTitle, type TitleVariation } from '@/lib/title-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
+import { shouldUseProfileNiche } from '@/lib/niche-relevance'
 
 export async function POST(request: NextRequest) {
   try {
-    const { topic, existing_title, platform, region } = await request.json()
+    const { topic, existing_title, platform, region, force_refresh } = await request.json()
     if (!topic || typeof topic !== 'string') {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
@@ -19,18 +20,21 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single()
     const niche = profileRow?.niche || ''
+    const useNiche = shouldUseProfileNiche({ topic, profileNiche: niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
     const normalizedInput = normalizePaidResultInput({ topic, existing_title, platform: platformValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'title_studio', normalizedInput, platform: platformValue })
 
-    const paid = await getPaidResultByHash({ userId, toolType: 'title_studio', inputHash })
-    if (paid) {
-      const opened = await openPaidResult(paid)
-      return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+    if (!force_refresh) {
+      const paid = await getPaidResultByHash({ userId, toolType: 'title_studio', inputHash })
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+      }
     }
 
     const enoughCredits = await hasEnoughCredits(userId, 'title_studio')
@@ -38,7 +42,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.title_studio} kredit szükséges.` }, { status: 402 })
     }
 
-    const prompt = buildTitleStudioPrompt({ topic, niche, platform: platformValue, existingTitle: existing_title || undefined })
+    const prompt = buildTitleStudioPrompt({ topic, niche, useNiche, platform: platformValue, existingTitle: existing_title || undefined })
     const aiCall = await callAIProvider({
       model: MODELS.fast,
       maxTokens: 1500,
@@ -48,12 +52,18 @@ export async function POST(request: NextRequest) {
     })
 
     const rawVariations = extractJson<TitleVariation[]>(aiCall.text)
-    const variations = rawVariations.map(v => ({
-      ...v,
-      title: polishHungarianText(v.title || ''),
-      reasoning: polishHungarianText(v.reasoning || ''),
-      heuristics: computeTitleHeuristics(v.title || ''),
-    }))
+    const variations = rawVariations.map(v => {
+      const polishedTitle = polishHungarianText(v.title || '')
+      const { ok } = validateHungarianTitle(polishedTitle)
+      const finalTitle = ok ? polishedTitle : sanitizeHungarianTitle(polishedTitle)
+      if (!ok) console.warn('[TitleStudio] Idegen szó cserélve a címben:', polishedTitle, '→', finalTitle)
+      return {
+        ...v,
+        title: finalTitle,
+        reasoning: polishHungarianText(v.reasoning || ''),
+        heuristics: computeTitleHeuristics(finalTitle),
+      }
+    })
 
     await logUsage(userId, 'title_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
 

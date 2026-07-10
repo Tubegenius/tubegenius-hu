@@ -2,6 +2,8 @@
 // WillViral — MVP Fact Safety Layer
 // Content classification, Verified Fact Block, intensity downgrade
 
+import { tokenize } from './niche-relevance'
+
 // ── Típusok ──────────────────────────────────────────────────
 
 export type ContentType =
@@ -193,6 +195,22 @@ interface SourceItem {
   source?: string
 }
 
+// Egy forrás (pl. egy laza Wikipedia-találat) csak akkor számíthat "ellenőrzött
+// ténynek", ha ténylegesen a megadott témáról szól — enélkül pl. egy teljesen
+// más témájú (pl. egy futballista életrajza) is bekerülhetne verified_facts-ba,
+// mert a cím/leírás hossza megfelelt, a tartalma viszont irreleváns volt.
+// A user-megadott forrásokat (userSources, pl. a Script Extractor forrásvideója)
+// nem szűrjük — azokat a user explicit adta meg ehhez a témához.
+export function isFactRelevantToTopic(topic: string, source: SourceItem): boolean {
+  const topicTokens = tokenize(topic)
+  if (topicTokens.length === 0) return true // nincs mihez viszonyitani, ne blokkoljunk feleslegesen
+
+  const haystackTokens = new Set(tokenize(`${source.title || ''} ${source.snippet || ''}`))
+  if (haystackTokens.size === 0) return false
+
+  return topicTokens.some(t => haystackTokens.has(t))
+}
+
 export function buildVerifiedFactBlock(
   topic: string,
   contentType: ContentType,
@@ -201,7 +219,12 @@ export function buildVerifiedFactBlock(
   youtubeSources: SourceItem[],
   userSources: SourceItem[],
 ): VerifiedFactBlock {
-  const allSources = [...webSources, ...youtubeSources, ...userSources]
+  // A web/YouTube forrasokat relevancia szerint szurjuk — a user altal explicit
+  // megadott forrasokat (pl. sajat forrasvideo) nem, azokat a user tudatosan
+  // adta ehhez a temahoz.
+  const relevantWebSources = webSources.filter(s => isFactRelevantToTopic(topic, s))
+  const relevantYoutubeSources = youtubeSources.filter(s => isFactRelevantToTopic(topic, s))
+  const allSources = [...relevantWebSources, ...relevantYoutubeSources, ...userSources]
   const sourceCount = allSources.length
 
   const factStrictnessLevel = getFactStrictnessLevel(contentType)

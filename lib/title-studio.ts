@@ -6,6 +6,8 @@
 // valos meresi adat (nem all rendelkezesre A/B teszt eredmeny) — ezt a UI
 // egyertelmuen "AI-ertekeles"-kent jeloli, nem "meresen alapulo score"-kent.
 
+import { STAY_ON_TOPIC_RULE } from './niche-relevance'
+
 export interface TitleHeuristics {
   length: number
   length_flag: 'ok' | 'too_long' | 'too_short'
@@ -42,9 +44,67 @@ export interface TitleVariation {
   reasoning: string
 }
 
+// ── Magyar nyelvi guard ──────────────────────────────────────
+// MVP: ismert idegen (angol/portugál/spanyol) szavak/kifejezések feketelistája,
+// amik korábban megjelentek generált magyar címekben (pl. "amit az AI
+// descobrált"). Nem teljes nyelvészeti ellenőrzés — csak egy olcsó, gyors
+// biztonsági háló a leggyakoribb keveredésekre. AI-hívás nélkül, determinisztikusan
+// cseréli magyar megfelelőre, hogy ne kelljen újra fizetős generálást indítani.
+const FOREIGN_WORD_REPLACEMENTS: Record<string, string> = {
+  'descobrál': 'felfedezett',
+  'descobriu': 'felfedezte',
+  'descubrió': 'felfedezte',
+  'descubrir': 'felfedezni',
+  'discovered': 'felfedezett',
+  'revealed': 'felfedte',
+  'unveiled': 'bemutatta',
+  'reveals': 'felfedi',
+  'shows that': 'megmutatja, hogy',
+}
+
+// Nem-latin irasrendszerek (cirill, kinai/japan/koreai, arab, thai, stb.) egy
+// magyar cimben SOSEM helyesek — ezt egy blacklist sosem tudna teljesen
+// lefedni (pl. "урожájig" — cirill betukkel kevert magyar szo egy generalt
+// cimben), ezert kulon, unicode-tartomany alapu ellenorzest is hasznalunk.
+const NON_LATIN_SCRIPT_RE = /[Ѐ-ӿͰ-Ͽ一-鿿぀-ヿ가-힯؀-ۿ֐-׿฀-๿]/
+
+export function validateHungarianTitle(title: string): { ok: boolean; reason?: string } {
+  const lower = title.toLowerCase()
+  for (const word of Object.keys(FOREIGN_WORD_REPLACEMENTS)) {
+    if (lower.includes(word)) {
+      return { ok: false, reason: `Idegen szó/kifejezés a címben: "${word}"` }
+    }
+  }
+  if (NON_LATIN_SCRIPT_RE.test(title)) {
+    return { ok: false, reason: 'Nem latin írásrendszerű karakter a címben' }
+  }
+  return { ok: true }
+}
+
+export function sanitizeHungarianTitle(title: string): string {
+  let result = title
+  for (const [foreign, hungarian] of Object.entries(FOREIGN_WORD_REPLACEMENTS)) {
+    const re = new RegExp(foreign.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    result = result.replace(re, hungarian)
+  }
+  // Nem-latin irasrendszerrel kevert szavak eltavolitasa (nincs biztonsagos
+  // automatikus forditas AI-hivas nelkul, ezert inkabb kihagyjuk a szot,
+  // mint hogy a felhasznalo egy torott, kevert-irasu cimet kapjon).
+  if (NON_LATIN_SCRIPT_RE.test(result)) {
+    result = result
+      .split(/\s+/)
+      .filter(word => !NON_LATIN_SCRIPT_RE.test(word))
+      .join(' ')
+      .replace(/\s+([.,!?:;])/g, '$1')
+      .trim()
+  }
+  return result
+}
+
 export function buildTitleStudioPrompt(input: {
   topic: string
   niche: string
+  useNiche: boolean
   platform: string
   existingTitle?: string
 }): string {
@@ -52,8 +112,7 @@ export function buildTitleStudioPrompt(input: {
 
 TÉMA: "${input.topic}"
 ${input.existingTitle ? `MEGLÉVŐ CÍM (ha van, ebből induljunk ki, de adj valódi alternatívákat): "${input.existingTitle}"` : ''}
-NICHE: ${input.niche || 'általános'}
-PLATFORM: ${input.platform}
+${input.useNiche && input.niche ? `NICHE: ${input.niche}\n` : ''}PLATFORM: ${input.platform}
 
 FELADAT:
 Írj 5 KÜLÖNBÖZŐ magyar címvariációt ugyanahhoz a témához, mindegyik más megközelítéssel (pl. kíváncsiság-vezérelt, konkrét szám/lista, kérdés, ellentmondás/meglepetés, egyszerű/direkt).
@@ -70,6 +129,8 @@ KRITIKUS SZABÁLYOK:
 - NE használj túlzó, be nem tartható ígéreteket.
 - A címek legyenek TÉNYLEGESEN különbözőek egymástól, ne csak szinonimák.
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
+- ${STAY_ON_TOPIC_RULE}
+- A címek teljesen magyar nyelvűek legyenek. Ne használj angol, spanyol, portugál vagy más idegen szót, kivéve közismert márkanevet vagy szakkifejezést.
 
 Válaszolj KIZÁRÓLAG valid JSON tömbben:
 [{"title": "...", "curiosity_score": 0, "clarity_score": 0, "clickability_score": 0, "risk_score": 0, "reasoning": "..."}]`

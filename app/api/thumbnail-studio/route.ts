@@ -7,6 +7,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { checkThumbnailText, buildThumbnailStudioPrompt, type ThumbnailConcept } from '@/lib/thumbnail-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
+import { shouldUseProfileNiche } from '@/lib/niche-relevance'
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,8 +20,9 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single()
     const niche = profileRow?.niche || ''
+    const useNiche = shouldUseProfileNiche({ topic, profileNiche: niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
@@ -38,7 +40,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.thumbnail_studio} kredit szükséges.` }, { status: 402 })
     }
 
-    const prompt = buildThumbnailStudioPrompt({ topic, niche, platform: platformValue })
+    const prompt = buildThumbnailStudioPrompt({ topic, niche, useNiche, platform: platformValue })
     const aiCall = await callAIProvider({
       model: MODELS.fast,
       maxTokens: 1500,

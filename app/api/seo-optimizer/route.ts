@@ -6,6 +6,7 @@ import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidR
 import { createAdminClient } from '@/lib/supabase-server'
 import { computeSeoHeuristics, buildSeoOptimizerPrompt, type SeoPackage } from '@/lib/seo-optimizer'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
+import { shouldUseProfileNiche } from '@/lib/niche-relevance'
 
 function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
   let score = 0
@@ -27,8 +28,9 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single()
     const niche = profileRow?.niche || ''
+    const useNiche = shouldUseProfileNiche({ topic, profileNiche: niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
     const keywordList: string[] = Array.isArray(keywords) ? keywords : (typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()).filter(Boolean) : [])
@@ -52,7 +54,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.seo_optimizer} kredit szükséges.` }, { status: 402 })
     }
 
-    const prompt = buildSeoOptimizerPrompt({ topic, existingTitle: existing_title || undefined, niche, platform: platformValue })
+    const prompt = buildSeoOptimizerPrompt({ topic, existingTitle: existing_title || undefined, niche, useNiche, platform: platformValue })
     const aiCall = await callAIProvider({
       model: MODELS.fast,
       maxTokens: 2000,

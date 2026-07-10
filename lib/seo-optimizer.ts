@@ -4,6 +4,8 @@
 // A merheto reszek (cim/leiras hossz, kulcsszo lefedettseg az elso sorokban,
 // tag-szam) backend-szamoltak — objektiv checklist, nem AI-becsles.
 
+import { STAY_ON_TOPIC_RULE } from './niche-relevance'
+
 export interface SeoHeuristics {
   title_length: number
   title_length_flag: 'ok' | 'too_long' | 'too_short'
@@ -47,13 +49,12 @@ export interface SeoPackage {
   end_screen_cta: string
 }
 
-export function buildSeoOptimizerPrompt(input: { topic: string; existingTitle?: string; niche: string; platform: string }): string {
+export function buildSeoOptimizerPrompt(input: { topic: string; existingTitle?: string; niche: string; useNiche: boolean; platform: string }): string {
   return `Egy magyar tartalomgyártónak kell egy teljes SEO/feltöltési csomagot írnod ehhez a videóhoz.
 
 TÉMA: "${input.topic}"
 ${input.existingTitle ? `CÍM: "${input.existingTitle}"` : ''}
-NICHE: ${input.niche || 'általános'}
-PLATFORM: ${input.platform}
+${input.useNiche && input.niche ? `NICHE: ${input.niche}\n` : ''}PLATFORM: ${input.platform}
 
 FELADAT — adj meg MINDENT az alábbiakból:
 - seo_title: kulcsszó-optimalizált cím (ha volt megadott cím, finomítsd, ne cseréld le teljesen)
@@ -68,6 +69,8 @@ FELADAT — adj meg MINDENT az alábbiakból:
 KRITIKUS SZABÁLYOK:
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
 - A description bekezdései sortöréssel (\\n) legyenek elválasztva.
+- ${STAY_ON_TOPIC_RULE}
+- A szöveg teljesen magyar nyelvű legyen, idegen szavak nélkül (kivéve közismert márkanév vagy szakkifejezés).
 
 Válaszolj KIZÁRÓLAG valid JSON objektumban:
 {"seo_title": "...", "description": "...", "tags": ["..."], "hashtags": ["..."], "chapters": [{"timestamp": "0:00", "label": "..."}], "playlist_suggestion": "...", "pinned_comment": "...", "end_screen_cta": "..."}`
