@@ -82,6 +82,9 @@ export async function POST(request: NextRequest) {
     alert_signature,
   }, { onConflict: 'user_id,tracked_candidate_id,alert_signature' })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('[TrendAlerts] POST dismiss DB hiba:', error)
+    return NextResponse.json({ error: 'A riasztás elutasítása sikertelen. Próbáld újra később.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
 }

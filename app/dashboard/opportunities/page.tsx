@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase'
 import { useSearchParams } from 'next/navigation'
 import { SCORE_LABELS, REJECT_REASONS } from '@/types'
@@ -296,11 +296,13 @@ function storeOpportunityPackageContext(topic: ExtendedTopic, displayTitle: stri
   sessionStorage.setItem(`willviral_opportunity_package_${topic.id}`, JSON.stringify(payload))
 }
 
-function TopicCard({ topic, index, onReplace, hasPool }: {
+function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacing }: {
   topic: ExtendedTopic
   index: number
   onReplace: (index: number) => void
   hasPool: boolean
+  onSimilarResult: (index: number, result: { title: string; description: string }) => void
+  replacing: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -309,8 +311,10 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
   const [showReasonModal, setShowReasonModal] = useState(false)
   const [similarLoading, setSimilarLoading] = useState(false)
   const [similarError, setSimilarError] = useState<string | null>(null)
+  const [similarCreditCheck, setSimilarCreditCheck] = useState<UsageCheckResult | null>(null)
   const [displayTitle, setDisplayTitle] = useState(topic.title)
   const [displayDescription, setDisplayDescription] = useState(cleanText(topic.description))
+  const similarInFlightRef = useRef(false)
   const scoreColorVal = getScoreColor(topic.opportunity_score)
 
   const hasVideos = topic.evidence_videos && topic.evidence_videos.length > 0
@@ -355,7 +359,41 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
     setStatus('rejected')
   }
 
+  // Előbb megnézzük a kreditegyenleget és megerősítést kérünk — a tényleges
+  // hívás (confirmShowSimilar) csak jóváhagyás után indul. A szerver ettől
+  // függetlenül input_hash alapján úgyis ingyenesen visszaadja, ha a user
+  // ugyanerre a témára korábban már fizetett — ez csak a UI-oldali
+  // visszaigazolás, amit eddig teljesen hiányzott.
   async function handleShowSimilar() {
+    if (similarInFlightRef.current) return
+    similarInFlightRef.current = true
+    setSimilarError(null)
+    try {
+      const res = await fetch('/api/credits')
+      const credits = await res.json()
+      const balance = Number(credits.balance ?? 0)
+      const cost = 1
+      setSimilarCreditCheck({
+        feature: 'Mutass hasonlót',
+        cost,
+        currency: 'credit',
+        currentCredits: Math.round(balance),
+        remainingCreditsAfterRun: Math.round(balance - cost),
+        requiresConfirmation: true,
+        canRun: balance >= cost,
+        reason: balance >= cost ? undefined : 'insufficient_credits',
+        message: balance >= cost
+          ? 'Egy másik feldolgozási szöget kérünk ugyanerre a témára. Ha korábban már lekérted ugyanezt, nem vonunk le új kreditet.'
+          : 'Ehhez nincs elég kredited.',
+      })
+    } catch {
+      setSimilarError('Kapcsolati hiba — próbáld újra.')
+      similarInFlightRef.current = false
+    }
+  }
+
+  async function confirmShowSimilar() {
+    setSimilarCreditCheck(null)
     setSimilarLoading(true)
     setSimilarError(null)
     try {
@@ -370,6 +408,7 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
       if (res.ok) {
         setDisplayTitle(data.title)
         setDisplayDescription(cleanText(data.description))
+        onSimilarResult(index, { title: data.title, description: data.description })
         await fetch('/api/feedback', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ topic: displayTitle, feedback_type: 'request_similar', opportunity_score: topic.opportunity_score, niche_cluster: topic.niche_cluster }),
@@ -381,6 +420,7 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
       setSimilarError('Kapcsolati hiba — próbáld újra.')
     } finally {
       setSimilarLoading(false)
+      similarInFlightRef.current = false
     }
   }
 
@@ -407,6 +447,14 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
   return (
     <>
       {showReasonModal && <RejectReasonModal onSelect={submitReject} onClose={() => setShowReasonModal(false)} />}
+      {similarCreditCheck && (
+        <CreditConfirmModal
+          check={similarCreditCheck}
+          onConfirm={confirmShowSimilar}
+          onCancel={() => { setSimilarCreditCheck(null); similarInFlightRef.current = false }}
+          loading={similarLoading}
+        />
+      )}
       <div className="card-hover">
         <div className="flex items-start gap-4">
           <span className="text-xs font-mono text-text-muted w-6 flex-shrink-0 mt-1">{String(index + 1).padStart(2, '0')}</span>
@@ -671,9 +719,9 @@ function TopicCard({ topic, index, onReplace, hasPool }: {
                 className="text-xs px-3 py-1.5 rounded-lg bg-surface-2 border border-border text-text-secondary hover:text-amber hover:border-amber/40 transition-all disabled:opacity-50">
                 {similarLoading ? '...' : '🔄 Mutass hasonlót'}
               </button>
-              <button onClick={handleShowDifferent}
-                className="text-xs px-3 py-1.5 rounded-lg bg-surface-2 border border-border text-text-secondary hover:text-text-primary transition-all">
-                🔀 Mutass mást
+              <button onClick={handleShowDifferent} disabled={replacing}
+                className="text-xs px-3 py-1.5 rounded-lg bg-surface-2 border border-border text-text-secondary hover:text-text-primary transition-all disabled:opacity-50">
+                {replacing ? '...' : '🔀 Mutass mást'}
               </button>
             </div>
 
@@ -868,6 +916,9 @@ export default function OpportunitiesPage() {
   const [activeDrilldown, setActiveDrilldown] = useState<string | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [pendingGenerate, setPendingGenerate] = useState<{ profile?: CreatorProfile; options?: Record<string, unknown> } | null>(null)
+  const [replaceCreditCheck, setReplaceCreditCheck] = useState<UsageCheckResult | null>(null)
+  const [pendingReplaceIndex, setPendingReplaceIndex] = useState<number | null>(null)
+  const replaceInFlightRef = useRef(false)
 
   // Keresési előzmény visszaállítása — de ha a profil niche változott, újra keresünk
   useEffect(() => {
@@ -953,6 +1004,28 @@ export default function OpportunitiesPage() {
 
   function getCacheKey(nicheVal: string, platform: string, region: string) {
     return `willviral_opportunities_v10_consistency_${nicheVal}_${platform}_${region}`.toLowerCase().replace(/\s+/g, '_')
+  }
+
+  // "Mutass mást" / "Mutass hasonlót" után a topics tömb frissül a memóriában,
+  // de enélkül a sessionStorage-beli állapot a régi maradna — refresh után a
+  // user elveszítené a fizetett eredményt. A tényleges kredit-védelem szerver
+  // oldali (input_hash + paid_results), ez csak a böngészős folytonosságot adja.
+  function persistTopicsState(updatedTopics: ExtendedTopic[], updatedPool: ExtendedTopic[]) {
+    try {
+      sessionStorage.setItem('willviral_opportunities_state', JSON.stringify({
+        niche, topics: updatedTopics, poolTopics: updatedPool, message, activeDrilldown,
+      }))
+    } catch {}
+  }
+
+  function handleSimilarResult(index: number, result: { title: string; description: string }) {
+    setTopics(prev => {
+      if (!prev[index]) return prev
+      const updated = [...prev]
+      updated[index] = { ...updated[index], title: result.title, description: result.description }
+      persistTopicsState(updated, poolTopics)
+      return updated
+    })
   }
 
   async function handleGenerateWithCreditCheck(p?: CreatorProfile, options?: { discoveryMode?: 'drilldown'; parentNiche?: string; skipCache?: boolean }) {
@@ -1052,9 +1125,45 @@ export default function OpportunitiesPage() {
     }
   }
 
+  // "Mutass mást" csak akkor kér kredit-megerősítést, ha a pool következő
+  // tagjához tényleg fizetős AI-magyarázat kell (needs_explanation) — ha a
+  // pool elem már kész, a csere ingyenes és azonnali, modal nélkül.
   async function handleReplace(index: number) {
-    if (poolTopics.length === 0) return
+    if (poolTopics.length === 0 || replaceInFlightRef.current) return
     const next = poolTopics[0]
+
+    if (!next.needs_explanation) {
+      await performReplace(index, next)
+      return
+    }
+
+    replaceInFlightRef.current = true
+    try {
+      const res = await fetch('/api/credits')
+      const credits = await res.json()
+      const balance = Number(credits.balance ?? 0)
+      const cost = 1
+      setPendingReplaceIndex(index)
+      setReplaceCreditCheck({
+        feature: 'Mutass mást',
+        cost,
+        currency: 'credit',
+        currentCredits: Math.round(balance),
+        remainingCreditsAfterRun: Math.round(balance - cost),
+        requiresConfirmation: true,
+        canRun: balance >= cost,
+        reason: balance >= cost ? undefined : 'insufficient_credits',
+        message: balance >= cost
+          ? 'Egy másik, konkrét témajavaslatot kérünk. Ha korábban már lekérted ugyanezt, nem vonunk le új kreditet.'
+          : 'Ehhez nincs elég kredited.',
+      })
+    } catch {
+      replaceInFlightRef.current = false
+      await performReplace(index, next)
+    }
+  }
+
+  async function performReplace(index: number, next: ExtendedTopic) {
     const remainingPool = poolTopics.slice(1)
     let finalTopic = next
     if (next.needs_explanation) {
@@ -1069,18 +1178,28 @@ export default function OpportunitiesPage() {
         const data = await res.json()
         if (res.ok) {
           finalTopic = { ...next, title: data.title, description: data.description, needs_explanation: false }
-        } else if (res.status === 402) {
-          setError(data.error || 'Nincs elegendő kredited ehhez a művelethez.')
+        } else {
+          setError(res.status === 402 ? (data.error || 'Nincs elegendő kredited ehhez a művelethez.') : (data.error || 'Nem sikerült másik témát találni — próbáld újra.'))
+          setPendingReplaceIndex(null)
+          replaceInFlightRef.current = false
           return
         }
-      } catch {}
+      } catch {
+        setError('Kapcsolati hiba — próbáld újra.')
+        setPendingReplaceIndex(null)
+        replaceInFlightRef.current = false
+        return
+      }
     }
     setTopics(prev => {
       const updated = [...prev]
       updated[index] = finalTopic
+      persistTopicsState(updated, remainingPool)
       return updated
     })
     setPoolTopics(remainingPool)
+    setPendingReplaceIndex(null)
+    replaceInFlightRef.current = false
   }
 
   return (
@@ -1097,6 +1216,19 @@ export default function OpportunitiesPage() {
           }}
           onCancel={() => { setCreditCheck(null); setPendingGenerate(null) }}
           loading={loading}
+        />
+      )}
+      {replaceCreditCheck && (
+        <CreditConfirmModal
+          check={replaceCreditCheck}
+          onConfirm={() => {
+            setReplaceCreditCheck(null)
+            if (pendingReplaceIndex !== null && poolTopics.length > 0) {
+              performReplace(pendingReplaceIndex, poolTopics[0])
+            }
+          }}
+          onCancel={() => { setReplaceCreditCheck(null); setPendingReplaceIndex(null); replaceInFlightRef.current = false }}
+          loading={pendingReplaceIndex !== null}
         />
       )}
       <div className="mb-6">
@@ -1197,7 +1329,7 @@ export default function OpportunitiesPage() {
                 )}
                 <div className="space-y-3">
                   {validatedTopics.map((topic, i) => (
-                    <TopicCard key={topic.id} topic={topic} index={i} onReplace={handleReplace} hasPool={poolTopics.length > 0} />
+                    <TopicCard key={topic.id} topic={topic} index={i} onReplace={handleReplace} onSimilarResult={handleSimilarResult} hasPool={poolTopics.length > 0} replacing={pendingReplaceIndex === i} />
                   ))}
                 </div>
               </div>

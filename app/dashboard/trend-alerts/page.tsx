@@ -16,16 +16,24 @@ interface TrendAlert {
 export default function TrendAlertsPage() {
   const [alerts, setAlerts] = useState<TrendAlert[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [dismissing, setDismissing] = useState<Set<string>>(new Set())
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
+    setError(null)
     try {
       const res = await fetch('/api/trend-alerts')
       const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'A trend riasztások betöltése sikertelen. Próbáld újra később.')
+        return
+      }
       setAlerts(data.alerts || [])
+    } catch {
+      setError('Kapcsolati hiba. Próbáld újra később.')
     } finally {
       setLoading(false)
     }
@@ -34,12 +42,24 @@ export default function TrendAlertsPage() {
   async function dismiss(alert: TrendAlert) {
     const key = `${alert.candidate_id}:${alert.alert_signature}`
     setDismissing(prev => new Set(prev).add(key))
-    await fetch('/api/trend-alerts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ candidate_id: alert.candidate_id, alert_signature: alert.alert_signature }),
-    })
-    setAlerts(prev => prev.filter(a => `${a.candidate_id}:${a.alert_signature}` !== key))
+    setError(null)
+    try {
+      const res = await fetch('/api/trend-alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate_id: alert.candidate_id, alert_signature: alert.alert_signature }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'A riasztás elutasítása sikertelen. Próbáld újra később.')
+        return
+      }
+      setAlerts(prev => prev.filter(a => `${a.candidate_id}:${a.alert_signature}` !== key))
+    } catch {
+      setError('Kapcsolati hiba. Próbáld újra később.')
+    } finally {
+      setDismissing(prev => { const next = new Set(prev); next.delete(key); return next })
+    }
   }
 
   const rising = alerts.filter(a => a.alert_type === 'rising')
@@ -52,13 +72,19 @@ export default function TrendAlertsPage() {
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Erdemi elmozdulás a figyelt trendjeidben — automatikusan, kredit nélkül.</p>
       </div>
 
+      {error && (
+        <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+        </div>
+      )}
+
       {loading && (
         <div className="card text-center py-12">
           <div className="inline-block w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3B82F6', borderTopColor: 'transparent' }} />
         </div>
       )}
 
-      {!loading && alerts.length === 0 && (
+      {!loading && !error && alerts.length === 0 && (
         <div className="card text-center py-12">
           <p className="text-3xl mb-3">🔔</p>
           <p style={{ color: '#CBD5E1' }} className="mb-2">Nincs erdemi elmozdulás a figyelt trendjeidben most.</p>
@@ -66,7 +92,7 @@ export default function TrendAlertsPage() {
         </div>
       )}
 
-      {!loading && alerts.length > 0 && (
+      {!loading && !error && alerts.length > 0 && (
         <div className="space-y-6">
           {rising.length > 0 && (
             <div>

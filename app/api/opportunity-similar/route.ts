@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, logUsage, chargeFeature, hasEnoughCredits } from '@/lib/credits'
+import { getUserId, logUsage, chargeFeature, hasEnoughCredits, CREDIT_COSTS } from '@/lib/credits'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import type { SimilarVideo, OpportunityScoreBreakdown } from '@/types'
 
 // ─── "Mutass hasonlót" — ugyanazon bizonyíték videókból más szöget ad Claude (Haiku) ───
 // NULLA YouTube API hívás — cache-elt evidence_videos-ból dolgozunk.
 export async function POST(request: NextRequest) {
   try {
-    const { original_title, keyword, niche, score_breakdown, evidence_videos } = await request.json()
+    const { original_title, keyword, niche, score_breakdown, evidence_videos, paidResultId, force_refresh } = await request.json()
 
     if (!original_title || !evidence_videos) {
       return NextResponse.json({ error: 'Hiányzó adatok' }, { status: 400 })
@@ -17,11 +18,23 @@ export async function POST(request: NextRequest) {
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    // Korabban ez a route nem vont le kreditet, pedig van ra definialt ar
-    // (CREDIT_COSTS.opportunity_explain) — ez hiba volt, nem szandekos ingyenesseg.
+    // ─── Amit a user egyszer megvett, azt bármikor visszakapja kredit nélkül —
+    // input_hash alapján, ugyanaz az elv, mint minden más fizetős eszköznél.
+    // Csak explicit force_refresh indít új, fizetős generálást.
+    const normalizedInput = normalizePaidResultInput({ variant: 'similar', original_title, keyword: keyword || '', niche: niche || '' })
+    const inputHash = buildPaidResultHash({ userId, toolType: 'opportunity_explain', normalizedInput })
+
+    if (!force_refresh) {
+      const paid = (await getPaidResultById(userId, paidResultId)) || (await getPaidResultByHash({ userId, toolType: 'opportunity_explain', inputHash }))
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+      }
+    }
+
     const enoughCredits = await hasEnoughCredits(userId, 'opportunity_explain')
     if (!enoughCredits) {
-      return NextResponse.json({ error: 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
+      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.opportunity_explain} kredit szükséges.` }, { status: 402 })
     }
 
     const videos = evidence_videos as SimilarVideo[]
@@ -70,9 +83,51 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
       return NextResponse.json({ error: chargeResult.error || 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
     }
 
-    return NextResponse.json({ title: result.title, description: result.description })
+    const responsePayload = { title: result.title, description: result.description }
+
+    const paidSave = await savePaidResult({
+      userId,
+      toolType: 'opportunity_explain',
+      inputHash,
+      normalizedInput,
+      originalInput: original_title,
+      resultJson: responsePayload,
+      summaryJson: { variant: 'similar', keyword: keyword || '', title: result.title },
+      creditCost: CREDIT_COSTS.opportunity_explain,
+      freshForHours: 24,
+      provider: aiCall.provider,
+      model: aiCall.model,
+      promptTemplateId: aiCall.promptTemplateId,
+      promptVersion: aiCall.promptVersion,
+      estimatedCost: aiCall.estimatedCost,
+    })
+    if (!paidSave.success) {
+      console.error('[OpportunitySimilar] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+    }
+
+    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
   } catch (error) {
     console.error('Opportunity similar error:', error)
     return NextResponse.json({ error: 'Generálás sikertelen.' }, { status: 500 })
+  }
+}
+
+// GET — mentett "Mutass hasonlót" eredmény visszanyitása paidResultId alapján, kredit nélkül.
+export async function GET(request: NextRequest) {
+  try {
+    const userId = await getUserId()
+    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const paidResultId = request.nextUrl.searchParams.get('paidResultId')
+    if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
+
+    const paid = await getPaidResultById(userId, paidResultId)
+    if (!paid) return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
+
+    const opened = await openPaidResult(paid)
+    return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+  } catch (error) {
+    console.error('Opportunity similar GET error:', error)
+    return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })
   }
 }

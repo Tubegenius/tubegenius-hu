@@ -2,10 +2,36 @@
 
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
-**Utolsó frissítés**: 2026-07-09
-**Utolsó commit ebben a körben**: ld. git log — Phase 1 lezárva (#10 mélyítés, #12 AI provider layer teljes), egy önálló, súlyos Stripe webhook billing-hiba javítása, és a teljes Phase 2 (mind a 10 modul) megépítve+élőben tesztelve.
+**Utolsó frissítés**: 2026-07-10
+**Utolsó commit ebben a körben**: ld. git log — Phase 1 lezárva (#10 mélyítés, #12 AI provider layer teljes), egy önálló, súlyos Stripe webhook billing-hiba javítása, a teljes Phase 2 (mind a 10 modul) megépítve+élőben tesztelve, majd egy **Launch Readiness Audit** (13 szempont) és az abból következő **Hotfix Sprint** (C1, C2, H1–H4).
 
 **KRITIKUS, 2026-07-09-i találat**: a Stripe webhook `user_credits` táblára vonatkozó feltételezése (külön `topup_credits`/`subscription_credits` oszlop) SOSEM egyezett a valós sémával (csak egy közös `balance` van) — a webhook eredeti kódja emiatt minden éles crediting-eseményre (előfizetés-indítás, topup, renewal) hibázott volna, amit a régi "nyeld el a hibát, adj 200-at" logika örökre elrejtett volna. Javítva + élőben tesztelve, ld. [AI_PROVIDER_LAYER_REFACTOR_PLAN.md](AI_PROVIDER_LAYER_REFACTOR_PLAN.md) Fázis F.
+
+---
+
+## 2026-07-10 — LAUNCH READINESS AUDIT + HOTFIX SPRINT
+
+A user által elrendelt feature freeze után egy 13 szempontos audit (route-ok, kredit/paid_results logika, mobil nézet, mock adat, hardcode-olt magyar logika, hibaüzenetek, core flow) 2 kritikus és 4 súlyos hibát talált. Ezeket egy külön hotfix sprintben javítottuk, prioritás szerint.
+
+**⚠️ NYITOTT, KÉZI LÉPÉS SZÜKSÉGES — [026_paid_results_opportunity_channel_audit.sql](supabase/migrations/026_paid_results_opportunity_channel_audit.sql) MÉG NINCS LEFUTTATVA ÉLESBEN.** A C1 és H3 javítás kódja kész és tesztelve, DE a `paid_results.tool_type` CHECK constraint még nem ismeri az `opportunity_explain`/`channel_audit` értékeket — élőben tesztelve (lásd lent), a mentés emiatt csendben elbukik (a user nem akad el, de nem védett a redundáns kredit-levonástól, amíg ez nincs lefuttatva). **A Supabase SQL Editorban futtasd le ezt a migrációt, mielőtt bármilyen pilot/béta usert ráengedsz a Videólehetőségek "Mutass mást"/"Mutass hasonlót" gombjaira vagy a Channel Auditra.**
+
+| # | Hiba | Súlyosság | Állapot |
+|---|---|---|---|
+| C1 | Opportunity "Mutass mást"/"Mutass hasonlót" — nincs CreditConfirmModal, nincs paid_results/input_hash, refresh után elveszett fizetett eredmény | Kritikus | ✅ Kód kész, élőben tesztelve (charge pontosan 1x fut le, dupla kattintás ellen `useRef` zár) — ⚠️ a mentés/reopen a migráció hiánya miatt élesben még nem működik, ld. fent |
+| C2 | Nyers Supabase/Postgres hiba szivárgott ki 3 helyen (`competitors` GET/DELETE, `trend-alerts` POST dismiss) | Kritikus | ✅ Kész — magyar, általános hibaüzenetre cserélve, a részletes hiba szerver oldalon logolva |
+| H1 | Mobil sidebar sosem csukódott össze, 375px-en a tartalom ~115px sávba szorult | Súlyos | ✅ Kész, élőben tesztelve mobil (375px, hamburger nyit/zár, route-váltáskor auto-zár) és desktop (1280px, statikus sidebar) nézetben is |
+| H2 | SEO Optimalizáló fizetett csomagja sehova nem volt menthető a frontendről (a backend valójában már jól cachelt, csak a frontend nem használta) | Súlyos | ✅ Kész, élőben tesztelve: 1. generálás kredit, ismételt azonos kérés ingyenes (`from_paid_result`), GET-es visszanyitás ingyenes, `force_refresh` ismét kreditet von |
+| H3 | Channel Audit 2 kredites "következő 10 videó" javaslata sehova nem mentődött | Súlyos | ✅ Kód kész (input-hash a jelenlegi audit-mintázatból, GET reopen, force_refresh) — ⚠️ élesben a migráció hiánya miatt még nem tesztelhető végponttól végpontig, ld. fent |
+| H4 | 5 helyen a frontend nem ellenőrizte a `res.ok`-ot, csendben elnyelte a szerverhibát | Súlyos | ✅ Kész mind az 5 helyen (`competitors` load+delete, `trend-alerts` dismiss, `calendar` load, `channel-audit` load) — mindegyik most `res.ok` ellenőrzést és magyar hibaüzenetet kap |
+
+**Tesztelés**: `npx tsc --noEmit --incremental false` ✅ 0 hiba, `npm run build` ✅ sikeres (mind a 69 route legenerálva). Élő böngészős teszt: mobil/desktop sidebar (H1), SEO Optimalizáló teljes ciklus (H2, valós kredittel), Opportunity Explain/Similar charge-biztonság (C1, valós kredittel — a fenti migráció-hiány itt derült ki). Összesen 4 kredit lett elhasználva a user fiókjából a tesztelés során (37→33).
+
+**Tudatosan backlogban maradt (M1–M6, a user kérésére nem ebben a körben)**:
+- **M1+M2**: 5 lib fájl AI promptja (`title-studio`, `thumbnail-studio`, `seo-optimizer`, `channel-audit`, `content-gap`) fixen magyarra van hegesztve, nincs `language` paraméter; 5 frontend oldal fixen `region:'HU'`-t küld a profil piac-mezője helyett. HU-only pilothoz nem blokkoló.
+- **M3**: a Command Center (`DashboardClient.tsx`) egyetlen Phase 2 modulra sem linkel — csak sidebar-ból érhetők el.
+- **M4**: Kulcsszókutató, SEO Optimalizáló, Content Gap Finder, Channel Audit nincs bekötve a központi Video Idea objektumhoz (csak `creator_memory`-ba mentenek).
+- **M5**: ~8 route-nál a drága AI/API hívás a kredit-levonás ELŐTT fut le (nem dupla-levonás kockázat, csak elveszett API-költség egy sikertelen levonásnál).
+- **M6**: a heti ingyenes Videólehetőségek-keresés automatikusan elindul oldalbetöltéskor — tudatos termékdöntés kell, hogy ez szándékos-e.
 
 ---
 

@@ -15,7 +15,10 @@ export async function GET() {
     .eq('user_id', userId)
     .order('added_at', { ascending: false })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('[Competitors] GET DB hiba:', error)
+    return NextResponse.json({ error: 'A versenytársak betöltése sikertelen. Próbáld újra később.' }, { status: 500 })
+  }
 
   const competitorIds = (competitors || []).map(c => c.id)
   let videosByCompetitor = new Map<string, unknown[]>()
@@ -142,7 +145,10 @@ export async function DELETE(request: NextRequest) {
 
   const admin = createAdminClient()
   const { error } = await admin.from('tracked_competitors').delete().eq('id', id).eq('user_id', userId)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('[Competitors] DELETE DB hiba:', error)
+    return NextResponse.json({ error: 'A versenytárs törlése sikertelen. Próbáld újra később.' }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true })
 }

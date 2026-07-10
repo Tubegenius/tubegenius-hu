@@ -57,10 +57,17 @@ export default function CompetitorsPage() {
 
   async function loadCompetitors() {
     setLoading(true)
+    setError(null)
     try {
       const res = await fetch('/api/competitors')
       const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'A versenytársak betöltése sikertelen. Próbáld újra később.')
+        return
+      }
       setCompetitors(data.competitors || [])
+    } catch {
+      setError('Kapcsolati hiba. Próbáld újra később.')
     } finally {
       setLoading(false)
     }
@@ -133,12 +140,22 @@ export default function CompetitorsPage() {
   }
 
   async function removeCompetitor(id: string) {
-    await fetch('/api/competitors', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
-    })
-    setCompetitors(prev => prev.filter(c => c.id !== id))
+    setError(null)
+    try {
+      const res = await fetch('/api/competitors', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'A versenytárs törlése sikertelen. Próbáld újra később.')
+        return
+      }
+      setCompetitors(prev => prev.filter(c => c.id !== id))
+    } catch {
+      setError('Kapcsolati hiba. Próbáld újra később.')
+    }
   }
 
   async function saveOutlierSignal(video: CompetitorVideo, channelTitle: string) {

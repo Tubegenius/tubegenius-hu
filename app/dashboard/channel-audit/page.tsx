@@ -41,34 +41,59 @@ const DIMENSION_LABELS: Record<keyof DimensionAverages, string> = {
 }
 
 const CHANNEL_AUDIT_COST = 2
+const SUGGESTIONS_STATE_KEY = 'willviral_channel_audit_suggestions'
+
+interface SuggestionsResult {
+  suggestions: Array<{ topic: string; reasoning: string }>
+  from_paid_result?: boolean
+  cache_status?: 'fresh' | 'stale_saved'
+  last_analyzed_at?: string
+  paid_result_id?: string | null
+}
 
 export default function ChannelAuditPage() {
   const [data, setData] = useState<ChannelAuditData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [suggestions, setSuggestions] = useState<Array<{ topic: string; reasoning: string }> | null>(null)
+  const [suggestionsResult, setSuggestionsResult] = useState<SuggestionsResult | null>(null)
   const [generating, setGenerating] = useState(false)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
+  const [pendingForceRefresh, setPendingForceRefresh] = useState(false)
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    try {
+      const saved = sessionStorage.getItem(SUGGESTIONS_STATE_KEY)
+      if (saved) setSuggestionsResult(JSON.parse(saved))
+    } catch {}
+  }, [])
 
   async function load() {
     setLoading(true)
+    setLoadError(null)
     try {
       const res = await fetch('/api/channel-audit')
       const body = await res.json()
+      if (!res.ok) {
+        setLoadError(body.error || 'A Channel Audit adatok betöltése sikertelen. Próbáld újra később.')
+        return
+      }
       setData(body)
+    } catch {
+      setLoadError('Kapcsolati hiba. Próbáld újra később.')
     } finally {
       setLoading(false)
     }
   }
 
-  async function requestSuggestions() {
+  async function requestSuggestions(forceRefresh = false) {
     setError(null)
     try {
       const creditsRes = await fetch('/api/credits')
       const credits = await creditsRes.json()
       const balance = Number(credits.balance ?? 0)
+      setPendingForceRefresh(forceRefresh)
       setCreditCheck({
         feature: 'Channel Audit — következő videók',
         cost: CHANNEL_AUDIT_COST,
@@ -78,7 +103,9 @@ export default function ChannelAuditPage() {
         requiresConfirmation: true,
         canRun: balance >= CHANNEL_AUDIT_COST,
         reason: balance >= CHANNEL_AUDIT_COST ? undefined : 'insufficient_credits',
-        message: balance >= CHANNEL_AUDIT_COST ? '10 videótéma-javaslat a valós audit-előzményed mintázatai alapján.' : 'Ehhez nincs elég kredited.',
+        message: balance >= CHANNEL_AUDIT_COST
+          ? (forceRefresh ? 'Új, friss javaslatot kérünk — ez új kreditet használ.' : '10 videótéma-javaslat a valós audit-előzményed mintázatai alapján. Ha a mintázat nem változott, nem vonunk le új kreditet.')
+          : 'Ehhez nincs elég kredited.',
       })
     } catch {
       setError('Kapcsolati hiba.')
@@ -89,17 +116,23 @@ export default function ChannelAuditPage() {
     setCreditCheck(null)
     setGenerating(true)
     try {
-      const res = await fetch('/api/channel-audit', { method: 'POST' })
+      const res = await fetch('/api/channel-audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force_refresh: pendingForceRefresh }),
+      })
       const body = await res.json()
       if (!res.ok) {
         setError(body.error || 'Generálás sikertelen.')
         return
       }
-      setSuggestions(body.suggestions)
+      setSuggestionsResult(body)
+      try { sessionStorage.setItem(SUGGESTIONS_STATE_KEY, JSON.stringify(body)) } catch {}
     } catch {
       setError('Kapcsolati hiba.')
     } finally {
       setGenerating(false)
+      setPendingForceRefresh(false)
     }
   }
 
@@ -120,7 +153,14 @@ export default function ChannelAuditPage() {
         </div>
       )}
 
-      {!loading && data && !data.has_enough_data && (
+      {loadError && (
+        <div className="card text-center py-12" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <p className="text-sm mb-3" style={{ color: '#EF4444' }}>{loadError}</p>
+          <button onClick={load} className="btn-secondary text-sm px-4 py-1.5">Újrapróbálás</button>
+        </div>
+      )}
+
+      {!loading && !loadError && data && !data.has_enough_data && (
         <div className="card text-center py-12">
           <p className="text-3xl mb-3">📊</p>
           <p style={{ color: '#CBD5E1' }} className="mb-2">
@@ -136,7 +176,7 @@ export default function ChannelAuditPage() {
         </div>
       )}
 
-      {!loading && data && data.has_enough_data && (
+      {!loading && !loadError && data && data.has_enough_data && (
         <div className="space-y-6">
           <div className="card">
             <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>DIMENZIÓ-ÁTLAGOK ({data.audit_count} audit alapján)</p>
@@ -199,15 +239,35 @@ export default function ChannelAuditPage() {
           <div className="card">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs" style={{ color: '#94A3B8' }}>KÖVETKEZŐ 10 VIDEÓ JAVASLAT</p>
-              {!suggestions && (
-                <button onClick={requestSuggestions} disabled={generating} className="btn-primary text-sm px-4 py-1.5">
+              {!suggestionsResult && (
+                <button onClick={() => requestSuggestions()} disabled={generating} className="btn-primary text-sm px-4 py-1.5">
                   {generating ? 'Generálás...' : 'Javaslatok generálása'}
                 </button>
               )}
             </div>
-            {suggestions && (
+            {suggestionsResult?.from_paid_result && (
+              <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap mb-3"
+                style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+                <div>
+                  <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
+                    {suggestionsResult.cache_status === 'fresh' ? 'Friss mentett javaslat betöltve' : 'Korábbi mentett javaslat betöltve'}
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+                    Nem vontunk le új kreditet.
+                    {suggestionsResult.last_analyzed_at && ` Utolsó generálás: ${new Date(suggestionsResult.last_analyzed_at).toLocaleDateString('hu-HU')}.`}
+                  </p>
+                </div>
+                <button onClick={() => requestSuggestions(true)} disabled={generating}
+                  className="text-xs px-3 py-2 rounded-lg font-semibold flex-shrink-0"
+                  style={{ background: 'rgba(255,255,255,0.06)', color: '#F8FAFC' }}
+                  title="A frissítés új generálást indít, ezért kreditet használ.">
+                  Javaslat frissítése
+                </button>
+              </div>
+            )}
+            {suggestionsResult && (
               <div className="space-y-3">
-                {suggestions.map((s, i) => (
+                {suggestionsResult.suggestions.map((s, i) => (
                   <div key={i} className="py-2" style={{ borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
                     <p className="text-sm font-medium" style={{ color: '#F8FAFC' }}>{s.topic}</p>
                     <p className="text-xs" style={{ color: '#CBD5E1' }}>{s.reasoning}</p>

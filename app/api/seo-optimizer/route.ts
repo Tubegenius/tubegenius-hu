@@ -18,7 +18,7 @@ function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
 
 export async function POST(request: NextRequest) {
   try {
-    const { topic, existing_title, keywords, platform, region } = await request.json()
+    const { topic, existing_title, keywords, platform, region, force_refresh } = await request.json()
     if (!topic || typeof topic !== 'string') {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
@@ -36,10 +36,15 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ topic, existing_title, keywords: keywordList, platform: platformValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'seo_optimizer', normalizedInput, platform: platformValue })
 
-    const paid = await getPaidResultByHash({ userId, toolType: 'seo_optimizer', inputHash })
-    if (paid) {
-      const opened = await openPaidResult(paid)
-      return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })
+    // Csak explicit force_refresh (a user tudatosan új generálást kér) hagyja ki
+    // a mentett eredményt — enélkül ugyanaz a téma örökre ugyanazt a cache-elt
+    // csomagot adná vissza, kredit-levonás lehetősége nélkül.
+    if (!force_refresh) {
+      const paid = await getPaidResultByHash({ userId, toolType: 'seo_optimizer', inputHash })
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })
+      }
     }
 
     const enoughCredits = await hasEnoughCredits(userId, 'seo_optimizer')

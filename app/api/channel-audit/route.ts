@@ -5,15 +5,26 @@ import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { createAdminClient } from '@/lib/supabase-server'
 import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt } from '@/lib/channel-audit'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
+import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 
 const MIN_AUDITS_REQUIRED = 3
 
-// GET — aggregalt Channel Audit elonezet: dimenzio-atlagok, top/bottom
-// auditok, publikalasi ritmus. Kredit nelkul — mar kifizetett auditokat
-// aggregal ujra, nem kesziti el ujra.
-export async function GET() {
+// GET — ket mod egy route-on:
+// 1) ?paidResultId=... — egy korabban kifizetett "kovetkezo 10 video"
+//    javaslat visszanyitasa, kredit nelkul.
+// 2) parameter nelkul — aggregalt Channel Audit elonezet (dimenzio-atlagok,
+//    top/bottom auditok, publikalasi ritmus). Kredit nelkul mindket esetben.
+export async function GET(request: NextRequest) {
   const userId = await getUserId()
   if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+  const paidResultId = request.nextUrl.searchParams.get('paidResultId')
+  if (paidResultId) {
+    const paid = await getPaidResultById(userId, paidResultId)
+    if (!paid) return NextResponse.json({ error: 'A mentett javaslat nem található' }, { status: 404 })
+    const opened = await openPaidResult(paid)
+    return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })
+  }
 
   const admin = createAdminClient()
 
@@ -52,10 +63,15 @@ export async function GET() {
 }
 
 // POST — AI-generalt "kovetkezo 10 video" javaslat a valos aggregalt
-// adatra alapozva. Kredit-koteles, nincs input-hash cache (a bemenet
-// (audit-torzenet) idovel valtozik, mindig friss ajanlast akarunk).
-export async function POST() {
+// adatra alapozva. Kredit-koteles. Az input_hash a jelenlegi audit-
+// pillanatkepen (leggyengebb dimenzio + erős/gyenge temak) alapul — ha az
+// audit-tortenet nem valtozott ket keres kozott, ugyanazt a mentett
+// javaslatot kapja vissza a user kredit nelkul; ha valtozott, a hash is
+// mas lesz, es termeszetesen uj (fizetos) javaslat keszul.
+export async function POST(request: NextRequest) {
   try {
+    const { force_refresh } = await request.json().catch(() => ({ force_refresh: false }))
+
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
@@ -72,17 +88,28 @@ export async function POST() {
       return NextResponse.json({ error: `Legalább ${MIN_AUDITS_REQUIRED} Videódiagnózis szükséges ehhez.` }, { status: 400 })
     }
 
-    const enoughCredits = await hasEnoughCredits(userId, 'channel_audit')
-    if (!enoughCredits) {
-      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.channel_audit} kredit szükséges.` }, { status: 402 })
-    }
-
     const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
     const dimensionAverages = computeDimensionAverages(auditList)
     const weakest = dimensionAverages ? findWeakestDimension(dimensionAverages) : null
     const sorted = [...auditList].sort((a, b) => b.overall_score - a.overall_score)
     const strongTopics = sorted.slice(0, 3).map(a => a.topic || a.video_title)
     const weakTopics = sorted.slice(-3).map(a => a.topic || a.video_title)
+
+    const normalizedInput = normalizePaidResultInput({ weakest: weakest?.label || '', strongTopics, weakTopics, auditCount: auditList.length })
+    const inputHash = buildPaidResultHash({ userId, toolType: 'channel_audit', normalizedInput })
+
+    if (!force_refresh) {
+      const existing = await getPaidResultByHash({ userId, toolType: 'channel_audit', inputHash })
+      if (existing) {
+        const opened = await openPaidResult(existing)
+        return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })
+      }
+    }
+
+    const enoughCredits = await hasEnoughCredits(userId, 'channel_audit')
+    if (!enoughCredits) {
+      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.channel_audit} kredit szükséges.` }, { status: 402 })
+    }
 
     const prompt = buildNextVideosPrompt({
       weakestDimension: weakest?.label || 'Hook erősség',
@@ -108,9 +135,32 @@ export async function POST() {
       return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
     }
 
+    const responsePayload = { suggestions }
+
+    const paidSave = await savePaidResult({
+      userId,
+      toolType: 'channel_audit',
+      inputHash,
+      normalizedInput,
+      originalInput: `channel_audit_${auditList.length}_audits`,
+      resultJson: responsePayload,
+      summaryJson: { suggestion_count: suggestions.length, weakest_dimension: weakest?.label || null },
+      creditCost: CREDIT_COSTS.channel_audit,
+      freshForHours: 24 * 7,
+      provider: aiCall.provider,
+      model: aiCall.model,
+      promptTemplateId: aiCall.promptTemplateId,
+      promptVersion: aiCall.promptVersion,
+      estimatedCost: aiCall.estimatedCost,
+    })
+    if (!paidSave.success) {
+      console.error('[ChannelAudit] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+    }
+
     return NextResponse.json({
-      ...(polishHungarianOutput({ suggestions }) as object),
+      ...(polishHungarianOutput(responsePayload) as object),
       _credits_remaining: charge.new_balance,
+      paid_result_id: paidSave.record?.id || null,
     })
   } catch (error) {
     console.error('Channel audit next-videos error:', error)

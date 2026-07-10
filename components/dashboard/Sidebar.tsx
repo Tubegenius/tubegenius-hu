@@ -41,10 +41,25 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
   const supabase = createClient()
 
   const [credits, setCredits] = useState<{ balance: number; monthly_allowance: number; plan: string } | null>(null)
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => {
     fetch('/api/credits').then(r => r.json()).then(setCredits).catch(() => {})
   }, [pathname])
+
+  // Route váltáskor mobilon automatikusan záródjon a drawer, hogy ne kelljen
+  // külön becsukni minden navigáció után.
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [pathname])
+
+  // Nyitott drawer alatt a háttér ne görgethető mobilon.
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = 'hidden'
+      return () => { document.body.style.overflow = '' }
+    }
+  }, [mobileOpen])
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -56,14 +71,45 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
   const pct = Math.max(0, Math.min(100, (balance / allowance) * 100))
 
   return (
-    <aside className="min-h-screen flex flex-col flex-shrink-0" style={{ width: 260, background: '#080B14', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
-      <div className="px-5 py-5" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+    <>
+      {/* Hamburger — csak mobilon/tableten látszik, a fix sidebar helyett nyitja a drawert */}
+      <button
+        onClick={() => setMobileOpen(true)}
+        aria-label="Menü megnyitása"
+        className="lg:hidden fixed top-4 left-4 z-40 w-10 h-10 rounded-lg flex items-center justify-center"
+        style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.1)', color: '#F8FAFC' }}
+      >
+        <i className="ti ti-menu-2 text-lg" />
+      </button>
+
+      {/* Backdrop — mobilon a nyitott drawer mögött, kattintásra zár */}
+      {mobileOpen && (
+        <div
+          onClick={() => setMobileOpen(false)}
+          className="lg:hidden fixed inset-0 z-40"
+          style={{ background: 'rgba(3,5,10,0.6)' }}
+        />
+      )}
+
+      <aside
+        className={`min-h-screen flex flex-col flex-shrink-0 fixed inset-y-0 left-0 z-50 transition-transform duration-200 ease-out lg:static lg:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        style={{ width: 260, background: '#080B14', borderRight: '1px solid rgba(255,255,255,0.06)' }}
+      >
+      <div className="px-5 py-5 flex items-center justify-between" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <Link href="/dashboard">
           <Logo variant="full" size="md" />
         </Link>
+        <button
+          onClick={() => setMobileOpen(false)}
+          aria-label="Menü bezárása"
+          className="lg:hidden w-8 h-8 rounded-lg flex items-center justify-center text-text-muted hover:text-text-primary"
+          style={{ background: 'rgba(255,255,255,0.04)' }}
+        >
+          <i className="ti ti-x text-base" />
+        </button>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {navItems.map(item => {
           const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
           return (
@@ -104,6 +150,7 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
           <span>Kilépés</span>
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }

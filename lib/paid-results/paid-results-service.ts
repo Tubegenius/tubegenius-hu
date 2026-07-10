@@ -17,6 +17,8 @@ export type PaidToolType =
   | 'title_studio'
   | 'thumbnail_studio'
   | 'seo_optimizer'
+  | 'opportunity_explain'
+  | 'channel_audit'
 
 export type PaidResultCacheStatus = 'fresh' | 'stale_saved' | 'miss'
 

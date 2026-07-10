@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 
@@ -20,6 +21,10 @@ interface SeoResult {
   seo_package: SeoPackage
   seo_score: number
   checklist: Array<{ label: string; done: boolean }>
+  from_paid_result?: boolean
+  cache_status?: 'fresh' | 'stale_saved'
+  last_analyzed_at?: string
+  paid_result_id?: string | null
 }
 
 const SEO_OPTIMIZER_COST = 1
@@ -43,7 +48,12 @@ function CopyField({ label, value }: { label: string; value: string }) {
   )
 }
 
+const SEO_STATE_KEY = 'willviral_seo_optimizer_state'
+
 export default function SeoOptimizerPage() {
+  const searchParams = useSearchParams()
+  const paidResultId = searchParams.get('paidResultId') || ''
+
   const [topic, setTopic] = useState('')
   const [existingTitle, setExistingTitle] = useState('')
   const [keywords, setKeywords] = useState('')
@@ -51,14 +61,62 @@ export default function SeoOptimizerPage() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<SeoResult | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
+  const [pendingForceRefresh, setPendingForceRefresh] = useState(false)
 
-  async function runGenerate() {
+  // Mentett eredmény visszaállítása: explicit paidResultId a linkből, vagy
+  // — ennek hiányában — a legutóbbi keresés a sessionStorage-ból (böngésző
+  // vissza gomb / refresh támogatás). Egyik sem von kreditet.
+  useEffect(() => {
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
+    try {
+      const saved = sessionStorage.getItem(SEO_STATE_KEY)
+      if (saved) {
+        const state = JSON.parse(saved)
+        if (state.topic) setTopic(state.topic)
+        if (state.existingTitle) setExistingTitle(state.existingTitle)
+        if (state.keywords) setKeywords(state.keywords)
+        if (state.result) setResult(state.result)
+      }
+    } catch {}
+  }, [])
+
+  async function loadPaidResult(id: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/seo-optimizer?paidResultId=${id}`)
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setError(data.error || 'A mentett SEO-csomag nem található.')
+        return
+      }
+      setTopic(data.topic || '')
+      setResult(data)
+      persistState(data.topic || '', existingTitle, keywords, data)
+    } catch {
+      setError('Hiba a mentett SEO-csomag betöltésekor.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function persistState(t: string, et: string, kw: string, r: SeoResult) {
+    try {
+      sessionStorage.setItem(SEO_STATE_KEY, JSON.stringify({ topic: t, existingTitle: et, keywords: kw, result: r }))
+    } catch {}
+  }
+
+  async function runGenerate(forceRefresh = false) {
     if (!topic.trim()) return
     setError(null)
     try {
       const creditsRes = await fetch('/api/credits')
       const credits = await creditsRes.json()
       const balance = Number(credits.balance ?? 0)
+      setPendingForceRefresh(forceRefresh)
       setCreditCheck({
         feature: 'SEO / Upload Optimizer',
         cost: SEO_OPTIMIZER_COST,
@@ -68,7 +126,9 @@ export default function SeoOptimizerPage() {
         requiresConfirmation: true,
         canRun: balance >= SEO_OPTIMIZER_COST,
         reason: balance >= SEO_OPTIMIZER_COST ? undefined : 'insufficient_credits',
-        message: balance >= SEO_OPTIMIZER_COST ? 'Teljes feltöltési csomag: cím, leírás, tagek, hashtagek, fejezetek, pinned comment, CTA.' : 'Ehhez nincs elég kredited.',
+        message: balance >= SEO_OPTIMIZER_COST
+          ? (forceRefresh ? 'Új, friss SEO-csomagot generálunk — ez új kreditet használ.' : 'Teljes feltöltési csomag: cím, leírás, tagek, hashtagek, fejezetek, pinned comment, CTA. Ha korábban már lekérted ugyanezt, nem vonunk le új kreditet.')
+          : 'Ehhez nincs elég kredited.',
       })
     } catch {
       setError('Kapcsolati hiba.')
@@ -82,7 +142,7 @@ export default function SeoOptimizerPage() {
       const res = await fetch('/api/seo-optimizer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, existing_title: existingTitle || undefined, keywords, platform: 'youtube', region: 'HU' }),
+        body: JSON.stringify({ topic, existing_title: existingTitle || undefined, keywords, platform: 'youtube', region: 'HU', force_refresh: pendingForceRefresh }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -90,17 +150,19 @@ export default function SeoOptimizerPage() {
         return
       }
       setResult(data)
+      persistState(topic, existingTitle, keywords, data)
     } catch {
       setError('Kapcsolati hiba.')
     } finally {
       setLoading(false)
+      setPendingForceRefresh(false)
     }
   }
 
   return (
     <div className="max-w-3xl mx-auto">
       {creditCheck && (
-        <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => setCreditCheck(null)} loading={loading} />
+        <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => { setCreditCheck(null); setPendingForceRefresh(false) }} loading={loading} />
       )}
 
       <div className="mb-6">
@@ -130,7 +192,7 @@ export default function SeoOptimizerPage() {
           className="w-full px-4 py-2.5 rounded-lg text-sm"
           style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
         />
-        <button onClick={runGenerate} disabled={loading || !topic.trim()} className="btn-primary w-full">
+        <button onClick={() => runGenerate()} disabled={loading || !topic.trim()} className="btn-primary w-full">
           {loading ? 'Generálás...' : 'SEO csomag generálása'}
         </button>
       </div>
@@ -143,6 +205,26 @@ export default function SeoOptimizerPage() {
 
       {result && (
         <div className="space-y-4">
+          {result.from_paid_result && (
+            <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap"
+              style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+              <div>
+                <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
+                  {result.cache_status === 'fresh' ? 'Friss mentett eredmény betöltve' : 'Korábbi mentett eredmény betöltve'}
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
+                  Nem vontunk le új kreditet.
+                  {result.last_analyzed_at && ` Utolsó generálás: ${new Date(result.last_analyzed_at).toLocaleDateString('hu-HU')}.`}
+                </p>
+              </div>
+              <button onClick={() => runGenerate(true)} disabled={loading}
+                className="text-xs px-3 py-2 rounded-lg font-semibold flex-shrink-0"
+                style={{ background: 'rgba(255,255,255,0.06)', color: '#F8FAFC' }}
+                title="A frissítés új generálást indít, ezért kreditet használ.">
+                Eredmény frissítése
+              </button>
+            </div>
+          )}
           <div className="card">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs" style={{ color: '#94A3B8' }}>SEO SCORE</p>

@@ -79,15 +79,23 @@ function IdeaCard({ idea, onUpdate }: { idea: VideoIdea; onUpdate: () => void })
 export default function CalendarPage() {
   const [ideas, setIdeas] = useState<VideoIdea[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
+    setError(null)
     try {
       const res = await fetch('/api/video-ideas?limit=100')
       const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'A naptár betöltése sikertelen. Próbáld újra később.')
+        return
+      }
       setIdeas(data.ideas || [])
+    } catch {
+      setError('Kapcsolati hiba. Próbáld újra később.')
     } finally {
       setLoading(false)
     }
@@ -105,13 +113,20 @@ export default function CalendarPage() {
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Gyártásra kész ötletek ütemezése és publikálás nyomon követése.</p>
       </div>
 
+      {error && (
+        <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <p className="text-sm mb-2" style={{ color: '#EF4444' }}>{error}</p>
+          <button onClick={load} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>Újrapróbálás</button>
+        </div>
+      )}
+
       {loading && (
         <div className="card text-center py-12">
           <div className="inline-block w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3B82F6', borderTopColor: 'transparent' }} />
         </div>
       )}
 
-      {!loading && (
+      {!loading && !error && (
         <div className="space-y-6">
           <div>
             <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>📅 ÜTEMEZVE ({scheduled.length})</p>
