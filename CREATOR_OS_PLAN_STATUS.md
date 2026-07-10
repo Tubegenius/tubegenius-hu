@@ -53,6 +53,16 @@ A Hotfix Sprint lezárása után egy 30 témás élő teszt (1 teljes core-flow 
 
 ---
 
+## 2026-07-10 — PIACI BIZONYÍTÉKOK: IRRELEVÁNS VIDEÓ "AJÁNLOTT INSPIRÁCIÓ"-KÉNT (user jelentette)
+
+A user élő keresésnél ("budapest mesterséges intelligencia kórházak", HU régió) egy Michael Jackson-videót és egy magyar politikai hírt (CNN) kapott "Ajánlott inspiráció" címkével, 92 ill. 72 ponttal — nulla topikai kapcsolat a kereséssel.
+
+**Gyökérok**: `app/api/similar-videos/route.ts` a relevancia-pontszámot mesterségesen 60-ra emelte (`Math.max(relevance.score, 60)`), ha a Haiku-alapú keresés-bővítés találta a videót és a valós pontszám ≥40 volt. A `decideSimilarVideo()` (`lib/scoring/willviral-decision-engine.ts:82`) döntési motor pontosan a `< 60` relevancián dob — a mesterséges felkerekítés éppen ezt a kaput kerülte meg, így egy valójában 40-59 pontos (gyenge/irreleváns) találat átment a kapun, és onnantól pusztán frissesség/engagement alapján kaphatott "Ajánlott inspiráció" címkét.
+
+**Javítva**: a mesterséges `Math.max(...,60)` eltávolítva, a relevancia mindig a ténylegesen számolt érték. Élőben megerősítve `force_refresh`-sel: a Michael Jackson-videó most helyesen `relevance: 47`, "Nem releváns", 0 pont; a Péter Magyar-videó `relevance: 44`, "Nem releváns", 0 pont. A ténylegesen releváns találatok (AI/orvostudomány podcastok, kórházi videók) helyes, becsületes relevanciával (61-69) kerültek előtérbe. `tsc --noEmit` ✅.
+
+---
+
 ## 2026-07-10 — SESSION-PERZISZTENCIA HIBA JAVÍTVA (user jelentette)
 
 A user jelezte: ha a Browser pane-t elhagyta majd visszaváltott, egy korábban generált eredmény eltűnt az oldalról. Átvizsgálva mind a fizetős/generáló oldalt (`grep sessionStorage app/dashboard/**`): **4 oldalnak egyáltalán nem volt session-perzisztenciája** — a generált eredmény kizárólag React `useState`-ben élt, egy remount (app-váltás, hard reload) törölte. A szerveren a `paid_results` cache megvolt, de a frontend nem töltötte vissza automatikusan, így a usernek úgy tűnt, mintha véglegesen elveszett volna.

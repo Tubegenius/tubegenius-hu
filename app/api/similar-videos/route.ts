@@ -615,8 +615,15 @@ export async function POST(request: NextRequest) {
     const outlierMap = outlierScores(relevantBase.map(item => item.video))
 
     const videos: ViralSimilarVideo[] = relevantBase.map(({ video, relevance }) => {
-      // Ha a Haiku validálta és a query-hez jól illeszkedik, a relevancia legalább 60
-      const search_relevance = haikuExpansion && relevance.score >= 40 ? Math.max(relevance.score, 60) : relevance.score
+      // A relevancia mindig a ténylegesen számolt érték — korábban itt egy
+      // mesterséges Math.max(...,60) felkerekítés volt "ha a Haiku validálta,
+      // a relevancia legalább 60" címen, ami pontosan a decideSimilarVideo()
+      // relevancia-kapuját (< 60 = elutasítva) kerülte meg: egy 40-59 közötti,
+      // valójában irreleváns találat így "épp átment" a kapun, és onnantól
+      // pusztán a frissesség/engagement alapján kaphatott "Ajánlott inspiráció"
+      // címkét — élesben ez engedte át pl. egy Michael Jackson-videót egy
+      // "budapest mesterséges intelligencia kórházak" keresésnél.
+      const search_relevance = relevance.score
       const freshness_score = freshnessScore(video.publishedAt)
       const velocity_score = velocityScore(video)
       const engagement_score = engagementScore(video)
