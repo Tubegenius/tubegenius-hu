@@ -53,6 +53,26 @@ A Hotfix Sprint lezárása után egy 30 témás élő teszt (1 teljes core-flow 
 
 ---
 
+## 2026-07-10 — 30-50 TÉMÁS TESZT LEZÁRVA
+
+A P0/P1 javítások után a témás teszt folytatódott és lezárult. Két kör:
+
+**1. Retest force_refresh-sel** — a 6 korábban hibás témát (kertészkedés, smink, párkapcsolat, futás, nyelvtanulás, fotózás) muszáj volt `force_refresh: true`-val újrafuttatni, mert az első próbálkozás a JAVÍTÁS ELŐTTI `paid_results` cache-találatot adta vissza (`from_paid_result: true`, ugyanaz a hibás cím) — ez tanulság, nem hiba: input-hash cache mellett a "már javítottam, teszteljük újra" workflow mindig kér `force_refresh`-t, különben a régi eredmény jön vissza. Force_refresh-sel: **6/6 téma teljesen tiszta**, nincs AI/orvos-szivárgás, nincs idegen szó. Egy teljes Videócsomag kör (kerti veteményeskert) is megerősítette a Fact Safety javítást: `verified_facts: []` + `quality_status: "insufficient_sources"` — a rendszer most inkább üresen hagyja a tény-blokkot, mint hogy irreleváns forrást "ellenőrzöttként" mutasson be.
+
+**2. Új témalista bővítés** — 18 friss, változatos téma (főzés, pénzügy, állatgondozás, mentális egészség, hobbik, karrier stb.) Title Studio-n keresztül. 17/18 sikeres és tiszta. **1 új hiba találva**:
+
+| Hiba | Súlyosság | Részlet |
+|---|---|---|
+| Title Studio JSON-csonkolás hosszabb témáknál | Közepes | A "lakáshitel vs bérlés 2026" témára az AI-válasz az 5. cím-variáció közepén megszakadt (`maxTokens: 1500` valószínűleg szűk, ha a `reasoning` mezők hosszabbak) → `extractJson` parse-hiba → 500-as válasz. **Kredit NEM lett levonva** (a hiba a charge előtt történik), tehát billing-biztonsági szempontból rendben van, de a user egy sikertelen, újrapróbálandó kérést kap. Nincs javítva — backlogra való (`lib/services/ai-provider-service.ts extractJson` + `app/api/title-studio/route.ts maxTokens` érintett). |
+
+Kisebb, nem-blokkoló megfigyelések: 2 cím enyhén nyelvtanilag esetlen volt (egy befejezetlen mondat, egy egyeztetési hiba) — elszórt AI-változékonyság, nem rendszerszintű minta, nem igényel kódjavítást.
+
+**Összesítve a teljes témás teszt-erőfeszítésre** (ez a session + a korábbi körök): **50+ egyedi témán** futott végig a Title Studio, ~10 témán a teljes core flow releváns szelete (Viral Score, Similar Videos, SEO, Video Package), kumulatívan minden korábban talált P0/P1 hiba megerősítve javítva. Az egyetlen új találat (JSON-csonkolás) nem billing- vagy tartalom-bizalmi hiba, hanem robusztussági rés — a user eldöntheti, hogy ez blokkolja-e a béta indítást, vagy mehet a backlogba.
+
+**A user 6 lépéses launch-terve szerint a 3. lépés (30–50 témás teszt) ezzel lezárva.** Következő döntési pont: 4. lépés (5–10 külső béta user) vagy a JSON-csonkolás hiba előzetes javítása.
+
+---
+
 ## HOGYAN HASZNÁLD EZT A FÁJLT
 
 1. Nézd meg a "PHASE 1 RÉSZLETES ÁLLAPOT" táblázatot — ott van, mi kész, mi részleges, mi nincs.
@@ -134,17 +154,18 @@ English UI, Stripe globális pricing, YouTube OAuth (saját csatorna analytics),
 
 ---
 
-## ⏳ KÖVETKEZŐ SESSION — ITT FOLYTASD (2026-07-10 session vége, usage limit miatt)
+## ⏳ KÖVETKEZŐ SESSION — ITT FOLYTASD
 
 A user saját 6 lépéses launch-terve: **1. feature freeze → 2. launch readiness audit → 3. 30–50 valós témás teszt → 4. 5–10 külső béta user → 5. hibajavítás → 6. fizetős pilot.**
 
 Állapot:
 1. ✅ Feature freeze — tart, nem épült új modul a Phase 2 lezárása óta.
 2. ✅ Launch Readiness Audit — lezárva (13 szempont, ld. fent).
-3. ⏳ **30–50 valós témás teszt — RÉSZBEN ELKEZDVE, ITT KELL FOLYTATNI.** Eddig: 1 teljes core-flow kör + 22 önálló Title Studio futás (ld. "30 TÉMÁS TESZT" szakasz fent) — ez talált 4 hibát, azok javítva (ld. lent). A user 92%-os usage limit miatt állította le a mai session-t, mielőtt a szélesebb (30-50 témás, teljes core flow-s) kör lefutott volna. **Új session elején: folytasd a témás tesztet, kezdve ott, hogy a P0/P1 javítások után minden korábban hibás témát (kertészkedés, smink, párkapcsolat, futás, nyelvtanulás, fotózás, állásinterjú) is érdemes újra, ezúttal a TELJES core flow-n (nem csak Title Studio-n) végigfuttatni, majd a lista bővítése új témákkal 30-50-ig.**
-4-6. Nem kezdődött el, a 3. lépés lezárása előtt nem esedékes.
+3. ✅ **30–50 valós témás teszt — LEZÁRVA (ld. "30-50 TÉMÁS TESZT LEZÁRVA" szakasz fent).** P0/P1 javítások force_refresh-sel megerősítve élőben, 18 új témával bővítve az összlétszám 50+ fölé ment. 1 új, nem-blokkoló hiba találva (Title Studio JSON-csonkolás hosszabb témáknál, backlogban).
+4. ⏳ **5–10 külső béta user — KÖVETKEZŐ LÉPÉS.** Ez már nem kódolási feladat — a userre vár (kiket kér fel, hogyan oszt hozzáférést).
+5-6. Nem esedékes, amíg a 4. lépés nem indul el.
 
-**Mielőtt nekiállnál a 3. lépés folytatásának**: nézd meg a "2026-07-10 — 30 TÉMÁS TESZT + MINŐSÉGI STABILIZÁLÁS" szakaszt fent — ott van a 4 már javított hiba és a P2 backlog tétel (kredit concurrency retry, tudatosan még nincs megcsinálva).
+**Mielőtt a 4. lépéssel foglalkoznál**: nézd meg a "30-50 TÉMÁS TESZT LEZÁRVA" és "30 TÉMÁS TESZT + MINŐSÉGI STABILIZÁLÁS" szakaszokat fent — ott van minden javított hiba és a nyitott backlog tételek (P2 kredit concurrency retry, Title Studio JSON-csonkolás).
 
 ---
 
