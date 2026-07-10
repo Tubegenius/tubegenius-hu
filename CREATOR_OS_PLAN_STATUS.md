@@ -134,13 +134,27 @@ English UI, Stripe globális pricing, YouTube OAuth (saját csatorna analytics),
 
 ---
 
-## KÖVETKEZŐ LÉPÉS JAVASLAT
+## ⏳ KÖVETKEZŐ SESSION — ITT FOLYTASD (2026-07-10 session vége, usage limit miatt)
 
-A user jóváhagyott sorrendje: **"haladjunk sorban, Phase 1, Phase 2, Phase 3"**.
+A user saját 6 lépéses launch-terve: **1. feature freeze → 2. launch readiness audit → 3. 30–50 valós témás teszt → 4. 5–10 külső béta user → 5. hibajavítás → 6. fizetős pilot.**
+
+Állapot:
+1. ✅ Feature freeze — tart, nem épült új modul a Phase 2 lezárása óta.
+2. ✅ Launch Readiness Audit — lezárva (13 szempont, ld. fent).
+3. ⏳ **30–50 valós témás teszt — RÉSZBEN ELKEZDVE, ITT KELL FOLYTATNI.** Eddig: 1 teljes core-flow kör + 22 önálló Title Studio futás (ld. "30 TÉMÁS TESZT" szakasz fent) — ez talált 4 hibát, azok javítva (ld. lent). A user 92%-os usage limit miatt állította le a mai session-t, mielőtt a szélesebb (30-50 témás, teljes core flow-s) kör lefutott volna. **Új session elején: folytasd a témás tesztet, kezdve ott, hogy a P0/P1 javítások után minden korábban hibás témát (kertészkedés, smink, párkapcsolat, futás, nyelvtanulás, fotózás, állásinterjú) is érdemes újra, ezúttal a TELJES core flow-n (nem csak Title Studio-n) végigfuttatni, majd a lista bővítése új témákkal 30-50-ig.**
+4-6. Nem kezdődött el, a 3. lépés lezárása előtt nem esedékes.
+
+**Mielőtt nekiállnál a 3. lépés folytatásának**: nézd meg a "2026-07-10 — 30 TÉMÁS TESZT + MINŐSÉGI STABILIZÁLÁS" szakaszt fent — ott van a 4 már javított hiba és a P2 backlog tétel (kredit concurrency retry, tudatosan még nincs megcsinálva).
+
+---
+
+## PHASE 3 — MÉG NEM ESEDÉKES
+
+A user jóváhagyott sorrendje szerint (**"haladjunk sorban, Phase 1, Phase 2, Phase 3"**) Phase 3 csak a fenti 6 lépéses launch-terv (audit → téma-teszt → béta → hibajavítás → pilot) lezárása UTÁN esedékes — ne kezdj bele addig, amíg a user explicit nem kéri.
 
 - ✅ **Phase 1** — lezárva (10/12 kész, #3 nav-szerkezet és #11 multi-currency külső függőségre vár, ld. fent).
 - ✅ **Phase 2** — mind a 10 modul kész, élőben tesztelve (2026-07-09).
-- ⏳ **Phase 3 következik** — 10 tétel (English UI, Stripe globális pricing, YouTube OAuth, Analytics dashboard, teljes Channel Audit, AI Coach, Team/Agency workspace, PDF export, böngésző-extension, multi-platform intelligence). Egyik sem indult el, ez a terv szerint is várható volt ezen a ponton.
+- ⏳ **Phase 3** — 10 tétel (English UI, Stripe globális pricing, YouTube OAuth, Analytics dashboard, teljes Channel Audit, AI Coach, Team/Agency workspace, PDF export, böngésző-extension, multi-platform intelligence). Egyik sem indult el — ez most nem esedékes, a launch-terv 3-6. lépése van soron.
 
 **Mielőtt Phase 3-at elkezdenéd**: érdemes megkérdezni a usert, melyik tétellel kezdjünk (a YouTube OAuth tűnik a legértékesebbnek, mert az nyitná meg a valós Channel Audit-ot és Analytics dashboardot is — de ez Google OAuth app-review-t is igényelhet, ami időigényes, külső függőség, hasonlóan a YouTube API kvótakéréshez).
 
