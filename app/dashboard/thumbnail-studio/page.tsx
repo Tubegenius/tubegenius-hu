@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 
@@ -30,6 +30,17 @@ export default function ThumbnailStudioPage() {
   const [concepts, setConcepts] = useState<ThumbnailConcept[] | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedConcepts, setSavedConcepts] = useState<Set<number>>(new Set())
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('willviral_thumbnail_studio_state')
+    if (saved) {
+      try {
+        const state = JSON.parse(saved)
+        if (state.topic) setTopic(state.topic)
+        if (state.concepts) setConcepts(state.concepts)
+      } catch {}
+    }
+  }, [])
 
   async function runGenerate() {
     if (!topic.trim()) return
@@ -69,6 +80,7 @@ export default function ThumbnailStudioPage() {
         return
       }
       setConcepts(data.concepts)
+      sessionStorage.setItem('willviral_thumbnail_studio_state', JSON.stringify({ topic, concepts: data.concepts }))
     } catch {
       setError('Kapcsolati hiba.')
     } finally {

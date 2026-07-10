@@ -53,6 +53,14 @@ A Hotfix Sprint lezárása után egy 30 témás élő teszt (1 teljes core-flow 
 
 ---
 
+## 2026-07-10 — SESSION-PERZISZTENCIA HIBA JAVÍTVA (user jelentette)
+
+A user jelezte: ha a Browser pane-t elhagyta majd visszaváltott, egy korábban generált eredmény eltűnt az oldalról. Átvizsgálva mind a fizetős/generáló oldalt (`grep sessionStorage app/dashboard/**`): **4 oldalnak egyáltalán nem volt session-perzisztenciája** — a generált eredmény kizárólag React `useState`-ben élt, egy remount (app-váltás, hard reload) törölte. A szerveren a `paid_results` cache megvolt, de a frontend nem töltötte vissza automatikusan, így a usernek úgy tűnt, mintha véglegesen elveszett volna.
+
+**Javítva** (ugyanaz a minta, mint a Virális esély/Gyártási csomag oldalakon már bevált): `useEffect`-es visszaállítás mountkor + `sessionStorage.setItem` sikeres generálás után — `app/dashboard/title-studio/page.tsx`, `app/dashboard/thumbnail-studio/page.tsx`, `app/dashboard/keyword-research/page.tsx`, `app/dashboard/content-gap/page.tsx`. Élőben tesztelve: Title Studio, teljes oldal-reload után a téma és a generált cím visszatöltődik. `tsc --noEmit` ✅.
+
+---
+
 ## 2026-07-10 — 30-50 TÉMÁS TESZT LEZÁRVA
 
 A P0/P1 javítások után a témás teszt folytatódott és lezárult. Két kör:

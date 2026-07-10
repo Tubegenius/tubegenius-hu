@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 
@@ -45,6 +45,21 @@ export default function TitleStudioPage() {
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedTitles, setSavedTitles] = useState<Set<string>>(new Set())
 
+  // Visszaállítás sessionStorage-ból — enélkül egy app-váltás vagy oldal-
+  // remount törölte a React state-et, és a friss generálás eredménye
+  // eltűnt a felületről (a szerveren megvolt, de a UI nem mutatta vissza).
+  useEffect(() => {
+    const saved = sessionStorage.getItem('willviral_title_studio_state')
+    if (saved) {
+      try {
+        const state = JSON.parse(saved)
+        if (state.topic) setTopic(state.topic)
+        if (state.existingTitle) setExistingTitle(state.existingTitle)
+        if (state.variations) setVariations(state.variations)
+      } catch {}
+    }
+  }, [])
+
   async function runGenerate() {
     if (!topic.trim()) return
     setError(null)
@@ -83,6 +98,9 @@ export default function TitleStudioPage() {
         return
       }
       setVariations(data.variations)
+      sessionStorage.setItem('willviral_title_studio_state', JSON.stringify({
+        topic, existingTitle, variations: data.variations,
+      }))
     } catch {
       setError('Kapcsolati hiba.')
     } finally {

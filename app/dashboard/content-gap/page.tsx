@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
@@ -21,6 +21,18 @@ export default function ContentGapPage() {
   const [existingCount, setExistingCount] = useState<number>(0)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedTopics, setSavedTopics] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('willviral_content_gap_state')
+    if (saved) {
+      try {
+        const state = JSON.parse(saved)
+        if (state.niche) setNiche(state.niche)
+        if (state.gaps) setGaps(state.gaps)
+        if (state.existingCount) setExistingCount(state.existingCount)
+      } catch {}
+    }
+  }, [])
 
   async function runSearch() {
     if (!niche.trim()) return
@@ -61,6 +73,7 @@ export default function ContentGapPage() {
       }
       setGaps(data.gaps)
       setExistingCount(data.existing_video_count)
+      sessionStorage.setItem('willviral_content_gap_state', JSON.stringify({ niche, gaps: data.gaps, existingCount: data.existing_video_count }))
     } catch {
       setError('Kapcsolati hiba.')
     } finally {

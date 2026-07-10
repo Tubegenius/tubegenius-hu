@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
@@ -37,6 +37,17 @@ export default function KeywordResearchPage() {
   const [result, setResult] = useState<KeywordResearchResult | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedKeywords, setSavedKeywords] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    const saved = sessionStorage.getItem('willviral_keyword_research_state')
+    if (saved) {
+      try {
+        const state = JSON.parse(saved)
+        if (state.seed) setSeed(state.seed)
+        if (state.result) setResult(state.result)
+      } catch {}
+    }
+  }, [])
 
   async function runSearch(confirmed = false) {
     if (!seed.trim()) return
@@ -79,6 +90,7 @@ export default function KeywordResearchPage() {
         return
       }
       setResult(data)
+      sessionStorage.setItem('willviral_keyword_research_state', JSON.stringify({ seed, result: data }))
     } catch {
       setError('Kapcsolati hiba.')
     } finally {
