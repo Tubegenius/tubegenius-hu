@@ -18,6 +18,7 @@ import {
   ManualPlatformData,
   BackendScores,
 } from '@/lib/video-audit-scoring'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 async function fetchYouTubeData(videoId: string): Promise<YouTubeApiData | null> {
   const { getActiveApiKey } = await import('@/lib/youtube-service')
@@ -196,6 +197,12 @@ export async function POST(req: NextRequest) {
       normalizedInput: paidNormalizedInput,
       platform,
     })
+    const lock = await acquireRequestLock({ userId: user.id, toolType: 'video_audit', inputHash: paidInputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const paid = await getPaidResultByHash({ userId: user.id, toolType: 'video_audit', inputHash: paidInputHash })
     if (paid) {
       const opened = await openPaidResult(paid)
@@ -363,6 +370,9 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (err) {
     console.error('Video audit error:', err)
     return NextResponse.json({ error: 'Szerverhiba' }, { status: 500 })

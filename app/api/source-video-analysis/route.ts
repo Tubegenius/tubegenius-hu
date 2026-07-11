@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
 
   if (error) {
     console.error('Source video analysis save error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: 'A mentés sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
   return NextResponse.json({ id: data.id })

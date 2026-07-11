@@ -14,7 +14,10 @@ export async function GET() {
     .order('created_at', { ascending: false })
     .limit(50)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('Video audits GET error:', error)
+    return NextResponse.json({ error: 'Az auditok betöltése sikertelen. Próbáld újra.' }, { status: 500 })
+  }
 
   // decision_label számítása a decision alapján
   const DECISION_LABELS: Record<string, string> = {

@@ -8,11 +8,12 @@ import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle,
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { shouldUseProfileNiche } from '@/lib/niche-relevance'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export async function POST(request: NextRequest) {
   try {
     const { topic, existing_title, platform, region, force_refresh } = await request.json()
-    if (!topic || typeof topic !== 'string') {
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
 
@@ -29,78 +30,90 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ topic, existing_title, platform: platformValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'title_studio', normalizedInput, platform: platformValue })
 
-    if (!force_refresh) {
-      const paid = await getPaidResultByHash({ userId, toolType: 'title_studio', inputHash })
-      if (paid) {
-        const opened = await openPaidResult(paid)
-        return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+    // Beta Hardening Test (2026-07-11): ket egyideju azonos keres (pl. ket
+    // bongeszofulben) nelkule mindketto vegigfutna es kulon-kulon kreditet
+    // vonna le ugyanazert az erdemi eredmenyert — lasd CREATOR_OS_PLAN_STATUS.md.
+    const lock = await acquireRequestLock({ userId, toolType: 'title_studio', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
+      if (!force_refresh) {
+        const paid = await getPaidResultByHash({ userId, toolType: 'title_studio', inputHash })
+        if (paid) {
+          const opened = await openPaidResult(paid)
+          return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+        }
       }
-    }
 
-    const enoughCredits = await hasEnoughCredits(userId, 'title_studio')
-    if (!enoughCredits) {
-      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.title_studio} kredit szükséges.` }, { status: 402 })
-    }
-
-    const prompt = buildTitleStudioPrompt({ topic, niche, useNiche, platform: platformValue, existingTitle: existing_title || undefined })
-    const aiCall = await callAIProvider({
-      model: MODELS.fast,
-      maxTokens: 1500,
-      messages: [{ role: 'user', content: prompt }],
-      promptTemplateId: 'title_studio_variations',
-      promptVersion: 'v1',
-    })
-
-    const rawVariations = extractJson<TitleVariation[]>(aiCall.text)
-    const variations = rawVariations.map(v => {
-      const polishedTitle = polishHungarianText(v.title || '')
-      const { ok } = validateHungarianTitle(polishedTitle)
-      const finalTitle = ok ? polishedTitle : sanitizeHungarianTitle(polishedTitle)
-      if (!ok) console.warn('[TitleStudio] Idegen szó cserélve a címben:', polishedTitle, '→', finalTitle)
-      return {
-        ...v,
-        title: finalTitle,
-        reasoning: polishHungarianText(v.reasoning || ''),
-        heuristics: computeTitleHeuristics(finalTitle),
+      const enoughCredits = await hasEnoughCredits(userId, 'title_studio')
+      if (!enoughCredits) {
+        return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.title_studio} kredit szükséges.` }, { status: 402 })
       }
-    })
 
-    await logUsage(userId, 'title_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+      const prompt = buildTitleStudioPrompt({ topic, niche, useNiche, platform: platformValue, existingTitle: existing_title || undefined })
+      const aiCall = await callAIProvider({
+        model: MODELS.fast,
+        maxTokens: 1500,
+        messages: [{ role: 'user', content: prompt }],
+        promptTemplateId: 'title_studio_variations',
+        promptVersion: 'v1',
+      })
 
-    const charge = await chargeFeature(userId, 'title_studio', { topic })
-    if (!charge.success) {
-      return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+      const rawVariations = extractJson<TitleVariation[]>(aiCall.text)
+      const variations = rawVariations.map(v => {
+        const polishedTitle = polishHungarianText(v.title || '')
+        const { ok } = validateHungarianTitle(polishedTitle)
+        const finalTitle = ok ? polishedTitle : sanitizeHungarianTitle(polishedTitle)
+        if (!ok) console.warn('[TitleStudio] Idegen szó cserélve a címben:', polishedTitle, '→', finalTitle)
+        return {
+          ...v,
+          title: finalTitle,
+          reasoning: polishHungarianText(v.reasoning || ''),
+          heuristics: computeTitleHeuristics(finalTitle),
+        }
+      })
+
+      await logUsage(userId, 'title_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+
+      const charge = await chargeFeature(userId, 'title_studio', { topic })
+      if (!charge.success) {
+        return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+      }
+
+      const responsePayload = {
+        topic,
+        variations,
+        _credits_remaining: charge.new_balance,
+      }
+
+      const paidSave = await savePaidResult({
+        userId,
+        toolType: 'title_studio',
+        inputHash,
+        normalizedInput,
+        originalInput: topic,
+        platform: platformValue,
+        region: regionValue,
+        resultJson: responsePayload,
+        summaryJson: { topic, variation_count: variations.length },
+        creditCost: CREDIT_COSTS.title_studio,
+        freshForHours: 24,
+        provider: aiCall.provider,
+        model: aiCall.model,
+        promptTemplateId: aiCall.promptTemplateId,
+        promptVersion: aiCall.promptVersion,
+        estimatedCost: aiCall.estimatedCost,
+      })
+      if (!paidSave.success) {
+        console.error('[TitleStudio] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      }
+
+      return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
     }
-
-    const responsePayload = {
-      topic,
-      variations,
-      _credits_remaining: charge.new_balance,
-    }
-
-    const paidSave = await savePaidResult({
-      userId,
-      toolType: 'title_studio',
-      inputHash,
-      normalizedInput,
-      originalInput: topic,
-      platform: platformValue,
-      region: regionValue,
-      resultJson: responsePayload,
-      summaryJson: { topic, variation_count: variations.length },
-      creditCost: CREDIT_COSTS.title_studio,
-      freshForHours: 24,
-      provider: aiCall.provider,
-      model: aiCall.model,
-      promptTemplateId: aiCall.promptTemplateId,
-      promptVersion: aiCall.promptVersion,
-      estimatedCost: aiCall.estimatedCost,
-    })
-    if (!paidSave.success) {
-      console.error('[TitleStudio] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-    }
-
-    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
   } catch (error) {
     console.error('Title studio error:', error)
     return NextResponse.json({ error: 'Cím-generálás sikertelen. Próbáld újra.' }, { status: 500 })

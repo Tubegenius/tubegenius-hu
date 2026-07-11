@@ -41,7 +41,10 @@ export async function GET(request: NextRequest) {
   }
 
   const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('Video ideas GET error:', error)
+    return NextResponse.json({ error: 'A Video Idea-k betöltése sikertelen. Próbáld újra.' }, { status: 500 })
+  }
 
   return NextResponse.json({ ideas: data || [] })
 }
@@ -113,6 +116,9 @@ export async function PATCH(request: NextRequest) {
     .select('*')
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('Video ideas PATCH error:', error)
+    return NextResponse.json({ error: 'A Video Idea frissítése sikertelen. Próbáld újra.' }, { status: 500 })
+  }
   return NextResponse.json({ idea: data })
 }

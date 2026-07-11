@@ -7,6 +7,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { computeSeoHeuristics, buildSeoOptimizerPrompt, type SeoPackage } from '@/lib/seo-optimizer'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { shouldUseProfileNiche } from '@/lib/niche-relevance'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
   let score = 0
@@ -20,7 +21,7 @@ function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
 export async function POST(request: NextRequest) {
   try {
     const { topic, existing_title, keywords, platform, region, force_refresh } = await request.json()
-    if (!topic || typeof topic !== 'string') {
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
 
@@ -38,88 +39,97 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ topic, existing_title, keywords: keywordList, platform: platformValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'seo_optimizer', normalizedInput, platform: platformValue })
 
-    // Csak explicit force_refresh (a user tudatosan új generálást kér) hagyja ki
-    // a mentett eredményt — enélkül ugyanaz a téma örökre ugyanazt a cache-elt
-    // csomagot adná vissza, kredit-levonás lehetősége nélkül.
-    if (!force_refresh) {
-      const paid = await getPaidResultByHash({ userId, toolType: 'seo_optimizer', inputHash })
-      if (paid) {
-        const opened = await openPaidResult(paid)
-        return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })
+    const lock = await acquireRequestLock({ userId, toolType: 'seo_optimizer', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
+      // Csak explicit force_refresh (a user tudatosan új generálást kér) hagyja ki
+      // a mentett eredményt — enélkül ugyanaz a téma örökre ugyanazt a cache-elt
+      // csomagot adná vissza, kredit-levonás lehetősége nélkül.
+      if (!force_refresh) {
+        const paid = await getPaidResultByHash({ userId, toolType: 'seo_optimizer', inputHash })
+        if (paid) {
+          const opened = await openPaidResult(paid)
+          return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })
+        }
       }
+
+      const enoughCredits = await hasEnoughCredits(userId, 'seo_optimizer')
+      if (!enoughCredits) {
+        return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.seo_optimizer} kredit szükséges.` }, { status: 402 })
+      }
+
+      const prompt = buildSeoOptimizerPrompt({ topic, existingTitle: existing_title || undefined, niche, useNiche, platform: platformValue })
+      const aiCall = await callAIProvider({
+        model: MODELS.fast,
+        maxTokens: 2000,
+        messages: [{ role: 'user', content: prompt }],
+        promptTemplateId: 'seo_optimizer_package',
+        promptVersion: 'v1',
+      })
+
+      const seoPackage = extractJson<SeoPackage>(aiCall.text)
+      const heuristics = computeSeoHeuristics({
+        title: seoPackage.seo_title || existing_title || topic,
+        description: seoPackage.description || '',
+        keywords: keywordList.length > 0 ? keywordList : [topic],
+        tags: seoPackage.tags || [],
+      })
+      const seoScore = computeSeoScore(heuristics)
+
+      await logUsage(userId, 'seo_optimizer', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+
+      const charge = await chargeFeature(userId, 'seo_optimizer', { topic })
+      if (!charge.success) {
+        return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+      }
+
+      const checklist = [
+        { label: 'Cím hossza megfelelő (15-70 karakter)', done: heuristics.title_length_flag === 'ok' },
+        { label: 'Leírás első sora tartalmaz kulcsszót', done: heuristics.description_first_line_has_keyword },
+        { label: 'Elég tag van megadva (5-15)', done: heuristics.tag_count_flag === 'ok' },
+        { label: 'Van fejezet-időbélyeg', done: (seoPackage.chapters || []).length > 0 },
+        { label: 'Van kitűzhető komment', done: !!seoPackage.pinned_comment },
+        { label: 'Van végképernyő CTA', done: !!seoPackage.end_screen_cta },
+      ]
+
+      const responsePayload = {
+        topic,
+        seo_package: seoPackage,
+        heuristics,
+        seo_score: seoScore,
+        checklist,
+        _credits_remaining: charge.new_balance,
+      }
+
+      const paidSave = await savePaidResult({
+        userId,
+        toolType: 'seo_optimizer',
+        inputHash,
+        normalizedInput,
+        originalInput: topic,
+        platform: platformValue,
+        region: regionValue,
+        resultJson: responsePayload,
+        summaryJson: { topic, seo_score: seoScore },
+        creditCost: CREDIT_COSTS.seo_optimizer,
+        freshForHours: 24,
+        provider: aiCall.provider,
+        model: aiCall.model,
+        promptTemplateId: aiCall.promptTemplateId,
+        promptVersion: aiCall.promptVersion,
+        estimatedCost: aiCall.estimatedCost,
+      })
+      if (!paidSave.success) {
+        console.error('[SeoOptimizer] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      }
+
+      return NextResponse.json({ ...(polishHungarianOutput(responsePayload) as object), paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
     }
-
-    const enoughCredits = await hasEnoughCredits(userId, 'seo_optimizer')
-    if (!enoughCredits) {
-      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.seo_optimizer} kredit szükséges.` }, { status: 402 })
-    }
-
-    const prompt = buildSeoOptimizerPrompt({ topic, existingTitle: existing_title || undefined, niche, useNiche, platform: platformValue })
-    const aiCall = await callAIProvider({
-      model: MODELS.fast,
-      maxTokens: 2000,
-      messages: [{ role: 'user', content: prompt }],
-      promptTemplateId: 'seo_optimizer_package',
-      promptVersion: 'v1',
-    })
-
-    const seoPackage = extractJson<SeoPackage>(aiCall.text)
-    const heuristics = computeSeoHeuristics({
-      title: seoPackage.seo_title || existing_title || topic,
-      description: seoPackage.description || '',
-      keywords: keywordList.length > 0 ? keywordList : [topic],
-      tags: seoPackage.tags || [],
-    })
-    const seoScore = computeSeoScore(heuristics)
-
-    await logUsage(userId, 'seo_optimizer', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
-
-    const charge = await chargeFeature(userId, 'seo_optimizer', { topic })
-    if (!charge.success) {
-      return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
-    }
-
-    const checklist = [
-      { label: 'Cím hossza megfelelő (15-70 karakter)', done: heuristics.title_length_flag === 'ok' },
-      { label: 'Leírás első sora tartalmaz kulcsszót', done: heuristics.description_first_line_has_keyword },
-      { label: 'Elég tag van megadva (5-15)', done: heuristics.tag_count_flag === 'ok' },
-      { label: 'Van fejezet-időbélyeg', done: (seoPackage.chapters || []).length > 0 },
-      { label: 'Van kitűzhető komment', done: !!seoPackage.pinned_comment },
-      { label: 'Van végképernyő CTA', done: !!seoPackage.end_screen_cta },
-    ]
-
-    const responsePayload = {
-      topic,
-      seo_package: seoPackage,
-      heuristics,
-      seo_score: seoScore,
-      checklist,
-      _credits_remaining: charge.new_balance,
-    }
-
-    const paidSave = await savePaidResult({
-      userId,
-      toolType: 'seo_optimizer',
-      inputHash,
-      normalizedInput,
-      originalInput: topic,
-      platform: platformValue,
-      region: regionValue,
-      resultJson: responsePayload,
-      summaryJson: { topic, seo_score: seoScore },
-      creditCost: CREDIT_COSTS.seo_optimizer,
-      freshForHours: 24,
-      provider: aiCall.provider,
-      model: aiCall.model,
-      promptTemplateId: aiCall.promptTemplateId,
-      promptVersion: aiCall.promptVersion,
-      estimatedCost: aiCall.estimatedCost,
-    })
-    if (!paidSave.success) {
-      console.error('[SeoOptimizer] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-    }
-
-    return NextResponse.json({ ...(polishHungarianOutput(responsePayload) as object), paid_result_id: paidSave.record?.id || null })
   } catch (error) {
     console.error('SEO optimizer error:', error)
     return NextResponse.json({ error: 'SEO csomag generálása sikertelen. Próbáld újra.' }, { status: 500 })

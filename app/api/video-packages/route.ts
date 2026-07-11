@@ -33,7 +33,10 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .limit(50)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('Video packages GET error:', error)
+    return NextResponse.json({ error: 'A csomagok betöltése sikertelen. Próbáld újra.' }, { status: 500 })
+  }
   return NextResponse.json({ packages: data })
 }
 
@@ -88,7 +91,7 @@ export async function POST(request: NextRequest) {
 
   if (error) {
     console.error('Video package save error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: 'A csomag mentése sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
   const ideaResult = await ensureVideoIdea(admin, {
@@ -159,6 +162,9 @@ export async function DELETE(request: NextRequest) {
     .eq('id', id)
     .eq('user_id', user.id)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    console.error('Video package DELETE error:', error)
+    return NextResponse.json({ error: 'A törlés sikertelen. Próbáld újra.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
 }

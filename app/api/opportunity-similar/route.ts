@@ -4,6 +4,7 @@ import { getUserId, logUsage, chargeFeature, hasEnoughCredits, CREDIT_COSTS } fr
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import type { SimilarVideo, OpportunityScoreBreakdown } from '@/types'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // ─── "Mutass hasonlót" — ugyanazon bizonyíték videókból más szöget ad Claude (Haiku) ───
 // NULLA YouTube API hívás — cache-elt evidence_videos-ból dolgozunk.
@@ -24,6 +25,12 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ variant: 'similar', original_title, keyword: keyword || '', niche: niche || '' })
     const inputHash = buildPaidResultHash({ userId, toolType: 'opportunity_explain', normalizedInput })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'opportunity_similar', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     if (!force_refresh) {
       const paid = (await getPaidResultById(userId, paidResultId)) || (await getPaidResultByHash({ userId, toolType: 'opportunity_explain', inputHash }))
       if (paid) {
@@ -106,6 +113,9 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Opportunity similar error:', error)
     return NextResponse.json({ error: 'Generálás sikertelen.' }, { status: 500 })

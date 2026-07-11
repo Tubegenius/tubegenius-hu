@@ -29,6 +29,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ url: session.url })
   } catch (err: any) {
     console.error('Customer portal error:', err)
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: 'A fiókkezelő megnyitása sikertelen. Próbáld újra.' }, { status: 500 })
   }
 }

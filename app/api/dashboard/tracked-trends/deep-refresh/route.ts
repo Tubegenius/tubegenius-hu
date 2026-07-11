@@ -5,6 +5,7 @@ import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { calcSearchRelevance, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import { refreshTrackedCandidateNow } from '@/lib/trend-tracking'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -148,6 +149,12 @@ export async function POST(request: NextRequest) {
 
   if (error || !candidate) return NextResponse.json({ error: 'Nem található követett téma.' }, { status: 404 })
 
+  const lock = await acquireRequestLock({ userId: user.id, toolType: 'trend_deep_refresh', inputHash: candidateId })
+  if (!lock.acquired) {
+    return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+  }
+
+  try {
   const enoughCredits = await hasEnoughCredits(user.id, 'trend_deep_refresh')
   if (!enoughCredits) return NextResponse.json({ error: 'Nincs elég kredit a mély frissítéshez.' }, { status: 402 })
 
@@ -250,4 +257,7 @@ export async function POST(request: NextRequest) {
     total_web_sources: mergedWebSources.length,
     new_balance: charge.new_balance,
   })
+  } finally {
+    await releaseRequestLock(lock.lockId)
+  }
 }

@@ -165,10 +165,16 @@ export async function chargeFeature(
     .single()
 
   if (updateErr || !updated) {
+    // Beta Hardening Test (2026-07-11): ha az optimista zar utkozik (parhuzamos
+    // keres ugyanarra a userre), az updateErr nyers Postgres/PostgREST hibat
+    // tartalmaz (pl. "Cannot coerce the result to a single JSON object"), ami
+    // sem magyar, sem erthetheto, es felrevezeto is — nem "nincs eleg kredit",
+    // hanem race-vesztes. A nyers hibat csak logoljuk, a userhez fix szoveg megy.
+    if (updateErr) console.error('[Credits] chargeFeature race/DB hiba:', updateErr)
     return {
       success: false,
       new_balance: currentBalance,
-      error: updateErr?.message || 'A kredit levonás nem sikerült. Próbáld újra.',
+      error: 'A kredit levonás nem sikerült — túl sok egyidejű kérés. Próbáld újra.',
     }
   }
 

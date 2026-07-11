@@ -6,11 +6,12 @@ import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidR
 import { fetchKeywordSignals, fetchSeedVideoStats } from '@/lib/keyword-research'
 import { buildContentGapPrompt, type ContentGapSuggestion } from '@/lib/content-gap'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export async function POST(request: NextRequest) {
   try {
     const { niche, platform, region } = await request.json()
-    if (!niche || typeof niche !== 'string') {
+    if (!niche || typeof niche !== 'string' || !niche.trim()) {
       return NextResponse.json({ error: 'Niche/téma megadása kötelező' }, { status: 400 })
     }
 
@@ -23,6 +24,12 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ niche, platform: platformValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'content_gap', normalizedInput, platform: platformValue })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'content_gap', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const paid = await getPaidResultByHash({ userId, toolType: 'content_gap', inputHash })
     if (paid) {
       const opened = await openPaidResult(paid)
@@ -97,6 +104,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ ...(polishHungarianOutput(responsePayload) as object), paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Content gap error:', error)
     return NextResponse.json({ error: 'Elemzés sikertelen. Próbáld újra.' }, { status: 500 })

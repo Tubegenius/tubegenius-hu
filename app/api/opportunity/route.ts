@@ -27,6 +27,7 @@ import {
 } from '@/lib/core-trust-engine'
 import { buildCacheKey, buildTrendCacheKey } from '@/lib/core-trust-engine/cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // ── Fallback topic builders (research lanes, broad discovery) ────
 
@@ -286,6 +287,12 @@ export async function POST(request: NextRequest) {
       platform: platform || 'youtube',
     })
 
+    const lock = await acquireRequestLock({ userId: user.id, toolType: 'opportunity_engine', inputHash: paidInputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     if (!force_refresh) {
       const paidById = await getPaidResultById(user.id, paidResultId || paid_result_id)
       const paid = paidById || await getPaidResultByHash({ userId: user.id, toolType: 'opportunity_engine', inputHash: paidInputHash })
@@ -898,6 +905,9 @@ KRITIKUS JSON SZABÁLYOK:
       requires_credit: creditsCharged > 0,
       paid_result_id: savedPaidResultId,
     })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Opportunity Engine error:', error)
     return NextResponse.json({ error: 'Generálás sikertelen. Próbáld újra.', charged: false, credits_charged: 0 }, { status: 500 })

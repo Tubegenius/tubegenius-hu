@@ -6,6 +6,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt } from '@/lib/channel-audit'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 const MIN_AUDITS_REQUIRED = 3
 
@@ -98,6 +99,12 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ weakest: weakest?.label || '', strongTopics, weakTopics, auditCount: auditList.length })
     const inputHash = buildPaidResultHash({ userId, toolType: 'channel_audit', normalizedInput })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'channel_audit', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     if (!force_refresh) {
       const existing = await getPaidResultByHash({ userId, toolType: 'channel_audit', inputHash })
       if (existing) {
@@ -162,6 +169,9 @@ export async function POST(request: NextRequest) {
       _credits_remaining: charge.new_balance,
       paid_result_id: paidSave.record?.id || null,
     })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Channel audit next-videos error:', error)
     return NextResponse.json({ error: 'Javaslat generálása sikertelen. Próbáld újra.' }, { status: 500 })

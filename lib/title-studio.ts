@@ -131,6 +131,7 @@ KRITIKUS SZABÁLYOK:
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
 - ${STAY_ON_TOPIC_RULE}
 - A címek teljesen magyar nyelvűek legyenek. Ne használj angol, spanyol, portugál vagy más idegen szót, kivéve közismert márkanevet vagy szakkifejezést.
+- Egészségügyi, tudományos vagy más tényalapú, érzékeny témáknál (pl. oltás, gyógyszer, klímaváltozás) KERÜLD az összeesküvés-hangzású megfogalmazást ("amit eltitkolnak előled", "a tudósok nem mondják el", "ezt nem akarják, hogy tudd") — ezek alá is ássák a nézői bizalmat, és nem felelnek meg a WillViral bizonyíték-alapú irányvonalának. Ehelyett a kíváncsiságot tényalapú, konkrét kérdésfeltevéssel (pl. "Mit mutatnak a friss kutatások...") kelts fel, és az ilyen témák EGYETLEN változatát se pontozd 40 alatti risk_score-ra, ha bármilyen megalapozatlan-hangzású állítást tartalmaz.
 
 Válaszolj KIZÁRÓLAG valid JSON tömbben:
 [{"title": "...", "curiosity_score": 0, "clarity_score": 0, "clickability_score": 0, "risk_score": 0, "reasoning": "..."}]`

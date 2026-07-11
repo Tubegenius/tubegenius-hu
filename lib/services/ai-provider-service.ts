@@ -109,7 +109,58 @@ export function extractJson<T = unknown>(text: string): T {
   try {
     return JSON.parse(jsonSlice) as T
   } catch (error) {
+    // Beta Hardening Test (2026-07-11) elo mereses: ~4%-ban Claude egy nem-escapelt
+    // idezojelet tesz egy JSON string ERTEKEBE (pl. "...de az "sokkal konnyebb"
+    // tulhajtas..."), ami ezen a ponton torne el a nyers JSON.parse-t. Nem a
+    // temahossz/maxTokens a gyokerok (korabbi feltetelezes), rovid temakon is
+    // eloall. Mielott feladnank, megprobaljuk automatikusan escapelni a string
+    // ertekek BELSEJEBEN talalhato, nem strukturalis idezojeleket.
+    const repaired = repairUnescapedInnerQuotes(jsonSlice)
+    if (repaired !== jsonSlice) {
+      try {
+        return JSON.parse(repaired) as T
+      } catch {
+        // a javitasi kiserlet sem sikerult — az eredeti hibat dobjuk tovabb
+      }
+    }
     console.error('extractJson parse failed:', jsonSlice.slice(0, 1500))
     throw error
   }
+}
+
+// Egy karakterenkenti allapotgep: JSON stringen BELUL minden olyan `"`-t,
+// amit nem strukturalisan ertelmes karakter (`,` `}` `]` `:` vagy a string
+// vege) kovet, nem-escapelt belso idezojelnek tekint es escapeli — a valodi
+// lezaro idezojeleket (amiket strukturalis karakter kovet) erintetlenul hagyja.
+function repairUnescapedInnerQuotes(input: string): string {
+  let result = ''
+  let inString = false
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (inString && ch === '\\') {
+      result += ch + (input[i + 1] ?? '')
+      i++
+      continue
+    }
+    if (ch === '"') {
+      if (!inString) {
+        inString = true
+        result += ch
+        continue
+      }
+      let j = i + 1
+      while (j < input.length && /\s/.test(input[j])) j++
+      const next = j < input.length ? input[j] : undefined
+      const isRealClose = next === undefined || next === ',' || next === '}' || next === ']' || next === ':'
+      if (isRealClose) {
+        inString = false
+        result += ch
+      } else {
+        result += '\\"'
+      }
+      continue
+    }
+    result += ch
+  }
+  return result
 }

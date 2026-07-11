@@ -21,6 +21,7 @@ import {
   forwardWorkflowStatus,
   type VideoIdeaWorkflowStatus,
 } from '@/lib/video-ideas/video-idea-service'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // ── Téma-relevancia szűrés ────────────────────────────────────
 // A YouTube/Serper keresés önmagában fuzzy — pl. "AI botrányok"-ra simán
@@ -218,7 +219,7 @@ function buildViralDecisionSummary(input: {
 export async function POST(request: NextRequest) {
   try {
     const { topic, platform, region, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
-    if (!topic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+    if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -241,6 +242,12 @@ export async function POST(request: NextRequest) {
       platform: platform || 'youtube',
     })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'viral_score', inputHash: paidInputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     if (!force_refresh) {
       const paidById = await getPaidResultById(userId, paidResultId || paid_result_id)
       const paid = paidById || await getPaidResultByHash({ userId, toolType: 'viral_score', inputHash: paidInputHash })
@@ -632,6 +639,9 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
       requires_credit: true,
       paid_result_id: paidSave.record?.id || null,
     })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Viral Score error:', error)
     return NextResponse.json({ error: 'Elemzés sikertelen.' }, { status: 500 })

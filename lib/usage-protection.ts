@@ -262,10 +262,13 @@ export async function chargeProtectedFeature(
     .single()
 
   if (error || !updated) {
+    // Beta Hardening Test (2026-07-11): lasd lib/credits.ts chargeFeature() —
+    // ugyanaz a nyers-hiba-szivargas osztaly, ugyanaz a javitas.
+    if (error) console.error('[UsageProtection] chargeProtectedFeature race/DB hiba:', error)
     return {
       success: false,
       newBalance: currentBalance,
-      error: error?.message || 'A kredit levonás nem sikerült. Próbáld újra.',
+      error: 'A kredit levonás nem sikerült — túl sok egyidejű kérés. Próbáld újra.',
     }
   }
 

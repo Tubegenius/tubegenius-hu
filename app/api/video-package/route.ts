@@ -15,6 +15,7 @@ import {
   type VerifiedFactBlock,
   type QualityStatus,
 } from '@/lib/fact-safety'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 const STYLE_PROMPTS: Record<string, string> = {
   mrbeast: 'MrBeast stilus: eros hook, gyors tempo, nagy tet, kozvetlen. Hiteles, nem gyerekes.',
@@ -304,7 +305,7 @@ export async function POST(request: NextRequest) {
       web_sources, youtube_sources, source_video, opportunity_context,
     } = await request.json()
 
-    if (!topic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+    if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
 
     if (opportunity_context?.ready_to_produce_status === 'rejected') {
       return NextResponse.json({
@@ -347,6 +348,12 @@ export async function POST(request: NextRequest) {
       language: language || null,
       platform: platform || null,
     })
+    const lock = await acquireRequestLock({ userId, toolType: 'video_package', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const paid = await getPaidResultByHash({ userId, toolType: 'video_package', inputHash })
       || (legacyInputHash !== inputHash
         ? await getPaidResultByHash({ userId, toolType: 'video_package', inputHash: legacyInputHash })
@@ -557,6 +564,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Video Package error:', error)
     return NextResponse.json({ error: 'Generálás sikertelen. Próbáld újra.' }, { status: 500 })

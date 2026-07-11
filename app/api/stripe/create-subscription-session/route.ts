@@ -54,6 +54,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ url: session.url })
   } catch (err: any) {
     console.error('Create subscription session error:', err)
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: 'Az előfizetés indítása sikertelen. Próbáld újra.' }, { status: 500 })
   }
 }

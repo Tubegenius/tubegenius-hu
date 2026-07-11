@@ -8,11 +8,12 @@ import { checkThumbnailText, buildThumbnailStudioPrompt, type ThumbnailConcept }
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { shouldUseProfileNiche } from '@/lib/niche-relevance'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export async function POST(request: NextRequest) {
   try {
     const { topic, platform, region } = await request.json()
-    if (!topic || typeof topic !== 'string') {
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
 
@@ -29,72 +30,81 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ topic, platform: platformValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'thumbnail_studio', normalizedInput, platform: platformValue })
 
-    const paid = await getPaidResultByHash({ userId, toolType: 'thumbnail_studio', inputHash })
-    if (paid) {
-      const opened = await openPaidResult(paid)
-      return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+    const lock = await acquireRequestLock({ userId, toolType: 'thumbnail_studio', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
     }
 
-    const enoughCredits = await hasEnoughCredits(userId, 'thumbnail_studio')
-    if (!enoughCredits) {
-      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.thumbnail_studio} kredit szükséges.` }, { status: 402 })
+    try {
+      const paid = await getPaidResultByHash({ userId, toolType: 'thumbnail_studio', inputHash })
+      if (paid) {
+        const opened = await openPaidResult(paid)
+        return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
+      }
+
+      const enoughCredits = await hasEnoughCredits(userId, 'thumbnail_studio')
+      if (!enoughCredits) {
+        return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.thumbnail_studio} kredit szükséges.` }, { status: 402 })
+      }
+
+      const prompt = buildThumbnailStudioPrompt({ topic, niche, useNiche, platform: platformValue })
+      const aiCall = await callAIProvider({
+        model: MODELS.fast,
+        maxTokens: 1500,
+        messages: [{ role: 'user', content: prompt }],
+        promptTemplateId: 'thumbnail_studio_concepts',
+        promptVersion: 'v1',
+      })
+
+      const rawConcepts = extractJson<ThumbnailConcept[]>(aiCall.text)
+      const concepts = rawConcepts.map(c => ({
+        ...c,
+        visual_description: polishHungarianText(c.visual_description || ''),
+        thumbnail_text: polishHungarianText(c.thumbnail_text || ''),
+        composition_note: polishHungarianText(c.composition_note || ''),
+        emotion_or_conflict: polishHungarianText(c.emotion_or_conflict || ''),
+        text_check: checkThumbnailText(c.thumbnail_text || ''),
+      }))
+
+      await logUsage(userId, 'thumbnail_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+
+      const charge = await chargeFeature(userId, 'thumbnail_studio', { topic })
+      if (!charge.success) {
+        return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
+      }
+
+      const responsePayload = {
+        topic,
+        concepts,
+        _credits_remaining: charge.new_balance,
+      }
+
+      const paidSave = await savePaidResult({
+        userId,
+        toolType: 'thumbnail_studio',
+        inputHash,
+        normalizedInput,
+        originalInput: topic,
+        platform: platformValue,
+        region: regionValue,
+        resultJson: responsePayload,
+        summaryJson: { topic, concept_count: concepts.length },
+        creditCost: CREDIT_COSTS.thumbnail_studio,
+        freshForHours: 24,
+        provider: aiCall.provider,
+        model: aiCall.model,
+        promptTemplateId: aiCall.promptTemplateId,
+        promptVersion: aiCall.promptVersion,
+        estimatedCost: aiCall.estimatedCost,
+      })
+      if (!paidSave.success) {
+        console.error('[ThumbnailStudio] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      }
+
+      return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
     }
-
-    const prompt = buildThumbnailStudioPrompt({ topic, niche, useNiche, platform: platformValue })
-    const aiCall = await callAIProvider({
-      model: MODELS.fast,
-      maxTokens: 1500,
-      messages: [{ role: 'user', content: prompt }],
-      promptTemplateId: 'thumbnail_studio_concepts',
-      promptVersion: 'v1',
-    })
-
-    const rawConcepts = extractJson<ThumbnailConcept[]>(aiCall.text)
-    const concepts = rawConcepts.map(c => ({
-      ...c,
-      visual_description: polishHungarianText(c.visual_description || ''),
-      thumbnail_text: polishHungarianText(c.thumbnail_text || ''),
-      composition_note: polishHungarianText(c.composition_note || ''),
-      emotion_or_conflict: polishHungarianText(c.emotion_or_conflict || ''),
-      text_check: checkThumbnailText(c.thumbnail_text || ''),
-    }))
-
-    await logUsage(userId, 'thumbnail_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
-
-    const charge = await chargeFeature(userId, 'thumbnail_studio', { topic })
-    if (!charge.success) {
-      return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
-    }
-
-    const responsePayload = {
-      topic,
-      concepts,
-      _credits_remaining: charge.new_balance,
-    }
-
-    const paidSave = await savePaidResult({
-      userId,
-      toolType: 'thumbnail_studio',
-      inputHash,
-      normalizedInput,
-      originalInput: topic,
-      platform: platformValue,
-      region: regionValue,
-      resultJson: responsePayload,
-      summaryJson: { topic, concept_count: concepts.length },
-      creditCost: CREDIT_COSTS.thumbnail_studio,
-      freshForHours: 24,
-      provider: aiCall.provider,
-      model: aiCall.model,
-      promptTemplateId: aiCall.promptTemplateId,
-      promptVersion: aiCall.promptVersion,
-      estimatedCost: aiCall.estimatedCost,
-    })
-    if (!paidSave.success) {
-      console.error('[ThumbnailStudio] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-    }
-
-    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
   } catch (error) {
     console.error('Thumbnail studio error:', error)
     return NextResponse.json({ error: 'Koncepció-generálás sikertelen. Próbáld újra.' }, { status: 500 })

@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     console.error('Memory GET error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: 'A tartalommemória betöltése sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
   const items = data || []
@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
 
   if (error) {
     console.error('Memory POST error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: 'A mentés sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
   const ideaResult = await ensureVideoIdea(admin, {
@@ -226,7 +226,8 @@ export async function PATCH(request: NextRequest) {
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    console.error('Memory PATCH error:', error)
+    return NextResponse.json({ error: 'Az állapot frissítése sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
   // Allapotvaltas eseten a linkelt Video Idea workflow_status-at is szinkronizaljuk,
@@ -271,7 +272,8 @@ export async function DELETE(request: NextRequest) {
     .eq('user_id', user.id)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    console.error('Memory DELETE error:', error)
+    return NextResponse.json({ error: 'A törlés sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true })

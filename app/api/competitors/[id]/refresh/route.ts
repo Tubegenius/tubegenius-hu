@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserId, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // POST — versenytars ujraellenorzese: friss videok + outlier ujraszamitas.
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
@@ -19,6 +20,12 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
 
     if (!competitor) return NextResponse.json({ error: 'A figyelt versenytárs nem található.' }, { status: 404 })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'outlier_scan', inputHash: competitor.id })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const enoughCredits = await hasEnoughCredits(userId, 'outlier_scan')
     if (!enoughCredits) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.outlier_scan} kredit szükséges.` }, { status: 402 })
@@ -65,6 +72,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     }
 
     return NextResponse.json({ videos, _credits_remaining: charge.new_balance })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Competitor refresh error:', error)
     return NextResponse.json({ error: 'Frissítés sikertelen. Próbáld újra.' }, { status: 500 })

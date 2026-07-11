@@ -5,6 +5,7 @@ import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { getActiveApiKey } from '@/lib/youtube-service'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 function extractVideoId(url: string): string | null {
   const patterns = [
@@ -60,6 +61,12 @@ export async function POST(request: NextRequest) {
       normalizedInput,
       platform: 'youtube',
     })
+    const lock = await acquireRequestLock({ userId, toolType: 'script_extract', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const paid = await getPaidResultByHash({ userId, toolType: 'script_extract', inputHash })
     if (paid) {
       const opened = await openPaidResult(paid)
@@ -225,6 +232,9 @@ Valaszolj KIZAROLAG valid JSON-ban:
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Script extract error:', error)
     return NextResponse.json({ error: 'Elemzés sikertelen. Próbáld újra.' }, { status: 500 })

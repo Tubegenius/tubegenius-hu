@@ -10,6 +10,7 @@ import {
   paidResultResponseMeta,
   savePaidResult,
 } from '@/lib/paid-results/paid-results-service'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -130,6 +131,12 @@ export async function POST(request: NextRequest) {
       platform: 'upload',
     })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'transcript_extract', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const paid = await getPaidResultByHash({ userId, toolType: 'transcript_extract', inputHash })
     if (paid) {
       const opened = await openPaidResult(paid)
@@ -221,6 +228,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Transcript error:', error)
     return NextResponse.json({ error: 'A transcript készítés sikertelen. Próbáld újra.' }, { status: 500 })

@@ -4,6 +4,7 @@ import { getUserId, logUsage, chargeFeature, hasEnoughCredits, CREDIT_COSTS } fr
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import type { OpportunityScoreBreakdown, SimilarVideo } from '@/types'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // Lazy magyarázat-generálás egy pool candidate-hoz (amikor "Mutass mást" előhívja).
 // NULLA YouTube hívás — a candidate adatai (score_breakdown, evidence_videos) már megvannak a cache-ből.
@@ -24,6 +25,12 @@ export async function POST(request: NextRequest) {
     const normalizedInput = normalizePaidResultInput({ variant: 'pool_explain', keyword, niche: niche || '' })
     const inputHash = buildPaidResultHash({ userId, toolType: 'opportunity_explain', normalizedInput })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'opportunity_explain', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     if (!force_refresh) {
       const paid = (await getPaidResultById(userId, paidResultId)) || (await getPaidResultByHash({ userId, toolType: 'opportunity_explain', inputHash }))
       if (paid) {
@@ -105,6 +112,9 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Opportunity explain error:', error)
     return NextResponse.json({ error: 'Magyarázat generálása sikertelen.' }, { status: 500 })

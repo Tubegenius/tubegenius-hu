@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getUserId, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // GET — figyelt versenytársak listája, a legutóbbi (mentett) videóikkal együtt.
 export async function GET() {
@@ -45,13 +46,19 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const { channel_input, niche } = await request.json()
-    if (!channel_input || typeof channel_input !== 'string') {
+    if (!channel_input || typeof channel_input !== 'string' || !channel_input.trim()) {
       return NextResponse.json({ error: 'Csatorna URL, @handle vagy név megadása kötelező' }, { status: 400 })
     }
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'competitor_add', inputHash: channel_input.trim().toLowerCase() })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const enoughCredits = await hasEnoughCredits(userId, 'competitor_add')
     if (!enoughCredits) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.competitor_add} kredit szükséges.` }, { status: 402 })
@@ -129,6 +136,9 @@ export async function POST(request: NextRequest) {
       competitor: { ...competitor, videos },
       _credits_remaining: charge.new_balance,
     })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Competitor add error:', error)
     return NextResponse.json({ error: 'Versenytárs hozzáadása sikertelen. Próbáld újra.' }, { status: 500 })

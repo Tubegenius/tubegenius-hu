@@ -7,11 +7,12 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { buildScoreBreakdown, getConfidenceLevel } from '@/lib/opportunity-scoring'
 import { fetchKeywordSignals, fetchSeedVideoStats, buildKeywordClusterPrompt, type RelatedKeywordSuggestion } from '@/lib/keyword-research'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export async function POST(request: NextRequest) {
   try {
     const { seed_keyword, platform, region, niche: nicheOverride } = await request.json()
-    if (!seed_keyword || typeof seed_keyword !== 'string') {
+    if (!seed_keyword || typeof seed_keyword !== 'string' || !seed_keyword.trim()) {
       return NextResponse.json({ error: 'Kulcsszó megadása kötelező' }, { status: 400 })
     }
 
@@ -33,6 +34,12 @@ export async function POST(request: NextRequest) {
       platform: platformValue,
     })
 
+    const lock = await acquireRequestLock({ userId, toolType: 'keyword_research', inputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+
+    try {
     const paid = await getPaidResultByHash({ userId, toolType: 'keyword_research', inputHash })
     if (paid) {
       const opened = await openPaidResult(paid)
@@ -124,6 +131,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    } finally {
+      await releaseRequestLock(lock.lockId)
+    }
   } catch (error) {
     console.error('Keyword research error:', error)
     return NextResponse.json({ error: 'Kulcsszókutatás sikertelen. Próbáld újra.' }, { status: 500 })
