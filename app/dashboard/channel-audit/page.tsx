@@ -7,13 +7,22 @@ import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
+interface ChannelVideoPerformance {
+  videoId: string
+  title: string | null
+  views: number
+  estimatedMinutesWatched: number
+  averageViewDuration: number
+}
+
 interface ChannelAnalyticsSummary {
   channelId: string
   channelTitle: string | null
   rangeStart: string
   rangeEnd: string
   totals: { views: number; estimatedMinutesWatched: number; subscribersGained: number; subscribersLost: number }
-  topVideos: Array<{ videoId: string; views: number; estimatedMinutesWatched: number; averageViewDuration: number }>
+  topVideos: ChannelVideoPerformance[]
+  weakestVideos: ChannelVideoPerformance[]
 }
 
 interface DimensionAverages {
@@ -282,6 +291,35 @@ export default function ChannelAuditPage() {
               <p className="text-sm font-bold" style={{ color: '#EF4444' }}>-{channelAnalytics.totals.subscribersLost.toLocaleString('hu-HU')}</p>
             </div>
           </div>
+
+          {(channelAnalytics.topVideos.length > 0 || channelAnalytics.weakestVideos.length > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <div>
+                <p className="text-xs mb-2" style={{ color: '#22C55E' }}>🏆 LEGJOBBAN TELJESÍTŐ VIDEÓID (valós nézettség)</p>
+                <div className="space-y-1.5">
+                  {channelAnalytics.topVideos.map(v => (
+                    <a key={v.videoId} href={`https://www.youtube.com/watch?v=${v.videoId}`} target="_blank" rel="noopener noreferrer"
+                      className="block rounded-lg px-3 py-2 hover:opacity-80" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-xs truncate" style={{ color: '#F8FAFC' }}>{v.title || v.videoId}</p>
+                      <p className="text-xs" style={{ color: '#22C55E' }}>{v.views.toLocaleString('hu-HU')} megtekintés</p>
+                    </a>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs mb-2" style={{ color: '#EF4444' }}>📉 LEGGYENGÉBBEN TELJESÍTŐ VIDEÓID (valós nézettség)</p>
+                <div className="space-y-1.5">
+                  {channelAnalytics.weakestVideos.map(v => (
+                    <a key={v.videoId} href={`https://www.youtube.com/watch?v=${v.videoId}`} target="_blank" rel="noopener noreferrer"
+                      className="block rounded-lg px-3 py-2 hover:opacity-80" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-xs truncate" style={{ color: '#F8FAFC' }}>{v.title || v.videoId}</p>
+                      <p className="text-xs" style={{ color: '#EF4444' }}>{v.views.toLocaleString('hu-HU')} megtekintés</p>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -316,6 +354,9 @@ export default function ChannelAuditPage() {
 
       {!loading && !loadError && data && data.has_enough_data && (
         <div className="space-y-6">
+          <p className="text-xs" style={{ color: '#94A3B8' }}>
+            ⬇️ Az alábbi szekciók a kézzel beküldött <Link href="/dashboard/video-audit" className="underline">Videódiagnózisaid</Link> AI-értékelésén alapulnak (nem a fenti valós YouTube-adaton).
+          </p>
           <div className="card">
             <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>DIMENZIÓ-ÁTLAGOK ({data.audit_count} audit alapján)</p>
             <div className="space-y-2">

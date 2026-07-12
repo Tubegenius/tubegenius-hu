@@ -150,13 +150,33 @@ export async function fetchOwnChannelInfo(userId: string): Promise<OwnChannelInf
   return info
 }
 
+export interface ChannelVideoPerformance {
+  videoId: string
+  title: string | null
+  views: number
+  estimatedMinutesWatched: number
+  averageViewDuration: number
+}
+
 export interface ChannelAnalyticsSummary {
   channelId: string
   channelTitle: string | null
   rangeStart: string
   rangeEnd: string
   totals: { views: number; estimatedMinutesWatched: number; subscribersGained: number; subscribersLost: number }
-  topVideos: Array<{ videoId: string; views: number; estimatedMinutesWatched: number; averageViewDuration: number }>
+  topVideos: ChannelVideoPerformance[]
+  weakestVideos: ChannelVideoPerformance[]
+}
+
+async function fetchVideoTitles(oauth2Client: InstanceType<typeof google.auth.OAuth2>, videoIds: string[]): Promise<Map<string, string>> {
+  const titles = new Map<string, string>()
+  if (videoIds.length === 0) return titles
+  const youtube = google.youtube({ version: 'v3', auth: oauth2Client })
+  const res = await youtube.videos.list({ part: ['snippet'], id: videoIds })
+  for (const item of res.data.items || []) {
+    if (item.id && item.snippet?.title) titles.set(item.id, item.snippet.title)
+  }
+  return titles
 }
 
 export async function fetchChannelAnalytics(userId: string, days = 28): Promise<ChannelAnalyticsSummary | null> {
@@ -171,7 +191,11 @@ export async function fetchChannelAnalytics(userId: string, days = 28): Promise<
   const startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000)
   const fmt = (d: Date) => d.toISOString().slice(0, 10)
 
-  const [totalsRes, topVideosRes] = await Promise.all([
+  // A YouTube Analytics API video-dimenzios reportnal NEM tamogatja a
+  // novekvo rendezest ("sort: views" -> 400 "query is not supported") —
+  // csak csokkeno ("-views"). Ezert EGY lekerdezesbol (nagyobb maxResults)
+  // szamoljuk a top ES a leggyengebb videokat is, nem kulon hivassal.
+  const [totalsRes, videosRes] = await Promise.all([
     youtubeAnalytics.reports.query({
       ids: 'channel==MINE',
       startDate: fmt(startDate),
@@ -185,17 +209,25 @@ export async function fetchChannelAnalytics(userId: string, days = 28): Promise<
       metrics: 'views,estimatedMinutesWatched,averageViewDuration',
       dimensions: 'video',
       sort: '-views',
-      maxResults: 10,
+      maxResults: 50,
     }),
   ])
 
   const totalsRow = totalsRes.data.rows?.[0] || [0, 0, 0, 0]
-  const topVideos = (topVideosRes.data.rows || []).map(row => ({
+
+  const toPerformance = (rows: unknown[][] | undefined | null) => (rows || []).map(row => ({
     videoId: String(row[0]),
     views: Number(row[1]) || 0,
     estimatedMinutesWatched: Number(row[2]) || 0,
     averageViewDuration: Number(row[3]) || 0,
   }))
+
+  const allVideos = toPerformance(videosRes.data.rows)
+  const topVideos = allVideos.slice(0, 10)
+  const weakestVideos = allVideos.slice(-10).reverse()
+
+  const allVideoIds = Array.from(new Set([...topVideos, ...weakestVideos].map(v => v.videoId)))
+  const titles = await fetchVideoTitles(oauth2Client, allVideoIds)
 
   return {
     channelId: channelInfo.channelId,
@@ -208,6 +240,7 @@ export async function fetchChannelAnalytics(userId: string, days = 28): Promise<
       subscribersGained: Number(totalsRow[2]) || 0,
       subscribersLost: Number(totalsRow[3]) || 0,
     },
-    topVideos,
+    topVideos: topVideos.map(v => ({ ...v, title: titles.get(v.videoId) || null })),
+    weakestVideos: weakestVideos.map(v => ({ ...v, title: titles.get(v.videoId) || null })),
   }
 }
