@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
@@ -82,6 +81,11 @@ export default function ChannelAuditPage() {
   useEffect(() => {
     loadChannelAnalytics()
     load()
+    const oauthStatus = searchParams.get('youtube_oauth')
+    if (oauthStatus === 'error') {
+      const msg = searchParams.get('youtube_oauth_message')
+      setError(`A csatorna-összekapcsolás sikertelen (${msg || 'ismeretlen hiba'}). Próbáld újra.`)
+    }
     const paidResultId = searchParams.get('paidResultId')
     if (paidResultId) {
       loadPaidResult(paidResultId)
@@ -133,27 +137,12 @@ export default function ChannelAuditPage() {
     }
   }
 
-  async function connectChannel() {
+  function connectChannel() {
     setConnecting(true)
-    try {
-      const supabase = createClient()
-      const { error: linkError } = await supabase.auth.linkIdentity({
-        provider: 'google',
-        options: {
-          scopes: 'https://www.googleapis.com/auth/yt-analytics.readonly https://www.googleapis.com/auth/youtube.readonly',
-          queryParams: { access_type: 'offline', prompt: 'consent' },
-        },
-      })
-      if (linkError) {
-        setError(linkError.message)
-        setConnecting(false)
-      }
-      // Sikeres linkIdentity elnavigál a Google consent-oldalra, majd vissza
-      // az app/auth/callback route-ra — a state itt nem is éri be a reset-et.
-    } catch {
-      setError('A csatorna-összekapcsolás indítása sikertelen.')
-      setConnecting(false)
-    }
+    // Onallo, Supabase Authtol fuggetlen Google OAuth2 kor — ld.
+    // app/api/youtube/connect. Egyszeru navigacio, nincs kliens oldali
+    // Supabase-identity-kezeles.
+    window.location.href = '/api/youtube/connect'
   }
 
   async function disconnectChannel() {

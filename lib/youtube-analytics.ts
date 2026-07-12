@@ -2,15 +2,19 @@
 // WILLVIRAL — YouTube OAuth + valos Channel Analytics
 // ============================================================
 // A Channel Audit eddig kizarolag a user altal kezzel bevitt, AI-ertekelt
-// video_audits sorokra epult (lib/channel-audit.ts). Ez a modul a Supabase
-// Auth Google-linkIdentity soran kapott refresh tokent hasznalja, hogy
-// a sajat csatorna VALOS YouTube Analytics adatait (nezettseg, watch time,
-// feliratkozo-valtozas, videonkenti teljesitmeny) lekerje — kiegeszitve,
-// nem lecserelve a meglevo kezi audit-folyamatot.
+// video_audits sorokra epult (lib/channel-audit.ts). Ez a modul egy ONALLO,
+// a Supabase Authtol FUGGETLEN Google OAuth2 folyamatot hasznal (sajat
+// googleapis kliens, sajat callback route: app/api/youtube/oauth-callback),
+// hogy a sajat csatorna VALOS YouTube Analytics adatait (nezettseg, watch
+// time, feliratkozo-valtozas, videonkenti teljesitmeny) lekerje —
+// kiegeszitve, nem lecserelve a meglevo kezi audit-folyamatot.
 //
-// A Supabase-munkamenet provider_refresh_token mezoje csak KOZVETLENUL az
-// OAuth-redirekt utan erheto el (app/auth/callback/route.ts menti ide),
-// nem perzisztalodik automatikusan kesobbi bejelentkezesekben.
+// FONTOS, korabban rossz iranyban probaltuk: a Supabase Auth linkIdentity()
+// API bejelentkezesi-modszer hozzaadasara valo, NEM harmadik feles API-hoz
+// szukseges access/refresh token megszerzesere — sikeres linkeles utan sem
+// ad vissza provider_token/provider_refresh_token-t, ha a munkamenet aktiv
+// bejelentkezesi modja nem maga a linkelt provider (nalunk email marad).
+// Ezert egy sajat, Google-hoz kozvetlenul beszelo OAuth2 korre van szukseg.
 
 import { google } from 'googleapis'
 import { createAdminClient } from '@/lib/supabase-server'
@@ -21,10 +25,24 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET
 export const YOUTUBE_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/yt-analytics.readonly',
   'https://www.googleapis.com/auth/youtube.readonly',
-].join(' ')
+]
 
-function getOAuth2Client() {
-  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
+export function getOAuthCallbackRedirectUri(origin: string): string {
+  return `${origin}/api/youtube/oauth-callback`
+}
+
+export function getOAuth2Client(redirectUri?: string) {
+  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, redirectUri)
+}
+
+export function buildGoogleAuthUrl(origin: string, state: string): string {
+  const oauth2Client = getOAuth2Client(getOAuthCallbackRedirectUri(origin))
+  return oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: YOUTUBE_OAUTH_SCOPES,
+    state,
+  })
 }
 
 export interface YoutubeOAuthTokenRow {
