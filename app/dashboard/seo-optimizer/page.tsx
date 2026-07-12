@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface SeoPackage {
   seo_title: string
@@ -200,6 +201,12 @@ export default function SeoOptimizerPage() {
       {error && (
         <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
           <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+        </div>
+      )}
+
+      {loading && (
+        <div className="card">
+          <LoadingScreen steps={LOADING_STEPS.seoOptimizer} />
         </div>
       )}
 

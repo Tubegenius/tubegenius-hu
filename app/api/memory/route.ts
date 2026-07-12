@@ -24,12 +24,18 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient()
   const { searchParams } = new URL(request.url)
   const state = searchParams.get('state') as TopicState | null
+  // Korabban nem volt semmilyen limit — minden mentett tema egyszerre
+  // toltodott be minden oldal-nyitaskor, plusz mindegyikhez lefutott a
+  // Jaccard-insight szamitas (enrichMemoryItems). Ez egy ideiglenes,
+  // egyszeru felso korlat valodi lapozas nelkul is.
+  const limit = Math.min(Math.max(Number(searchParams.get('limit') || 200), 1), 500)
 
   let query = admin
     .from('creator_memory')
     .select('*')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false })
+    .limit(limit)
 
   if (state) {
     query = query.eq('state', state)

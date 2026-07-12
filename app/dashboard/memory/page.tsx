@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import type { CreatorMemoryItem, TopicState, MemoryProofSignalSummary, MemoryInsight, VideoIdeaEvent } from '@/types'
 import { scoreLabel, scoreLabelColor } from '@/lib/score-utils'
@@ -314,11 +315,15 @@ function PackageCard({ pkg, onDelete }: { pkg: PackageSummary; onDelete: () => v
 }
 
 export default function CreatorMemoryPage() {
+  const searchParams = useSearchParams()
   const [items, setItems] = useState<MemoryItemExtended[]>([])
   const [packages, setPackages] = useState<PackageSummary[]>([])
   const [audits, setAudits] = useState<AuditSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<TopicState | 'all' | 'packages' | 'audits'>('all')
+  const initialTab = (searchParams.get('tab') as TopicState | 'all' | 'packages' | 'audits' | null) || 'all'
+  const [activeTab, setActiveTab] = useState<TopicState | 'all' | 'packages' | 'audits'>(
+    ['all', 'saved', 'in_progress', 'completed', 'rejected', 'packages', 'audits'].includes(initialTab) ? initialTab : 'all'
+  )
 
   useEffect(() => { loadItems(); loadPackages(); loadAudits() }, [])
 

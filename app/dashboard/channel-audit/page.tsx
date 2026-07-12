@@ -1,9 +1,21 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { createClient } from '@/lib/supabase'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+
+interface ChannelAnalyticsSummary {
+  channelId: string
+  channelTitle: string | null
+  rangeStart: string
+  rangeEnd: string
+  totals: { views: number; estimatedMinutesWatched: number; subscribersGained: number; subscribersLost: number }
+  topVideos: Array<{ videoId: string; views: number; estimatedMinutesWatched: number; averageViewDuration: number }>
+}
 
 interface DimensionAverages {
   hook_strength: number
@@ -52,6 +64,7 @@ interface SuggestionsResult {
 }
 
 export default function ChannelAuditPage() {
+  const searchParams = useSearchParams()
   const [data, setData] = useState<ChannelAuditData | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -61,13 +74,104 @@ export default function ChannelAuditPage() {
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [pendingForceRefresh, setPendingForceRefresh] = useState(false)
 
+  const [channelAnalytics, setChannelAnalytics] = useState<ChannelAnalyticsSummary | null>(null)
+  const [channelConnected, setChannelConnected] = useState<boolean | null>(null)
+  const [connecting, setConnecting] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+
   useEffect(() => {
+    loadChannelAnalytics()
     load()
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     try {
       const saved = sessionStorage.getItem(SUGGESTIONS_STATE_KEY)
       if (saved) setSuggestionsResult(JSON.parse(saved))
     } catch {}
   }, [])
+
+  // Mentett "következő 10 videó" javaslat visszaállítása explicit paidResultId
+  // alapján (pl. a Command Center "Legutóbbi történeted" paneljéről) — kredit nélkül.
+  async function loadPaidResult(id: string) {
+    setGenerating(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/channel-audit?paidResultId=${id}`)
+      const body = await res.json()
+      if (!res.ok || body.error) {
+        setError(body.error || 'A mentett javaslat nem található.')
+        return
+      }
+      setSuggestionsResult(body)
+      try { sessionStorage.setItem(SUGGESTIONS_STATE_KEY, JSON.stringify(body)) } catch {}
+    } catch {
+      setError('Hiba a mentett javaslat betöltésekor.')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  async function loadChannelAnalytics() {
+    try {
+      const res = await fetch('/api/youtube/analytics')
+      if (res.status === 404) {
+        setChannelConnected(false)
+        return
+      }
+      const body = await res.json()
+      if (!res.ok) {
+        setChannelConnected(false)
+        return
+      }
+      setChannelAnalytics(body)
+      setChannelConnected(true)
+    } catch {
+      setChannelConnected(false)
+    }
+  }
+
+  async function connectChannel() {
+    setConnecting(true)
+    try {
+      const supabase = createClient()
+      const { error: linkError } = await supabase.auth.linkIdentity({
+        provider: 'google',
+        options: {
+          scopes: 'https://www.googleapis.com/auth/yt-analytics.readonly https://www.googleapis.com/auth/youtube.readonly',
+          queryParams: { access_type: 'offline', prompt: 'consent' },
+        },
+      })
+      if (linkError) {
+        setError(linkError.message)
+        setConnecting(false)
+      }
+      // Sikeres linkIdentity elnavigál a Google consent-oldalra, majd vissza
+      // az app/auth/callback route-ra — a state itt nem is éri be a reset-et.
+    } catch {
+      setError('A csatorna-összekapcsolás indítása sikertelen.')
+      setConnecting(false)
+    }
+  }
+
+  async function disconnectChannel() {
+    setDisconnecting(true)
+    try {
+      const res = await fetch('/api/youtube/disconnect', { method: 'POST' })
+      if (res.ok) {
+        setChannelConnected(false)
+        setChannelAnalytics(null)
+      } else {
+        setError('A kapcsolat bontása sikertelen.')
+      }
+    } catch {
+      setError('Kapcsolati hiba.')
+    } finally {
+      setDisconnecting(false)
+    }
+  }
 
   async function load() {
     setLoading(true)
@@ -146,6 +250,51 @@ export default function ChannelAuditPage() {
         <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>📊 Channel Audit</h1>
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Az eddigi Videódiagnózisaid mintázata — mi erős, mi gyenge, mit gyárts legközelebb.</p>
       </div>
+
+      {channelConnected === false && (
+        <div className="card mb-6 flex items-center justify-between gap-4 flex-wrap" style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)' }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>🔗 Kösd össze a YouTube csatornád</p>
+            <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Valós nézettség, watch time és feliratkozó-adatok jelennek meg a kézi audit-mintázat mellett.</p>
+          </div>
+          <button onClick={connectChannel} disabled={connecting} className="btn-primary text-sm px-4 py-1.5 flex-shrink-0">
+            {connecting ? 'Átirányítás...' : 'Csatorna összekapcsolása'}
+          </button>
+        </div>
+      )}
+
+      {channelConnected && channelAnalytics && (
+        <div className="card mb-6">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <p className="text-xs" style={{ color: '#94A3B8' }}>
+              📡 VALÓS CSATORNA-ANALITIKA {channelAnalytics.channelTitle ? `— ${channelAnalytics.channelTitle}` : ''} ({channelAnalytics.rangeStart} – {channelAnalytics.rangeEnd})
+            </p>
+            <button onClick={disconnectChannel} disabled={disconnecting}
+              className="text-xs px-3 py-1.5 rounded-lg font-semibold"
+              style={{ background: 'rgba(255,255,255,0.06)', color: '#94A3B8' }}>
+              {disconnecting ? 'Bontás...' : 'Kapcsolat bontása'}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Megtekintés</p>
+              <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{channelAnalytics.totals.views.toLocaleString('hu-HU')}</p>
+            </div>
+            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Watch time (perc)</p>
+              <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{Math.round(channelAnalytics.totals.estimatedMinutesWatched).toLocaleString('hu-HU')}</p>
+            </div>
+            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Új feliratkozó</p>
+              <p className="text-sm font-bold" style={{ color: '#22C55E' }}>+{channelAnalytics.totals.subscribersGained.toLocaleString('hu-HU')}</p>
+            </div>
+            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Elvesztett feliratkozó</p>
+              <p className="text-sm font-bold" style={{ color: '#EF4444' }}>-{channelAnalytics.totals.subscribersLost.toLocaleString('hu-HU')}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading && (
         <div className="card text-center py-12">
@@ -245,6 +394,9 @@ export default function ChannelAuditPage() {
                 </button>
               )}
             </div>
+            {generating && !suggestionsResult && (
+              <LoadingScreen steps={LOADING_STEPS.channelAudit} />
+            )}
             {suggestionsResult?.from_paid_result && (
               <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap mb-3"
                 style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>

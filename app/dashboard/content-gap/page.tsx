@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface ContentGapSuggestion {
   gap_topic: string
@@ -14,6 +16,7 @@ interface ContentGapSuggestion {
 const CONTENT_GAP_COST = 2
 
 export default function ContentGapPage() {
+  const searchParams = useSearchParams()
   const [niche, setNiche] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -21,8 +24,16 @@ export default function ContentGapPage() {
   const [existingCount, setExistingCount] = useState<number>(0)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedTopics, setSavedTopics] = useState<Set<string>>(new Set())
+  const [fromPaidResult, setFromPaidResult] = useState(false)
 
+  // Mentett eredmény visszaállítása: explicit paidResultId a linkből (pl. a
+  // Command Center "Legutóbbi történeted" paneljéről), vagy a sessionStorage-ból.
   useEffect(() => {
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     const saved = sessionStorage.getItem('willviral_content_gap_state')
     if (saved) {
       try {
@@ -33,6 +44,27 @@ export default function ContentGapPage() {
       } catch {}
     }
   }, [])
+
+  async function loadPaidResult(id: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/content-gap?paidResultId=${id}`)
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setError(data.error || 'A mentett eredmény nem található.')
+        return
+      }
+      setNiche(data.niche || '')
+      setGaps(data.gaps || null)
+      setExistingCount(data.existing_video_count || 0)
+      setFromPaidResult(true)
+    } catch {
+      setError('Hiba a mentett eredmény betöltésekor.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function runSearch() {
     if (!niche.trim()) return
@@ -60,6 +92,7 @@ export default function ContentGapPage() {
   async function confirmSearch() {
     setCreditCheck(null)
     setLoading(true)
+    setFromPaidResult(false)
     try {
       const res = await fetch('/api/content-gap', {
         method: 'POST',
@@ -123,8 +156,20 @@ export default function ContentGapPage() {
         </div>
       )}
 
+      {loading && (
+        <div className="card">
+          <LoadingScreen steps={LOADING_STEPS.contentGap} />
+        </div>
+      )}
+
       {gaps && (
         <div>
+          {fromPaidResult && (
+            <div className="rounded-xl px-4 py-3 mb-3" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+              <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>Mentett eredmény betöltve</p>
+              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Nem vontunk le új kreditet.</p>
+            </div>
+          )}
           <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>
             {existingCount} létező videó elemezve · {gaps.length} rés-jelölt találva
           </p>

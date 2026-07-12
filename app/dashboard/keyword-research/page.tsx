@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import { scoreLabel, scoreLabelColor } from '@/lib/score-utils'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface RelatedKeyword {
   keyword: string
@@ -31,14 +33,23 @@ interface KeywordResearchResult {
 const KEYWORD_RESEARCH_COST = 1
 
 export default function KeywordResearchPage() {
+  const searchParams = useSearchParams()
   const [seed, setSeed] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<KeywordResearchResult | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedKeywords, setSavedKeywords] = useState<Set<string>>(new Set())
+  const [fromPaidResult, setFromPaidResult] = useState(false)
 
+  // Mentett eredmény visszaállítása: explicit paidResultId a linkből (pl. a
+  // Command Center "Legutóbbi történeted" paneljéről), vagy a sessionStorage-ból.
   useEffect(() => {
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     const saved = sessionStorage.getItem('willviral_keyword_research_state')
     if (saved) {
       try {
@@ -48,6 +59,26 @@ export default function KeywordResearchPage() {
       } catch {}
     }
   }, [])
+
+  async function loadPaidResult(id: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/keyword-research?paidResultId=${id}`)
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setError(data.error || 'A mentett kutatás nem található.')
+        return
+      }
+      setSeed(data.seed_keyword || '')
+      setResult(data)
+      setFromPaidResult(true)
+    } catch {
+      setError('Hiba a mentett kutatás betöltésekor.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function runSearch(confirmed = false) {
     if (!seed.trim()) return
@@ -78,6 +109,7 @@ export default function KeywordResearchPage() {
     }
 
     setLoading(true)
+    setFromPaidResult(false)
     try {
       const res = await fetch('/api/keyword-research', {
         method: 'POST',
@@ -152,13 +184,19 @@ export default function KeywordResearchPage() {
       )}
 
       {loading && (
-        <div className="card text-center py-12">
-          <div className="inline-block w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3B82F6', borderTopColor: 'transparent' }} />
+        <div className="card">
+          <LoadingScreen steps={LOADING_STEPS.keywordResearch} />
         </div>
       )}
 
       {!loading && result && (
         <div className="space-y-6">
+          {fromPaidResult && (
+            <div className="rounded-xl px-4 py-3" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+              <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>Mentett eredmény betöltve</p>
+              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Nem vontunk le új kreditet.</p>
+            </div>
+          )}
           {result.seed_score && (
             <div className="card">
               <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>ALAP KULCSSZÓ VALÓS ADATA</p>

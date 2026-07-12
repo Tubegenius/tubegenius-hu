@@ -27,7 +27,9 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient()
   const { searchParams } = new URL(request.url)
   const status = searchParams.get('status')
-  const limit = Math.min(Math.max(Number(searchParams.get('limit') || 30), 1), 100)
+  const view = searchParams.get('view')
+  const defaultMax = view === 'calendar' ? 300 : 100
+  const limit = Math.min(Math.max(Number(searchParams.get('limit') || 30), 1), defaultMax)
 
   let query = admin
     .from('video_ideas')
@@ -38,6 +40,14 @@ export async function GET(request: NextRequest) {
 
   if (status && isWorkflowStatus(status)) {
     query = query.eq('workflow_status', status)
+  }
+
+  // A Naptár korabban a "legutobbi 100 frissitett" limitre tamaszkodott, ami
+  // egy regi utemezett tetelt eszrevetlenul kizarhatott, ha kozben 100+ ujabb,
+  // nem-naptar-relevans Video Idea keletkezett. A view=calendar szerver oldali
+  // szures csak a naptar szempontjabol tenylegesen relevans sorokat hozza le.
+  if (view === 'calendar') {
+    query = query.or('calendar_status.eq.scheduled,workflow_status.eq.ready_to_produce,workflow_status.eq.published')
   }
 
   const { data, error } = await query

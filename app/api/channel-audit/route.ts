@@ -3,7 +3,7 @@ import { MODELS } from '@/lib/models'
 import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt } from '@/lib/channel-audit'
+import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt, filterRelevantAudits } from '@/lib/channel-audit'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
@@ -32,8 +32,12 @@ export async function GET(request: NextRequest) {
   const [{ data: audits }, { data: publishedIdeas }, { data: profileRow }] = await Promise.all([
     admin.from('video_audits').select('id, video_title, topic, overall_score, overall_label, final_scores, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
     admin.from('video_ideas').select('updated_at').eq('user_id', userId).eq('workflow_status', 'published'),
-    admin.from('profiles').select('niche').eq('user_id', userId).single(),
+    admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single(),
   ])
+  // A profiles.niche mezo a legtobb aktiv route-nal sosem toltodik ki — a
+  // valos niche-informacio a main_category/specific_focus mezokben el (lasd
+  // lib/niche-relevance.ts shouldUseProfileNiche ugyanezt a mintat koveti).
+  const effectiveNiche = [profileRow?.niche, profileRow?.main_category, profileRow?.specific_focus].filter(Boolean).join(' ')
 
   const auditList = audits || []
   if (auditList.length < MIN_AUDITS_REQUIRED) {
@@ -46,7 +50,12 @@ export async function GET(request: NextRequest) {
 
   const dimensionAverages = computeDimensionAverages(auditList)
   const weakestDimension = dimensionAverages ? findWeakestDimension(dimensionAverages) : null
-  const sorted = [...auditList].sort((a, b) => b.overall_score - a.overall_score)
+  // A "legerosebb/leggyengebb temak" kijelzeshez relevancia-szurt lista kell —
+  // enelkul egy egyszeri teszt/vicc celbol auditalt, teljesen off-niche videó
+  // (pl. zenei klip) is bekerulhet ide es a "kovetkezo 10 video" promptba is.
+  // A dimenzio-atlagok (fent) NEM szurtek, mert azok keszseg-mertekek, nem tema-fuggoek.
+  const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
+  const sorted = [...relevantForTopics].sort((a, b) => b.overall_score - a.overall_score)
   const topStrong = sorted.slice(0, 3).map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
   const topWeak = sorted.slice(-3).reverse().map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
   const publishRhythm = computePublishRhythm(publishedIdeas || [])
@@ -59,7 +68,7 @@ export async function GET(request: NextRequest) {
     top_strong: topStrong,
     top_weak: topWeak,
     publish_rhythm: publishRhythm,
-    niche: profileRow?.niche || '',
+    niche: effectiveNiche,
   })
 }
 
@@ -89,10 +98,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Legalább ${MIN_AUDITS_REQUIRED} Videódiagnózis szükséges ehhez.` }, { status: 400 })
     }
 
-    const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single()
+    // A profiles.niche mezo sosem toltodik ki a legtobb route-nal — a valos
+    // niche-informacio a main_category/specific_focus mezokben el.
+    const effectiveNiche = [profileRow?.niche, profileRow?.main_category, profileRow?.specific_focus].filter(Boolean).join(' ')
     const dimensionAverages = computeDimensionAverages(auditList)
     const weakest = dimensionAverages ? findWeakestDimension(dimensionAverages) : null
-    const sorted = [...auditList].sort((a, b) => b.overall_score - a.overall_score)
+    // Relevancia-szures — lasd GET agban a reszletes magyarazatot: egy off-niche
+    // teszt/vicc audit ne szennyezze a "kovetkezo videok" AI-javaslatot.
+    const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
+    const sorted = [...relevantForTopics].sort((a, b) => b.overall_score - a.overall_score)
     const strongTopics = sorted.slice(0, 3).map(a => a.topic || a.video_title)
     const weakTopics = sorted.slice(-3).map(a => a.topic || a.video_title)
 
@@ -122,7 +137,7 @@ export async function POST(request: NextRequest) {
       weakestDimension: weakest?.label || 'Hook erősség',
       strongTopics,
       weakTopics,
-      niche: profileRow?.niche || '',
+      niche: effectiveNiche,
     })
 
     const aiCall = await callAIProvider({

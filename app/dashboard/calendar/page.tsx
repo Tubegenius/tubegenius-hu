@@ -87,7 +87,7 @@ export default function CalendarPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/video-ideas?limit=100')
+      const res = await fetch('/api/video-ideas?view=calendar')
       const data = await res.json()
       if (!res.ok) {
         setError(data.error || 'A naptár betöltése sikertelen. Próbáld újra később.')

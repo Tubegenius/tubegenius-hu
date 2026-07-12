@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { scoreColor } from '@/lib/score-utils'
 
 interface HistoryTopic {
@@ -55,10 +56,15 @@ export default function TrendFeedHistory() {
               <p className="text-xs font-semibold mb-2" style={{ color: '#94A3B8' }}>{formatDateLabel(s.snapshot_date)}</p>
               <div className="space-y-1.5">
                 {s.topics.slice(0, 3).map(t => (
-                  <div key={t.id} className="flex items-center gap-2">
+                  // A "highlight" parameter a mar meglevo mechanizmust hasznalna, de az
+                  // sessionStorage-bol olvas (willviral_highlight_candidate), ami itt
+                  // sosem lenne beallitva — helyette a snapshot niche-ere mutatunk, amit
+                  // az opportunities oldal mar tud (nicheParam-alapu cache-visszanyitas,
+                  // ugyanaz a minta, mint a "Legutobbi tortened" panelnel).
+                  <Link key={t.id} href={`/dashboard/opportunities?niche=${encodeURIComponent(s.niche || t.title)}`} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
                     <span className="text-xs font-bold w-7 flex-shrink-0" style={{ color: scoreColor(t.opportunity_score) }}>{t.opportunity_score}</span>
-                    <span className="text-xs truncate" style={{ color: '#CBD5E1' }}>{t.title}</span>
-                  </div>
+                    <span className="text-xs truncate underline decoration-dotted" style={{ color: '#CBD5E1' }}>{t.title}</span>
+                  </Link>
                 ))}
               </div>
             </div>

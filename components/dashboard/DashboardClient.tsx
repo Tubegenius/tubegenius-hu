@@ -12,6 +12,7 @@ import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import TrendFeedHistory from '@/components/dashboard/TrendFeedHistory'
 import CreatorIntelligenceSummary from '@/components/dashboard/CreatorIntelligenceSummary'
+import CreatorMemoryPanel from '@/components/dashboard/CreatorMemoryPanel'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 
 function getGreeting(): string {
@@ -942,9 +943,6 @@ function FirstVideoFlow({
 }
 
 function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMemoryItem[]; stats: DashboardStats | null; bestTopic: DashboardOpportunityTopic | null }) {
-  const saved = memoryItems.filter(i => i.state === 'saved').length
-  const inProgress = memoryItems.filter(i => i.state === 'in_progress').length
-  const completed = memoryItems.filter(i => i.state === 'completed').length
   const maxCredits = Math.max(...(stats?.daily_usage.map(d => d.credits) || [1]), 1)
   const bestScore = bestTopic?.opportunity_score || 0
 
@@ -1014,27 +1012,10 @@ function RightPanel({ memoryItems, stats, bestTopic }: { memoryItems: CreatorMem
         </div>
       ) : null}
 
-      {/* Creator Memory */}
+      {/* Creator Memory — insight-jelzésekkel (💡 hasonló téma korábban bejött /
+          ⚠️ hasonló témát már elutasítottál), nem csak a nyers darabszám */}
       <div className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-sm" style={{ color: '#F8FAFC' }}>
-            <i className="ti ti-brain mr-1.5" style={{ color: '#F59E0B' }} />Tartalommemória
-          </h3>
-          <Link href="/dashboard/memory" className="text-xs" style={{ color: '#3B82F6' }}>Összes →</Link>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { label: 'Mentett', count: saved, color: '#3B82F6', icon: 'ti-bookmark' },
-            { label: 'Folyamat', count: inProgress, color: '#F59E0B', icon: 'ti-clock' },
-            { label: 'Kész', count: completed, color: '#22C55E', icon: 'ti-check' },
-          ].map(stat => (
-            <div key={stat.label} className="text-center py-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <i className={`ti ${stat.icon}`} style={{ color: stat.color, fontSize: '16px' }} />
-              <p className="text-xl font-bold mt-1" style={{ color: stat.color }}>{stat.count}</p>
-              <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>{stat.label}</p>
-            </div>
-          ))}
-        </div>
+        <CreatorMemoryPanel items={memoryItems} />
       </div>
 
       {/* Credit Usage Chart */}
@@ -1490,6 +1471,16 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       )}
 
       <CreatorIntelligenceSummary />
+
+      {/* Tartalommemória insight-panel — a korábban sosem bekötött
+          CreatorMemoryPanel most itt jelenik meg élesben (a RightPanel
+          függvény, ahova korábban be volt kötve, sosem került meghívásra
+          a JSX-ben, tehát holt kód volt). */}
+      {memoryItems.length > 0 && (
+        <div className="rounded-2xl p-5 mt-6" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <CreatorMemoryPanel items={memoryItems} />
+        </div>
+      )}
     </div>
   )
 }

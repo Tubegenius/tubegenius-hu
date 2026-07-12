@@ -65,11 +65,17 @@ function isTopicRelevant(text: string, words: string[]): boolean {
   return matchCount / words.length >= requiredRatio
 }
 
+// A fetchYouTubeData() egyetlen keresesi hivassal dolgozik, ennyi a maximalis
+// lehetseges totalResults — a marketScore/competitionLevel log-skalajanak
+// EHHEZ kell kalibralva lennie, nem egy irrealisan nagy (100 000/500 000)
+// feltetelezett webskalahoz, kulonben a sub-score soha nem tud magas erteket adni.
+const MAX_REALISTIC_RESULTS = 40
+
 async function fetchYouTubeData(topic: string, region: string) {
   const regionCode = region === 'HU' ? 'HU' : region === 'US' ? 'US' : 'HU'
   const language = region === 'HU' ? 'hu' : 'en'
 
-  const items = await youtubeSearch(topic, regionCode, language, 180, 40, 'manualTopicSearch')
+  const items = await youtubeSearch(topic, regionCode, language, 180, MAX_REALISTIC_RESULTS, 'manualTopicSearch')
   if (items.length === 0) return null
 
   const words = topicRelevanceWords(topic)
@@ -116,8 +122,13 @@ function calcBackendViralScore(videos: YouTubeVideoStats[], avgViews: number, to
   const velocityScore = calcTrendVelocity(videos)
   // View Outlier — van-e kiugró teljesítményű videó a témában (lehetőség jelzés)
   const outlierScore = calcViewOutlierScore(videos)
-  // Piaci méret — van-e elég tartalom a témában
-  const marketScore = Math.min(100, (Math.log10(totalResults + 1) / Math.log10(100_000)) * 100)
+  // Piaci méret — van-e elég tartalom a témában.
+  // Beta Hardening Test (2026-07-11) kalibrációs hiba: a totalResults a
+  // fetchYouTubeData() egyetlen, MAX_REALISTIC_RESULTS-tal korlátozott
+  // keresésből jön (lásd lent), tehát SOSEM lehet nagyobb annál — a korábbi
+  // 100 000-es nevező miatt a marketScore a leginkább telített témánál is
+  // csak ~32/100-ig jutott, sosem tudott érdemben magas piaci méretet jelezni.
+  const marketScore = Math.min(100, (Math.log10(totalResults + 1) / Math.log10(MAX_REALISTIC_RESULTS + 1)) * 100)
 
   const total = webBuzzScore === null
     ? viewScore * 0.35 + engagementScore * 0.25 + velocityScore * 0.15 + outlierScore * 0.1 + marketScore * 0.15
@@ -409,7 +420,9 @@ export async function POST(request: NextRequest) {
 
     // Trend momentum: Trend Velocity (views/hour) + Freshness kombinációja
     const trendMomentum = calcTrendVelocity(videoStats)
-    const competitionLevel = Math.round(Math.min(100, (Math.log10(totalResults + 1) / Math.log10(500_000)) * 100))
+    // Lasd MAX_REALISTIC_RESULTS megjegyzes — ugyanaz a kalibracios javitas,
+    // mint a marketScore-nal, kulonben ez is sosem tudott 100-hoz kozeli erteket adni.
+    const competitionLevel = Math.round(Math.min(100, (Math.log10(totalResults + 1) / Math.log10(MAX_REALISTIC_RESULTS + 1)) * 100))
 
     // ─── Magyarázható score-bontás — a cél, hogy a Viral Score ne csak egy
     // szám legyen, hanem lássa a creator, MIÉRT ez a szám (lásd Creator OS terv,

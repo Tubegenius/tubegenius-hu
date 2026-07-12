@@ -56,6 +56,42 @@ export const LOADING_STEPS = {
     'Időkódok rendezése...',
     'Exportok készítése...',
   ],
+  titleStudio: [
+    'Téma értelmezése...',
+    'Niche-relevancia ellenőrzése...',
+    'Cím-variációk generálása...',
+    'Magyar nyelvi ellenőrzés...',
+  ],
+  thumbnailStudio: [
+    'Téma értelmezése...',
+    'Vizuális koncepciók tervezése...',
+    'Szöveg-olvashatóság ellenőrzése...',
+  ],
+  seoOptimizer: [
+    'Téma és kulcsszavak elemzése...',
+    'SEO csomag összeállítása...',
+    'Formátum-ellenőrzés...',
+  ],
+  keywordResearch: [
+    'YouTube adatok lekérése...',
+    'Google kapcsolódó keresések...',
+    'Kulcsszó-klaszterek generálása...',
+  ],
+  contentGap: [
+    'Létező videók feltérképezése...',
+    'Keresési igény elemzése...',
+    'Tartalmi rések azonosítása...',
+  ],
+  channelAudit: [
+    'Audit-előzmény összesítése...',
+    'Mintázatok elemzése...',
+    'Videójavaslatok generálása...',
+  ],
+  competitors: [
+    'Csatorna felderítése...',
+    'Legutóbbi videók lekérése...',
+    'Outlier-számítás...',
+  ],
 }
 
 export default function LoadingScreen({ steps, currentStep, message }: LoadingScreenProps) {

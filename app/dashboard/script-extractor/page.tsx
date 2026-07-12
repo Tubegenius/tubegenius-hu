@@ -261,6 +261,18 @@ export default function ScriptExtractorPage() {
             <p className="text-text-primary text-sm leading-relaxed">{result.hook}</p>
           </div>
 
+          {/* Teljes narráció — csak ha van valós transcript, a Struktúra AI-tördelt
+              összefoglalója helyett/mellett a tényleges, folyamatos elhangzott szöveg */}
+          {result.transcript_available && result.raw_transcript && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-2">
+                <p className="section-label">📝 Teljes narráció</p>
+                <CopyButton text={result.raw_transcript} label="📋 Másolás" />
+              </div>
+              <p className="text-text-secondary text-sm leading-relaxed whitespace-pre-wrap">{result.raw_transcript}</p>
+            </div>
+          )}
+
           {/* Struktúra */}
           <div>
             <p className="section-label mb-3">Struktúra</p>

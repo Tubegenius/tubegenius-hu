@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface ThumbnailConcept {
   concept_label: string
@@ -24,14 +26,23 @@ const CLUTTER_LABELS: Record<string, { label: string; color: string }> = {
 }
 
 export default function ThumbnailStudioPage() {
+  const searchParams = useSearchParams()
   const [topic, setTopic] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [concepts, setConcepts] = useState<ThumbnailConcept[] | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedConcepts, setSavedConcepts] = useState<Set<number>>(new Set())
+  const [fromPaidResult, setFromPaidResult] = useState(false)
 
+  // Mentett eredmény visszaállítása: explicit paidResultId a linkből (pl. a
+  // Command Center "Legutóbbi történeted" paneljéről), vagy a sessionStorage-ból.
   useEffect(() => {
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     const saved = sessionStorage.getItem('willviral_thumbnail_studio_state')
     if (saved) {
       try {
@@ -41,6 +52,26 @@ export default function ThumbnailStudioPage() {
       } catch {}
     }
   }, [])
+
+  async function loadPaidResult(id: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/thumbnail-studio?paidResultId=${id}`)
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setError(data.error || 'A mentett eredmény nem található.')
+        return
+      }
+      setTopic(data.topic || '')
+      setConcepts(data.concepts || null)
+      setFromPaidResult(true)
+    } catch {
+      setError('Hiba a mentett eredmény betöltésekor.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function runGenerate() {
     if (!topic.trim()) return
@@ -68,6 +99,7 @@ export default function ThumbnailStudioPage() {
   async function confirmGenerate() {
     setCreditCheck(null)
     setLoading(true)
+    setFromPaidResult(false)
     try {
       const res = await fetch('/api/thumbnail-studio', {
         method: 'POST',
@@ -125,6 +157,19 @@ export default function ThumbnailStudioPage() {
       {error && (
         <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
           <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+        </div>
+      )}
+
+      {loading && (
+        <div className="card">
+          <LoadingScreen steps={LOADING_STEPS.thumbnailStudio} />
+        </div>
+      )}
+
+      {fromPaidResult && concepts && (
+        <div className="rounded-xl px-4 py-3 mb-3" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+          <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>Mentett eredmény betöltve</p>
+          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Nem vontunk le új kreditet.</p>
         </div>
       )}
 

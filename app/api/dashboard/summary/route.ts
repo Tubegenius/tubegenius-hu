@@ -278,10 +278,15 @@ export async function GET() {
         opportunity_engine: '/dashboard/opportunities',
         video_audit: '/dashboard/video-audit',
         video_package: '/dashboard/video-package',
-        content_gap: '/dashboard',
+        content_gap: '/dashboard/content-gap',
         script_extract: '/dashboard/script-extractor',
         transcript_extract: '/dashboard/transcript',
         analyzer: '/dashboard',
+        title_studio: '/dashboard/title-studio',
+        thumbnail_studio: '/dashboard/thumbnail-studio',
+        keyword_research: '/dashboard/keyword-research',
+        channel_audit: '/dashboard/channel-audit',
+        seo_optimizer: '/dashboard/seo-optimizer',
       }
       const toolTypeMap: Record<string, ActivityItem['type']> = {
         viral_score: 'viral_score',
@@ -293,6 +298,11 @@ export async function GET() {
         script_extract: 'script_extract',
         transcript_extract: 'transcript_extract',
         analyzer: 'script_extract',
+        title_studio: 'memory',
+        thumbnail_studio: 'memory',
+        keyword_research: 'memory',
+        channel_audit: 'memory',
+        seo_optimizer: 'memory',
       }
       const labelMap: Record<string, string> = {
         viral_score: 'Viral Score elemzés',
@@ -304,6 +314,11 @@ export async function GET() {
         transcript_extract: 'Auto Transcript',
         content_gap: 'Content Gap',
         analyzer: 'Elemzés',
+        title_studio: 'Title Studio',
+        thumbnail_studio: 'Thumbnail Studio',
+        keyword_research: 'Kulcsszókutató',
+        channel_audit: 'Channel Audit',
+        seo_optimizer: 'SEO Optimalizáló',
       }
       const paidParams = new URLSearchParams({ paidResultId: p.id })
       const inputParam = p.tool_type === 'opportunity_engine' ? 'niche' : 'topic'

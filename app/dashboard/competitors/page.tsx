@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface CompetitorVideo {
   id?: string
@@ -214,6 +215,12 @@ export default function CompetitorsPage() {
       {error && (
         <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
           <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+        </div>
+      )}
+
+      {adding && (
+        <div className="card mb-6">
+          <LoadingScreen steps={LOADING_STEPS.competitors} />
         </div>
       )}
 

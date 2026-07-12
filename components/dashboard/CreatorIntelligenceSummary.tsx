@@ -90,15 +90,27 @@ function clean(value: string) {
   return polishHungarianText(value).replace(/â€”/g, '-').replace(/—/g, '-')
 }
 
-function KpiCard({ icon, color, label, value, sub }: { icon: string; color: string; label: string; value: string | number; sub?: string }) {
-  return (
-    <div className="rounded-xl p-4" style={{ background: `${color}0D`, border: `1px solid ${color}22` }}>
+function KpiCard({ icon, color, label, value, sub, href }: { icon: string; color: string; label: string; value: string | number; sub?: string; href?: string }) {
+  const content = (
+    <>
       <div className="w-9 h-9 rounded-full flex items-center justify-center mb-3" style={{ background: `${color}26` }}>
         <i className={`ti ${icon} text-base`} style={{ color }} />
       </div>
       <div className="text-2xl font-black mb-0.5" style={{ color: '#F8FAFC' }}>{value}</div>
       <div className="text-xs" style={{ color: '#CBD5E1' }}>{clean(label)}</div>
       {sub && <div className="text-xs mt-1" style={{ color: '#64748B' }}>{clean(sub)}</div>}
+    </>
+  )
+  if (href) {
+    return (
+      <Link href={href} className="rounded-xl p-4 block transition-transform hover:-translate-y-0.5" style={{ background: `${color}0D`, border: `1px solid ${color}22` }}>
+        {content}
+      </Link>
+    )
+  }
+  return (
+    <div className="rounded-xl p-4" style={{ background: `${color}0D`, border: `1px solid ${color}22` }}>
+      {content}
     </div>
   )
 }
@@ -170,10 +182,10 @@ export default function CreatorIntelligenceSummary() {
   return (
     <div className="mb-8">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <KpiCard icon="ti-package" color="#EC4899" label="Videócsomagok" value={packages.total} sub={packages.total > 0 ? `${packages.shorts} short · ${packages.long} long` : undefined} />
-        <KpiCard icon="ti-stethoscope" color="#22C55E" label="Auditok" value={audits.total} sub={audits.avg_score != null ? `${audits.avg_score} átlag pontszám` : undefined} />
-        <KpiCard icon="ti-bolt" color="#F59E0B" label="Kredit egyenleg" value={Math.round(credits.balance)} sub={`${Math.round(credits.used_total)} felhasználva összesen`} />
-        <KpiCard icon="ti-brain" color="#3B82F6" label="Mentett témák" value={memoryTotal} sub={`${memory.completed} lezárva`} />
+        <KpiCard icon="ti-package" color="#EC4899" label="Videócsomagok" value={packages.total} sub={packages.total > 0 ? `${packages.shorts} short · ${packages.long} long` : undefined} href="/dashboard/memory?tab=packages" />
+        <KpiCard icon="ti-stethoscope" color="#22C55E" label="Auditok" value={audits.total} sub={audits.avg_score != null ? `${audits.avg_score} átlag pontszám` : undefined} href="/dashboard/memory?tab=audits" />
+        <KpiCard icon="ti-bolt" color="#F59E0B" label="Kredit egyenleg" value={Math.round(credits.balance)} sub={`${Math.round(credits.used_total)} felhasználva összesen`} href="/dashboard/credits" />
+        <KpiCard icon="ti-brain" color="#3B82F6" label="Mentett témák" value={memoryTotal} sub={`${memory.completed} lezárva`} href="/dashboard/memory" />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

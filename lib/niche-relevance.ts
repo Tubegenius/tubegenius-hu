@@ -31,7 +31,7 @@ export function tokenize(s: string): string[] {
   return normalize(s).split(' ').filter(w => w.length > 0 && !RELEVANCE_STOPWORDS.has(w))
 }
 
-function sharedPrefixLength(a: string, b: string): number {
+export function sharedPrefixLength(a: string, b: string): number {
   let i = 0
   while (i < a.length && i < b.length && a[i] === b[i]) i++
   return i

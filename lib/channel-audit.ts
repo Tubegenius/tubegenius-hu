@@ -7,6 +7,37 @@
 // atlagokkal (nem AI-becsles), es csak a "kovetkezo 10 video javaslat"
 // resz hasznal AI-t, azt is a valos aggregalt adatra alapozva.
 
+import { tokenize, sharedPrefixLength } from './niche-relevance'
+
+// Beta Hardening Test utani funkcio-bejaras (2026-07-12): a user egy
+// egyszeri teszt/vicc celbol auditalt, teljesen off-niche videot (pl. egy
+// zenei klip) talalt a "legerosebb temak" listaban, mert a top/bottom 3
+// video_audits sor NULLA relevancia-szures nelkul kerult a kijelzesbe es a
+// "kovetkezo 10 video" promptba. Ez a fuggveny kiszuri azokat az auditokat,
+// amiknek a cime/temaja semennyire nem kapcsolodik a user niche-ehez —
+// CSAK a "legerosebb/leggyengebb TEMAK" es a next-videos AI-javaslat
+// bemenetehez hasznaljuk, a dimenzio-atlagokat (hook/retenció/stb — ezek
+// keszseg-mertekek, nem tema-fuggoek) NEM szurjuk.
+export function filterRelevantAudits<T extends { video_title: string; topic?: string | null }>(
+  audits: T[],
+  niche: string,
+): T[] {
+  const nicheTokens = tokenize(niche || '')
+  if (nicheTokens.length === 0) return audits // nincs niche beallitva — nincs mihez viszonyitani, nem szurunk
+
+  const relevant = audits.filter(a => {
+    const text = `${a.topic || ''} ${a.video_title || ''}`
+    const textTokens = tokenize(text)
+    if (textTokens.length === 0) return false
+    return textTokens.some(t => nicheTokens.some(n => t === n || sharedPrefixLength(t, n) >= 5))
+  })
+
+  // Ha a szures mindent kiszurne (pl. a niche tul specifikus vagy a cimek
+  // szokatlanok), inkabb a szuretlen listat adjuk vissza — jobb tul sokat
+  // mutatni, mint egy teljesen ures "legerosebb temak" szekciot.
+  return relevant.length > 0 ? relevant : audits
+}
+
 export interface DimensionAverages {
   hook_strength: number
   retention_potential: number

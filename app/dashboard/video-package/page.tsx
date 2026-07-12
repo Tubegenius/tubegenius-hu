@@ -9,6 +9,57 @@ import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 // ─── Types ────────────────────────────────────────────────────
+type PlatformChecklist =
+  | {
+      type: 'youtube'
+      title: string
+      description: string
+      tags: string[]
+      category: string
+      language: string
+      captions_note: string
+      comments_setting: string
+      made_for_kids: boolean
+      made_for_kids_reason: string
+      age_restriction: boolean
+      age_restriction_reason: string
+      license: string
+      paid_promotion_disclosure: boolean
+      paid_promotion_disclosure_note: string
+      visibility_schedule_advice: string
+      playlist_suggestion: string
+      end_screens_plan: string | null
+      cards_plan: string | null
+    }
+  | {
+      type: 'tiktok'
+      caption: string
+      hashtags: string[]
+      cover_image_guidance: string
+      sound_note: string
+      privacy_setting: string
+      duet_stitch_comments_settings: string
+      branded_content_disclosure: string
+    }
+  | {
+      type: 'instagram_reels'
+      caption: string
+      hashtags: string[]
+      cover_image: string
+      audio_note: string
+      alt_text: string
+      share_to_feed_toggle: string
+      collab_tag_guidance: string
+      branded_content_disclosure: string
+    }
+  | {
+      type: 'facebook_reels'
+      caption: string
+      cross_post_to_feed: string
+      audience_visibility: string
+      music_note: string
+    }
+
 interface VideoPackageResult {
   topic: string
   platform: string
@@ -32,6 +83,7 @@ interface VideoPackageResult {
   risks?: string[]
   production_checklist?: string[]
   upload_times: { primary: string; secondary: string; reason: string }
+  platform_checklist?: PlatformChecklist | null
   cta: string
   timestamps?: string[]
   sources_used?: { title: string; url: string }[]
@@ -1380,6 +1432,121 @@ export default function VideoPackagePage() {
             <Block title="📌 Kitűzhető komment">
               <p className="text-sm leading-relaxed" style={{ color: '#D1D9E6' }}>{result.pinned_comment}</p>
               <div className="mt-3"><CopyBtn text={result.pinned_comment} label="📋 Komment másolása" /></div>
+            </Block>
+          )}
+
+          {/* Platform-natív feltöltési checklist */}
+          {result.platform_checklist && (
+            <Block title="📤 Platform-natív feltöltési checklist" accent="rgba(59,130,246,0.2)">
+              {result.platform_checklist.type === 'youtube' && (() => {
+                const pc = result.platform_checklist as Extract<PlatformChecklist, { type: 'youtube' }>
+                const rows: [string, string][] = [
+                  ['Cím', pc.title],
+                  ['Kategória', pc.category],
+                  ['Nyelv', pc.language],
+                  ['Feliratok', pc.captions_note],
+                  ['Hozzászólások', pc.comments_setting],
+                  ['Made for kids', pc.made_for_kids ? `Igen — ${pc.made_for_kids_reason}` : `Nem — ${pc.made_for_kids_reason}`],
+                  ['Korhatár', pc.age_restriction ? `Igen — ${pc.age_restriction_reason}` : `Nem — ${pc.age_restriction_reason}`],
+                  ['Licenc', pc.license],
+                  ['Fizetett promóció', pc.paid_promotion_disclosure ? `Igen — ${pc.paid_promotion_disclosure_note}` : pc.paid_promotion_disclosure_note],
+                  ['Láthatóság / ütemezés', pc.visibility_schedule_advice],
+                  ['Lejátszási lista', pc.playlist_suggestion],
+                  ...(pc.end_screens_plan ? [['Végképernyők', pc.end_screens_plan] as [string, string]] : []),
+                  ...(pc.cards_plan ? [['Kártyák', pc.cards_plan] as [string, string]] : []),
+                ]
+                return (
+                  <div className="space-y-2">
+                    {rows.map(([label, value]) => (
+                      <div key={label} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+                        <p className="text-sm" style={{ color: '#F8FAFC' }}>{value}</p>
+                      </div>
+                    ))}
+                    <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>Leírás</p>
+                      <p className="text-sm whitespace-pre-wrap" style={{ color: '#D1D9E6' }}>{pc.description}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {pc.tags.map((tag, i) => (
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#3B82F6' }}>{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+              {result.platform_checklist.type === 'tiktok' && (() => {
+                const pc = result.platform_checklist as Extract<PlatformChecklist, { type: 'tiktok' }>
+                const rows: [string, string][] = [
+                  ['Caption', pc.caption],
+                  ['Borítókép', pc.cover_image_guidance],
+                  ['Hang', pc.sound_note],
+                  ['Láthatóság', pc.privacy_setting],
+                  ['Duet / Stitch / Komment', pc.duet_stitch_comments_settings],
+                  ['Branded content', pc.branded_content_disclosure],
+                ]
+                return (
+                  <div className="space-y-2">
+                    {rows.map(([label, value]) => (
+                      <div key={label} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+                        <p className="text-sm" style={{ color: '#F8FAFC' }}>{value}</p>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap gap-1.5">
+                      {pc.hashtags.map((tag, i) => (
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#3B82F6' }}>{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+              {result.platform_checklist.type === 'instagram_reels' && (() => {
+                const pc = result.platform_checklist as Extract<PlatformChecklist, { type: 'instagram_reels' }>
+                const rows: [string, string][] = [
+                  ['Caption', pc.caption],
+                  ['Borítókép', pc.cover_image],
+                  ['Hang', pc.audio_note],
+                  ['Alt-text', pc.alt_text],
+                  ['Megosztás a Feedre', pc.share_to_feed_toggle],
+                  ['Collab tag', pc.collab_tag_guidance],
+                  ['Branded content', pc.branded_content_disclosure],
+                ]
+                return (
+                  <div className="space-y-2">
+                    {rows.map(([label, value]) => (
+                      <div key={label} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+                        <p className="text-sm" style={{ color: '#F8FAFC' }}>{value}</p>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap gap-1.5">
+                      {pc.hashtags.map((tag, i) => (
+                        <span key={i} className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#3B82F6' }}>{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+              {result.platform_checklist.type === 'facebook_reels' && (() => {
+                const pc = result.platform_checklist as Extract<PlatformChecklist, { type: 'facebook_reels' }>
+                const rows: [string, string][] = [
+                  ['Caption', pc.caption],
+                  ['Keresztposztolás a Feedre', pc.cross_post_to_feed],
+                  ['Közönség / láthatóság', pc.audience_visibility],
+                  ['Zene', pc.music_note],
+                ]
+                return (
+                  <div className="space-y-2">
+                    {rows.map(([label, value]) => (
+                      <div key={label} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>{label}</p>
+                        <p className="text-sm" style={{ color: '#F8FAFC' }}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
             </Block>
           )}
 

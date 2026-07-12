@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface TitleVariation {
   title: string
@@ -37,6 +39,7 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
 }
 
 export default function TitleStudioPage() {
+  const searchParams = useSearchParams()
   const [topic, setTopic] = useState('')
   const [existingTitle, setExistingTitle] = useState('')
   const [loading, setLoading] = useState(false)
@@ -44,11 +47,17 @@ export default function TitleStudioPage() {
   const [variations, setVariations] = useState<TitleVariation[] | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedTitles, setSavedTitles] = useState<Set<string>>(new Set())
+  const [fromPaidResult, setFromPaidResult] = useState(false)
 
-  // Visszaállítás sessionStorage-ból — enélkül egy app-váltás vagy oldal-
-  // remount törölte a React state-et, és a friss generálás eredménye
-  // eltűnt a felületről (a szerveren megvolt, de a UI nem mutatta vissza).
+  // Mentett eredmény visszaállítása: explicit paidResultId a linkből (pl. a
+  // Command Center "Legutóbbi történeted" paneljéről), vagy — ennek hiányában —
+  // a legutóbbi generálás a sessionStorage-ból. Egyik sem von kreditet.
   useEffect(() => {
+    const paidResultId = searchParams.get('paidResultId')
+    if (paidResultId) {
+      loadPaidResult(paidResultId)
+      return
+    }
     const saved = sessionStorage.getItem('willviral_title_studio_state')
     if (saved) {
       try {
@@ -59,6 +68,26 @@ export default function TitleStudioPage() {
       } catch {}
     }
   }, [])
+
+  async function loadPaidResult(id: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/title-studio?paidResultId=${id}`)
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setError(data.error || 'A mentett eredmény nem található.')
+        return
+      }
+      setTopic(data.topic || '')
+      setVariations(data.variations || null)
+      setFromPaidResult(true)
+    } catch {
+      setError('Hiba a mentett eredmény betöltésekor.')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function runGenerate() {
     if (!topic.trim()) return
@@ -86,6 +115,7 @@ export default function TitleStudioPage() {
   async function confirmGenerate() {
     setCreditCheck(null)
     setLoading(true)
+    setFromPaidResult(false)
     try {
       const res = await fetch('/api/title-studio', {
         method: 'POST',
@@ -151,6 +181,19 @@ export default function TitleStudioPage() {
       {error && (
         <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
           <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+        </div>
+      )}
+
+      {loading && (
+        <div className="card">
+          <LoadingScreen steps={LOADING_STEPS.titleStudio} />
+        </div>
+      )}
+
+      {fromPaidResult && variations && (
+        <div className="rounded-xl px-4 py-3 mb-3" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
+          <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>Mentett eredmény betöltve</p>
+          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Nem vontunk le új kreditet.</p>
         </div>
       )}
 
