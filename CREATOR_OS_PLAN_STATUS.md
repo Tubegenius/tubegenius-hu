@@ -59,7 +59,7 @@ A Beta Hardening Test lezárása után a user **funkciónkénti bejárást** ké
 
 **Közepes tételek:**
 - SEO Optimalizáló + Gyártási csomag hashtag/tartalom valós adatra alapozása (`fetchSeedVideoStats`+`fetchKeywordSignals` a Content Gap Finderből újrahasznosítva).
-- Command Center: Versenytársfigyelő ("Competitor Moves" szekció) + Title Studio eredmény megjelenítése a dashboardon.
+- ✅ **KÉSZ (2026-07-13)** ~~Command Center: Versenytársfigyelő ("Competitor Moves" szekció) + Title Studio eredmény megjelenítése a dashboardon.~~ — Title Studio már a 2026-07-12-es körben bekerült a "Legutóbbi történeted" listába; a Versenytársfigyelő új "Versenytársfigyelő — friss kiugró videók" panelt kapott (`components/dashboard/CreatorIntelligenceSummary.tsx`, adat: `app/api/dashboard/summary/route.ts` új `competitor_moves` mezője, `tracked_competitor_videos` ahol `is_outlier=true`). Élőben megerősítve (2.0x, 5.1x kiugró videók). Commitolva: `2f08681`.
 - Versenytársfigyelő: cím/thumbnail-minta elemzés + adaptációs javaslat (AI-értelmező lépés, Channel Audit "következő 10 videó" mintájára).
 - Thumbnail Studio A/B side-by-side összehasonlító nézet.
 - Gyártási csomag zenei aláfestés javaslat (hangulat/műfaj-leírás, NEM konkrét szerzői jogvédett cím).
