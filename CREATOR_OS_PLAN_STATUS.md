@@ -29,6 +29,8 @@ A user egy részletes, két részes specifikációt adott: (A) a Channel Audit o
 
 **Nem épült be, tudatosan (a user "minimal migration, no duplication" elve alapján)**: a spec listázott heavy derived-analysis mezőket (strongest_topics/weak_topics/title_patterns/thumbnail_patterns/outlier_videos) `profiles`-ra perzisztálva — a Channel Audit/Competitor Tracker már élőben számolja ezeket, felesleges duplikáció lett volna. A spec "2 kredites mélyebb niche-stratégia" tier-je sincs implementálva — csak az ingyenes első-futás + 1-kredites újraelemzés.
 
+**Utólag talált + javított hiba (user élőben jelezte, commit `c2febf2`)**: a `primary_profile` mód a gyakorlatban sosem vezette le ténylegesen a csatorna niche-ét — csak a `niche_discovery` mód épített valós csatorna→niche felismerést, a `primary_profile` csak beállította a flag-et, a `main_category`/`specific_focus` változatlanul a régi kézi értéken (a user esetében "Ai, és orvostudomány") maradt, miközben a Videólehetőségek oldal ezt mutatta niche-ként a Mr.MexBrain csatorna valós (true crime/tech/hírek) tartalma helyett. Javítva: `app/api/profile/route.ts` POST handlere `primary_profile` módban, ha a csatornához még sosem történt levezetés (`detected_niche_candidates` üres), lefuttatja a meglévő `discoverChannelNiches()`-t és a legmagasabb konfidenciájú javaslatot automatikusan alkalmazza — csak egyszer csatornánként, utána a kézi szerkesztés megmarad. Élőben megerősítve: mentés után a niche "Futurisztikus orvosi és biotechnológiai felfedezések"-re váltott (75% konfidencia).
+
 ---
 
 ## 2026-07-12 — FUNKCIÓ-BEJÁRÁS + JAVÍTÁSOK (folyamatban, context-limit miatt új chatben folytatódik)
