@@ -907,6 +907,11 @@ export default function OpportunitiesPage() {
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [highlightTopic, setHighlightTopic] = useState<ExtendedTopic | null>(null)
   const [niche, setNiche] = useState('')
+  const [searchMode, setSearchMode] = useState<'niche_based' | 'specific_topic' | 'discovery_random'>('niche_based')
+  const [discoveryGoal, setDiscoveryGoal] = useState('')
+  const [useChannelSignals, setUseChannelSignals] = useState(true)
+  const [searchDirections, setSearchDirections] = useState<string[]>([])
+  const [showSearchDirections, setShowSearchDirections] = useState(false)
   const [loading, setLoading] = useState(false)
   const [topics, setTopics] = useState<ExtendedTopic[]>([])
   const [poolTopics, setPoolTopics] = useState<ExtendedTopic[]>([])
@@ -1054,7 +1059,9 @@ export default function OpportunitiesPage() {
   async function generate(p?: CreatorProfile, options?: { discoveryMode?: 'drilldown'; parentNiche?: string; skipCache?: boolean; confirmed?: boolean }) {
     const prof = p || profile
     const nicheToUse = p?.niche || niche
-    if (!nicheToUse.trim()) return
+    // discovery_random módban nem kötelező a szöveges input — a szerver a
+    // profil/csatorna-jelekből választ kiindulási irányt.
+    if (searchMode !== 'discovery_random' && !nicheToUse.trim()) return
 
     setLoading(true)
     setError(null)
@@ -1064,9 +1071,15 @@ export default function OpportunitiesPage() {
       const res = await fetch('/api/opportunity', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          niche: nicheToUse, platform: prof?.platform || 'youtube',
+          search_mode: searchMode,
+          niche: searchMode === 'specific_topic' ? undefined : nicheToUse,
+          topic: searchMode === 'specific_topic' ? nicheToUse : undefined,
+          avoid_topics: searchMode === 'discovery_random' ? (discoveryGoal || undefined) : undefined,
+          use_channel_signals: searchMode === 'discovery_random' ? useChannelSignals : undefined,
+          platform: prof?.platform || 'youtube',
           language: prof?.language || 'hu', region: prof?.region || 'HU',
           creator_level: prof?.creator_level || 'growing',
+          channel_usage_mode: prof?.channel_usage_mode,
           discovery_mode: options?.discoveryMode,
           parent_niche: options?.parentNiche,
           // A user már jóváhagyta a levonást a CreditConfirmModalban — csak ekkor
@@ -1077,6 +1090,7 @@ export default function OpportunitiesPage() {
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
+      setSearchDirections(Array.isArray(data.search_directions) ? data.search_directions : [])
 
       // Van elég kredit, de a user MÉG NEM erősítette meg — mutassuk a modalt,
       // ne induljon el semmi kreditlevonás felugró jóváhagyás nélkül.
@@ -1250,13 +1264,52 @@ export default function OpportunitiesPage() {
       )}
 
       <div className="card mb-6">
-        <div className="flex gap-3">
-          <input value={niche} onChange={e => setNiche(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerateWithCreditCheck()}
-            placeholder="pl. egészség, tech, pénzügy, sport..." className="input flex-1" />
-          <button onClick={() => handleGenerateWithCreditCheck()} disabled={loading || !niche.trim()} className="btn-primary px-6 whitespace-nowrap">
-            {loading ? 'Keresés...' : 'Témák keresése'}
-          </button>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+          {([
+            { value: 'niche_based' as const, label: 'Niche alapján keresek', desc: 'A WillViral a profilod vagy megadott niche-ed alapján keres validált videólehetőségeket.' },
+            { value: 'specific_topic' as const, label: 'Konkrét témát ellenőrzök', desc: 'Megnézzük, hogy egy adott téma mögött van-e elég YouTube- és webes bizonyíték.' },
+            { value: 'discovery_random' as const, label: 'Új ötleteket kérek', desc: 'A WillViral új témákat javasol a profilod, csatornaadataid és trendjelek alapján.' },
+          ]).map(mode => (
+            <button key={mode.value} type="button" onClick={() => setSearchMode(mode.value)}
+              className="text-left p-3 rounded-xl transition-all"
+              style={searchMode === mode.value
+                ? { background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.4)' }
+                : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <div className="text-sm font-semibold text-text-primary">{mode.label}</div>
+              <div className="text-xs text-text-muted mt-0.5">{mode.desc}</div>
+            </button>
+          ))}
         </div>
+
+        {searchMode !== 'discovery_random' && (
+          <div className="flex gap-3">
+            <input value={niche} onChange={e => setNiche(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleGenerateWithCreditCheck()}
+              placeholder={searchMode === 'specific_topic' ? 'pl. AI-alapú rákdiagnózis, otthoni edzés kezdőknek...' : 'pl. egészség, tech, pénzügy, sport...'}
+              className="input flex-1" />
+            <button onClick={() => handleGenerateWithCreditCheck()} disabled={loading || !niche.trim()} className="btn-primary px-6 whitespace-nowrap">
+              {loading ? 'Keresés...' : searchMode === 'specific_topic' ? 'Konkrét téma ellenőrzése' : 'Videólehetőségek keresése a niche alapján'}
+            </button>
+          </div>
+        )}
+
+        {searchMode === 'discovery_random' && (
+          <div className="space-y-3">
+            <div className="flex gap-3">
+              <input value={discoveryGoal} onChange={e => setDiscoveryGoal(e.target.value)}
+                placeholder="Opcionális: mit szeretnél elkerülni vagy milyen célod van? (pl. ne legyen politika)"
+                className="input flex-1" />
+              <button onClick={() => handleGenerateWithCreditCheck()} disabled={loading} className="btn-primary px-6 whitespace-nowrap">
+                {loading ? 'Keresés...' : 'Új ötleteket kérek'}
+              </button>
+            </div>
+            {profile?.channel_connection_type && (
+              <label className="flex items-center gap-2 text-xs text-text-muted">
+                <input type="checkbox" checked={useChannelSignals} onChange={e => setUseChannelSignals(e.target.checked)} />
+                Csatornajelek használata (a felismert niche-jelöltjeid alapján is javasoljon)
+              </label>
+            )}
+          </div>
+        )}
         {cached && (
           <div className="flex items-center justify-between mt-2">
             <p className="text-text-muted text-xs flex items-center gap-1">
@@ -1274,6 +1327,27 @@ export default function OpportunitiesPage() {
           </div>
         )}
       </div>
+
+      {searchDirections.length > 0 && searchMode !== 'specific_topic' && (
+        <div className="mb-6 rounded-2xl p-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <button onClick={() => setShowSearchDirections(!showSearchDirections)} className="w-full flex items-center justify-between">
+            <span className="text-sm font-semibold flex items-center gap-2 text-text-primary">
+              <i className="ti ti-route" style={{ color: '#94A3B8' }} />
+              Vizsgált keresési irányok ({searchDirections.length})
+            </span>
+            <i className={`ti ${showSearchDirections ? 'ti-chevron-up' : 'ti-chevron-down'}`} style={{ color: '#64748B' }} />
+          </button>
+          {showSearchDirections && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {searchDirections.map((direction, i) => (
+                <span key={i} className="text-xs px-2.5 py-1 rounded-full" style={{ background: 'rgba(59,130,246,0.08)', color: '#93C5FD' }}>
+                  {direction}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="bg-rose/10 border border-rose/20 rounded-xl px-5 py-4 text-rose text-sm mb-6">{error}</div>

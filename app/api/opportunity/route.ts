@@ -10,10 +10,10 @@ import {
   getSerperHealthStatus,
   type TrendCandidate,
 } from '@/lib/trend-radar'
-import { generateSeedsForNiche } from '@/lib/seed-generator'
 import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion, recommendedFormatForExpansion, hookPatternForExpansion } from '@/lib/topic-expansion'
-import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection } from '@/lib/broad-niche-discovery'
-import type { OpportunityTopic } from '@/types'
+import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection, type BroadDiscoveryPack } from '@/lib/broad-niche-discovery'
+import { buildNicheExpansion } from '@/lib/niche-expansion'
+import type { OpportunityTopic, OpportunitySearchMode } from '@/types'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
@@ -30,85 +30,11 @@ import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizeP
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // ── Fallback topic builders (research lanes, broad discovery) ────
+// A korabbi RESEARCH_LANE_MAP/decomposeNicheToLanes ~13 hardcode-olt
+// kategoriaval dolgozott — helyette a Niche Expansion Engine (lib/niche-expansion.ts)
+// adja a "kutatasi irany" cimkeket es kulcsszavakat, barmilyen niche-re dinamikusan.
 
-const RESEARCH_LANE_MAP: Record<string, Array<{ title: string; description: string; keyword: string }>> = {
-  'tudomany': [
-    { title: 'Friss tudományos felfedezések', description: 'Új kutatások és tudományos áttörések, amelyekből magyarázó vagy figyelemfelkeltő videók készülhetnek.', keyword: 'new science discovery explained' },
-    { title: 'AI és technológiai áttörések', description: 'Mesterséges intelligencia és technológiai újdonságok, amelyek világszerte hatást gyakorolnak.', keyword: 'AI breakthrough technology new' },
-  ],
-  'erdekesseg': [
-    { title: 'Furcsa emberi test jelenségek', description: 'Meglepő, tudományosan magyarázható testi jelenségek erős kíváncsiság-hookhoz.', keyword: 'weird human body facts science' },
-    { title: 'Tudományosan magyarázható furcsaságok', description: 'Hétköznapi jelenségek mögötti meglepő tudományos magyarázatok.', keyword: 'science explains everyday mystery' },
-  ],
-  'hir': [
-    { title: 'Aktuális világhírek magyarázattal', description: 'Friss hírek és események, amelyeket értelmező videóban fel lehet dolgozni.', keyword: 'latest world news explained' },
-    { title: 'Magyar vonatkozású nemzetközi hírek', description: 'Nemzetközi események magyar perspektívából, amelyek relevánsak a magyar közönségnek.', keyword: 'hungary international news' },
-  ],
-  'egeszseg': [
-    { title: 'Friss egészségügyi felfedezések', description: 'Új kutatások, orvosi hírek és egészségügyi áttörések, amelyekből magyarázó videó készülhet.', keyword: 'new health discovery research' },
-    { title: 'Alvás, táplálkozás és életmód kutatások', description: 'Friss tudományos eredmények a hétköznapi egészség témakörében.', keyword: 'sleep nutrition research new study' },
-  ],
-  'pszichologia': [
-    { title: 'Pszichológiai kísérletek és viselkedés', description: 'Emberi döntések, észlelési hibák, agyi jelenségek és társas viselkedés.', keyword: 'psychology experiment behavior' },
-  ],
-  'ur': [
-    { title: 'Űrkutatás és kozmikus jelenségek', description: 'Friss űrhírek, égitestek, NASA/ESA fejlemények és látványos magyarázható témák.', keyword: 'space discovery NASA new' },
-  ],
-  'tortenelem': [
-    { title: 'Rejtélyes történelmi események', description: 'Meglepő történelmi tények és felfedezések, amelyek erős sztorielemeket tartalmaznak.', keyword: 'mysterious history discovery' },
-  ],
-  'sport': [
-    { title: 'Sportesemények és meglepetések', description: 'Aktuális sportesemények, meglepő eredmények és sportolói sztorik.', keyword: 'sports news surprise event' },
-  ],
-  'tech': [
-    { title: 'Új technológiák és gadgetek', description: 'Friss tech termékek, appok és innovációk, amelyek érdeklik a közönséget.', keyword: 'new technology gadget innovation' },
-  ],
-  'motivacio': [
-    { title: 'Önfejlesztés és motiváció', description: 'Hatékony szokások, sikersztorik és tudományosan alátámasztott fejlődési stratégiák.', keyword: 'self improvement motivation habits' },
-  ],
-  'gasztro': [
-    { title: 'Receptek és konyhai trendek', description: 'Virális receptek, konyhai tippek és étkezési trendek.', keyword: 'viral recipe cooking trend' },
-  ],
-  'film': [
-    { title: 'Filmek és sorozatok elemzése', description: 'Új megjelenések, rejtett részletek és filmelméletek.', keyword: 'movie review explained new' },
-  ],
-  'gaming': [
-    { title: 'Játékmegjelenések és gaming hírek', description: 'Új játékok, frissítések és gaming közösségi trendek.', keyword: 'new game release gaming news' },
-  ],
-}
-
-function decomposeNicheToLanes(niche: string): Array<{ title: string; description: string; keyword: string; category: string }> {
-  const categories = niche.split(/[,;\/]+/).map(s => s.trim().toLowerCase()).filter(s => s.length > 1)
-  const lanes: Array<{ title: string; description: string; keyword: string; category: string }> = []
-
-  for (const cat of categories) {
-    const normalized = cat.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9\s]/g, '').trim()
-    let matched = false
-    for (const [key, entries] of Object.entries(RESEARCH_LANE_MAP)) {
-      if (normalized.includes(key) || key.includes(normalized.slice(0, 5))) {
-        for (const entry of entries) {
-          if (!lanes.some(l => l.title === entry.title)) {
-            lanes.push({ ...entry, category: cat })
-          }
-        }
-        matched = true
-        break
-      }
-    }
-    if (!matched) {
-      lanes.push({
-        title: `${cat.charAt(0).toUpperCase() + cat.slice(1)} — friss temak`,
-        description: `Aktualis ${cat} temak es trendek, amelyekbol videoterv keszulhet.`,
-        keyword: cat,
-        category: cat,
-      })
-    }
-  }
-
-  return lanes.slice(0, 8)
-}
-
-function buildResearchFallbackTopics(params: {
+async function buildResearchFallbackTopics(params: {
   niche: string
   platform?: string
   effectiveRegion: 'HU' | 'US'
@@ -119,10 +45,12 @@ function buildResearchFallbackTopics(params: {
   const now = new Date().toISOString()
   const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
 
-  const lanes = decomposeNicheToLanes(niche)
-  const ideas = lanes.length > 0 ? lanes : [{ title: `${niche} — kutatasi irany`, description: 'A niche-hez most nem talaltunk eleg friss trendet. Keress konkretabb temat.', keyword: niche, category }]
+  const expansion = await buildNicheExpansion({ niche, region: effectiveRegion, language: effectiveRegion === 'HU' ? 'hu' : 'en' })
+  const lanes = expansion.packs.length > 0
+    ? expansion.packs.map(pack => ({ title: pack.label, description: `Kereshető tartalomirány a(z) "${niche}" niche-en belül: ${pack.seeds.slice(0, 3).join(', ')}.`, keyword: pack.seeds[0] || pack.label, category }))
+    : [{ title: `${niche} — kutatasi irany`, description: 'A niche-hez most nem talaltunk eleg friss trendet. Keress konkretabb temat.', keyword: niche, category }]
 
-  return ideas.map((lane, index) => ({
+  return lanes.map((lane, index) => ({
     id: 'research-' + lane.category + '-' + index + '-' + Date.now(),
     title: lane.title,
     description: lane.description,
@@ -167,7 +95,7 @@ function buildBroadDiscoveryFallbackTopics(params: {
   niche: string
   platform?: string
   effectiveRegion: 'HU' | 'US'
-  packs: ReturnType<typeof buildBroadNicheDiscoveryPacks>
+  packs: BroadDiscoveryPack[]
   existingTitles?: string[]
 }): Array<OpportunityTopic & { needs_explanation?: boolean }> {
   const { niche, platform, effectiveRegion, packs, existingTitles = [] } = params
@@ -225,11 +153,69 @@ function buildBroadDiscoveryFallbackTopics(params: {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const niche = (body.niche || '').replace(/[,;\s]+$/, '').trim()
-    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles, main_category, specific_focus, audience, avoid_topics, paidResultId, paid_result_id } = body
+    const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles, main_category: bodyMainCategory, specific_focus: bodySpecificFocus, audience, avoid_topics, paidResultId, paid_result_id, topic, use_channel_signals, channel_usage_mode: bodyChannelUsageMode } = body
+    const searchMode: OpportunitySearchMode | undefined = ['niche_based', 'specific_topic', 'discovery_random'].includes(body.search_mode) ? body.search_mode : undefined
     const excludeTitles: string[] = Array.isArray(exclude_titles)
       ? exclude_titles.map((t: string) => String(t).toLowerCase().trim()).filter(Boolean)
       : []
+
+    const supabase = createServerSupabaseClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const admin = createAdminClient()
+    const effectiveRegion: 'HU' | 'US' = region === 'HU' ? 'HU' : 'US'
+
+    // ── search_mode ág-szétválasztás ──────────────────────────────
+    // niche_based: a `niche` STRATEGIAI IRANY, sose direkt query — lent a
+    // Niche Expansion Engine bontja fel. specific_topic: a `topic` mar
+    // kozvetlen validacios query lehet, a profil niche-e NEM torzithatja
+    // el (a `niche` valtozo itt szandekosan magat a topicot kapja, igy a
+    // lejjebbi kod — evaluateCandidate niche-fit scoring is — mar
+    // automatikusan a topicra, nem a profil niche-ere hivatkozik).
+    // discovery_random: nincs kotelezo user-inputolt niche/topic — a
+    // creator profil/csatorna-jelekbol szarmaztatunk egy kiindulasi niche-t.
+    let niche = (body.niche || '').replace(/[,;\s]+$/, '').trim()
+    let main_category = bodyMainCategory
+    let specific_focus = bodySpecificFocus
+    let channelUsageMode: string | null = bodyChannelUsageMode || null
+
+    if (searchMode === 'specific_topic') {
+      const specificTopic = (topic || specific_focus || '').trim()
+      if (!specificTopic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+      niche = specificTopic
+      specific_focus = specificTopic
+    } else if (searchMode === 'discovery_random') {
+      const { data: profileRow } = await admin
+        .from('profiles')
+        .select('main_category, specific_focus, niche, channel_usage_mode, detected_niche_candidates, selected_main_niche')
+        .eq('user_id', user.id)
+        .single()
+      channelUsageMode = profileRow?.channel_usage_mode || null
+      const candidates = Array.isArray(profileRow?.detected_niche_candidates) ? profileRow.detected_niche_candidates : []
+
+      if (use_channel_signals && channelUsageMode === 'niche_discovery' && candidates.length > 0) {
+        main_category = candidates[0].main_category
+        specific_focus = candidates[0].specific_focus
+        niche = candidates[0].specific_focus
+      } else if (channelUsageMode === 'primary_profile' || channelUsageMode === 'manual' || !channelUsageMode) {
+        // stats_only eseten (vagy ha nincs semmilyen mod) SEM kenyszeritunk
+        // csatorna-niche-t — ilyenkor is a profil kezi/altalanos mezoire esunk
+        // vissza, sose a csatorna teljesitmenyjeleire (ld. spec: stats_only
+        // ne kenyszeritsen niche-t).
+        main_category = profileRow?.main_category
+        specific_focus = profileRow?.specific_focus
+        niche = profileRow?.specific_focus || profileRow?.niche || ''
+      }
+
+      if (!niche) {
+        // Nincs semmilyen profil/csatorna-jel — meg mindig NEM vak random:
+        // egy minimalis, temaira-fuggetlen "inspiralj" iranyt adunk a Niche
+        // Expansion Engine-nek, ami utana ugyanugy validalja az eredmenyt.
+        niche = avoid_topics ? `friss videóötletek, kerülve: ${avoid_topics}` : 'friss, validált videóötletek'
+      }
+    }
+
     if (!niche) return NextResponse.json({ error: 'Niche megadása kötelező' }, { status: 400 })
 
     // Strukturált search context logolása (lib/search/search-context.ts) — a niche
@@ -247,24 +233,23 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const supabase = createServerSupabaseClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
-
-    const admin = createAdminClient()
-
-    const effectiveRegion: 'HU' | 'US' = region === 'HU' ? 'HU' : 'US'
     const isDrilldown = discovery_mode === 'drilldown'
     // Ha a niche a strukturált, validált "specifikus fókusz" mezőből jön
     // (lib/search/validate-focus.ts már ellenőrizte), ne találgassa újra a
     // szándékot a detectNicheIntent() törékeny heurisztikája (pl. "nincs
     // nagybetűs entitás a szövegben" tévesen broad_niche-nek jelölt rövid,
-    // teljesen valid magyar fókuszmondatokat).
+    // teljesen valid magyar fókuszmondatokat). Explicit search_mode mindig
+    // felulirja a heurisztikat (backward-compat: ha nincs search_mode, a
+    // regi heurisztika dont, pl. a Command Center meglevo deep-linkjeinél).
     const isFromStructuredFocus = Boolean(specific_focus) && specific_focus.trim() === niche
     const isValidatedFocus = isFromStructuredFocus && validateSpecificFocus(niche).status === 'ok'
-    const nicheIntent = isDrilldown || isValidatedFocus ? 'specific_topic' : detectNicheIntent(niche)
-    const broadDiscoveryPacks = !isDrilldown && nicheIntent === 'broad_niche'
-      ? buildBroadNicheDiscoveryPacks(niche, effectiveRegion)
+    const nicheIntent = searchMode === 'specific_topic'
+      ? 'specific_topic'
+      : searchMode === 'niche_based' || searchMode === 'discovery_random'
+        ? (isDrilldown ? 'specific_topic' : detectNicheIntent(niche))
+        : (isDrilldown || isValidatedFocus ? 'specific_topic' : detectNicheIntent(niche))
+    const broadDiscoveryPacks = !isDrilldown && nicheIntent === 'broad_niche' && searchMode !== 'specific_topic'
+      ? await buildBroadNicheDiscoveryPacks(niche, effectiveRegion)
       : []
 
     const paidNormalizedInput = normalizePaidResultInput({
@@ -443,11 +428,38 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── 2. Seed generation ───────────────────────────────────
+    // ── 2. Seed generation — Niche Expansion Engine ───────────
+    // A niche STRATEGIAI IRANY, sose direkt kereso-query. A dinamikus
+    // (AI-alapu) es a szabaly-alapu (a user sajat szoveget sablonozo,
+    // hardcode-mentes) reteg egyutt adja a "szabaly + AI hibrid" seed
+    // generaciot — lasd lib/niche-expansion.ts. broad_niche eseten korabban
+    // az AI-motor SOSE futott le, csak a (most mar hardcode-mentes, de
+    // gyengebb) szabaly-alapu expanzio — ez most mindket intent-re fut.
     const expansion = expandTopicQueries(niche, effectiveRegion, {
       creatorStyle: creator_level || '',
       maxQueries: isDrilldown ? 8 : 12,
     })
+
+    const isSpecificTopicMode = searchMode === 'specific_topic'
+    const nicheExpansion = isDrilldown
+      ? null
+      : await buildNicheExpansion({
+          niche,
+          main_category,
+          specific_focus,
+          platform,
+          region: effectiveRegion,
+          language: language || 'hu',
+          creator_profile: { audience, avoid_topics },
+          channel_usage_mode: channelUsageMode,
+          // specific_topic modban a topic mar kozel-direkt validacios query —
+          // csak annyi kiegeszito seedet kerunk, ami a YouTube-kereseshez
+          // szukseges robusztussagot adja (a nyers Serper-cimsor tul hosszu
+          // ehhez, ld. lib/trend-radar.ts megjegyzese), NEM nagy niche expanziot.
+          maxValidationSeeds: isSpecificTopicMode ? 3 : 12,
+        })
+
+    const rejectedSeedTopics = nicheExpansion?.rejected_seed_topics || []
 
     const generatedSeeds = isDrilldown
       ? (() => {
@@ -458,20 +470,29 @@ export async function POST(request: NextRequest) {
             category: drilldown.category,
           }
         })()
-      : nicheIntent === 'broad_niche' && broadDiscoveryPacks.length > 0
-        ? {
-            seeds: expansion.queries.map(q => q.query).slice(0, 8),
-            freshness_window_days: 180,
-            category: expansion.category,
-          }
-        : await generateSeedsForNiche(niche, effectiveRegion, 5)
+      : {
+          seeds: isSpecificTopicMode
+            ? [...new Set([niche, ...(nicheExpansion?.validation_seeds || [])])].slice(0, 4)
+            : [...new Set([...(nicheExpansion?.validation_seeds || []), ...expansion.queries.map(q => q.query)])].slice(0, 12),
+          freshness_window_days: nicheExpansion?.freshness_window_days || 120,
+          category: nicheExpansion?.category || expansion.category,
+        }
 
-    const seeds = nicheIntent === 'specific_topic' && !isDrilldown
-      ? [...new Set([...expansion.queries.map(q => q.query), ...generatedSeeds.seeds])].slice(0, 12)
-      : generatedSeeds.seeds
+    const seeds = generatedSeeds.seeds
     const { freshness_window_days, category } = generatedSeeds
 
-    console.log(`[Opportunity] Niche: "${niche}" | Intent: ${nicheIntent} | Seeds: ${seeds.join(', ')} | Freshness: ${freshness_window_days}d | Category: ${category}`)
+    console.log('[Opportunity] Query generation:', {
+      search_mode: searchMode || `heuristic:${nicheIntent}`,
+      original_niche: niche,
+      original_topic: isSpecificTopicMode ? topic || specific_focus || null : null,
+      generated_seed_topics: nicheExpansion?.seeds || [],
+      rejected_seed_topics: rejectedSeedTopics,
+      validation_queries: seeds,
+      language: language || 'hu',
+      region: effectiveRegion,
+      platform: platform || 'youtube',
+      niche_expansion_source: nicheExpansion?.source || (isDrilldown ? 'drilldown' : 'n/a'),
+    })
 
     // ── 3. Trend Radar ───────────────────────────────────────
     const trendCacheKey = buildTrendCacheKey({
@@ -553,10 +574,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    console.log('[Opportunity] Validation result:', {
+      search_mode: searchMode || `heuristic:${nicheIntent}`,
+      original_niche: niche,
+      youtube_results_count: trendCandidates.reduce((sum, c) => sum + (c.youtube_relevant_videos_count || 0), 0),
+      serper_results_count: trendCandidates.reduce((sum, c) => sum + (c.serper_evidence_count || 0), 0),
+      final_validated_topics: trendCandidates.length,
+    })
+
     if (trendCandidates.length === 0) {
       const fallbackTopics = broadDiscoveryPacks.length > 0
         ? buildBroadDiscoveryFallbackTopics({ niche, platform, effectiveRegion, packs: broadDiscoveryPacks })
-        : buildResearchFallbackTopics({ niche, platform, effectiveRegion, seeds, category })
+        : await buildResearchFallbackTopics({ niche, platform, effectiveRegion, seeds, category })
 
       // Ha a Serper web-evidence forrás teljesen elérhetetlen volt (pl. elfogyott
       // kredit, API hiba), ne "túl tág niche"-t írjunk — az félrevezető. Ez nem a
@@ -627,10 +656,23 @@ export async function POST(request: NextRequest) {
       return true
     })
 
+    const rejectedCandidateLog: { candidate_topic: string; reason: string }[] = []
     const evaluated: ViralCandidate[] = filteredCandidates
-      .map(c => evaluateCandidate(c, niche, expansion))
+      .map(c => {
+        const vc = evaluateCandidate(c, niche, expansion)
+        if (!vc) {
+          rejectedCandidateLog.push({ candidate_topic: c.candidate_topic, reason: 'no_web_or_video_sources' })
+        } else if (!vc.decision.user_facing) {
+          rejectedCandidateLog.push({ candidate_topic: c.candidate_topic, reason: vc.decision.final_decision })
+        }
+        return vc
+      })
       .filter((vc): vc is ViralCandidate => vc !== null && vc.decision.user_facing)
       .sort((a, b) => b.scores.total - a.scores.total)
+
+    if (rejectedCandidateLog.length > 0) {
+      console.log('[Opportunity] Rejected candidates:', rejectedCandidateLog)
+    }
 
     const VISIBLE_COUNT = isDrilldown ? 6 : nicheIntent === 'broad_niche' ? 8 : 4
     const visibleCandidates = evaluated.slice(0, VISIBLE_COUNT)
@@ -851,6 +893,8 @@ KRITIKUS JSON SZABÁLYOK:
       message: force_refresh && validCount === 0
         ? 'Most nem találtunk elég erős új témát. Kreditet nem vontunk le.'
         : messageText,
+      search_mode: searchMode || null,
+      search_directions: broadDiscoveryPacks.length > 0 ? [...new Set(broadDiscoveryPacks.flatMap(pack => pack.seeds))] : seeds,
       trend_summary: {
         category,
         freshness_window_days,

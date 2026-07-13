@@ -1,5 +1,5 @@
 import type { NicheCategory } from './niche-seeds'
-import { expandTopicQueries } from './topic-expansion'
+import { buildNicheExpansion } from './niche-expansion'
 
 export type NicheIntent = 'specific_topic' | 'broad_niche'
 
@@ -92,83 +92,6 @@ export function detectNicheIntent(niche: string): NicheIntent {
   return 'specific_topic'
 }
 
-const NICHE_DISCOVERY_MAP: Record<string, BroadDiscoveryPack[]> = {}
-
-function buildFactDiscoveryPacks(searchRegion: 'HU' | 'US'): BroadDiscoveryPack[] {
-  return [
-    {
-      label: 'Friss tudományos felfedezések, amelyek átírhatnak egy hétköznapi tévhitet',
-      category: 'science_medical',
-      freshnessWindowDays: 180,
-      searchRegion,
-      seeds: ['new science discovery changes what we know explained', 'recent study surprising finding explained', 'science breakthrough everyday life explained'],
-    },
-    {
-      label: 'Emberi test: furcsa működések, amelyekre most ad magyarázatot a kutatás',
-      category: 'science_medical',
-      freshnessWindowDays: 180,
-      searchRegion,
-      seeds: ['weird human body facts new research explained', 'human body mystery explained by science', 'new study human body surprising finding'],
-    },
-    {
-      label: 'Agy és memória: meglepő pszichológiai kísérletek és új eredmények',
-      category: 'psychology',
-      freshnessWindowDays: 180,
-      searchRegion,
-      seeds: ['memory psychology new study explained', 'brain science surprising experiment explained', 'psychology study changes how we think'],
-    },
-    {
-      label: 'Alvás, álmok és döntések: friss kutatások hétköznapi következményekkel',
-      category: 'psychology',
-      freshnessWindowDays: 180,
-      searchRegion,
-      seeds: ['sleep science new study explained', 'dream research surprising findings explained', 'sleep affects decision making study'],
-    },
-    {
-      label: 'Régészeti felfedezések, amelyek megváltoztatnak egy történelmi sztorit',
-      category: 'history_strange',
-      freshnessWindowDays: 365,
-      searchRegion,
-      seeds: ['archaeology discovery changes history explained', 'ancient discovery new evidence explained', 'recent archaeological find explained'],
-    },
-    {
-      label: 'Eltűnt civilizációk és rejtélyes tárgyak új magyarázattal',
-      category: 'history_strange',
-      freshnessWindowDays: 365,
-      searchRegion,
-      seeds: ['lost civilization discovery explained', 'mysterious ancient artifact explained', 'ancient mystery new evidence explained'],
-    },
-    {
-      label: 'Állati intelligencia: viselkedések, amelyek emberinek tűnnek',
-      category: 'default',
-      freshnessWindowDays: 365,
-      searchRegion,
-      seeds: ['animal intelligence surprising behavior explained', 'animals smarter than we thought study', 'weird animal behavior science explained'],
-    },
-    {
-      label: 'Természeti jelenségek, amelyek elsőre lehetetlennek tűnnek',
-      category: 'default',
-      freshnessWindowDays: 365,
-      searchRegion,
-      seeds: ['strange natural phenomenon explained', 'rare nature event science explained', 'weird weather phenomenon explained'],
-    },
-    {
-      label: 'Űrkutatás: új NASA vagy James Webb felfedezések közérthetően',
-      category: 'space_discovery',
-      freshnessWindowDays: 180,
-      searchRegion,
-      seeds: ['NASA new discovery explained', 'James Webb telescope discovery explained', 'space discovery changes astronomy explained'],
-    },
-    {
-      label: 'Bolygók és idegen világok: friss felfedezések látványos sztorival',
-      category: 'space_discovery',
-      freshnessWindowDays: 180,
-      searchRegion,
-      seeds: ['exoplanet discovery explained', 'new planet discovery explained', 'strange planet science explained'],
-    },
-  ]
-}
-
 function inferNicheCategory(niche: string): NicheCategory {
   const n = normalize(niche)
   if (/auto|car|jarm/.test(n)) return 'tech_ai'
@@ -232,146 +155,33 @@ export function buildDrilldownSeedsForDirection(direction: string): {
   }
 }
 
-export function buildBroadNicheDiscoveryPacks(niche: string, region: 'HU' | 'US'): BroadDiscoveryPack[] {
+// Barmilyen niche-re (tag "fact/erdekesseg" mintazatura is) dinamikusan
+// generalt, tematikusan csoportositott seed-csomagok — a korabbi, ~13
+// hardcode-olt topickulcsos subtopicMap es a kulon hardcode-olt
+// "fact discovery" 10 csomagja helyett EGYETLEN, mindig a Niche Expansion
+// Engine-t (lib/niche-expansion.ts) hasznalo, hardcode-mentes ut.
+export async function buildBroadNicheDiscoveryPacks(niche: string, region: 'HU' | 'US'): Promise<BroadDiscoveryPack[]> {
   const searchRegion: 'HU' | 'US' = region === 'HU' ? 'US' : region
-  const n = normalize(niche)
-
-  if (BROAD_FACT_PATTERNS.some(p => p.test(n))) {
-    return buildFactDiscoveryPacks(searchRegion).slice(0, 5)
-  }
-
   const category = inferNicheCategory(niche)
-  const freshness = inferFreshnessWindow(niche)
-  const nicheEn = n
+  const freshnessWindowDays = Math.max(inferFreshnessWindow(niche), 180)
 
-  return buildDynamicPacksForNiche(niche, nicheEn, category, freshness, searchRegion)
-}
+  // searchRegion mindig 'US' (a tag discovery szandekosan globalis/angol
+  // forrasokat keres, fuggetlenul az eredeti regiotol — ld. fenti sor).
+  const expansion = await buildNicheExpansion({ niche, region: searchRegion, language: 'en' })
 
-function buildDynamicPacksForNiche(
-  niche: string,
-  _nicheEn: string,
-  category: NicheCategory,
-  freshnessWindowDays: number,
-  searchRegion: 'HU' | 'US',
-): BroadDiscoveryPack[] {
-  const n = normalize(niche)
-
-  const subtopicMap: Record<string, Array<{ label: string; seeds: string[] }>> = {
-    piramis: [
-      { label: 'Piramisok rezgése és természetes frekvenciája', seeds: ['Great Pyramid vibration', 'pyramid resonance study', 'Great Pyramid natural frequency', 'pyramid earthquake resistance'] },
-      { label: 'Új régészeti felfedezések a piramisokról', seeds: ['pyramid new discovery', 'Great Pyramid new research', 'Giza pyramid hidden chamber'] },
-      { label: 'Piramisok építésének rejtélyei', seeds: ['how pyramids were built new theory', 'pyramid construction mystery explained', 'ancient Egyptian engineering'] },
-      { label: 'Piramisok és tudomány', seeds: ['pyramid science explained', 'Great Pyramid geometry mathematics', 'pyramid cosmic alignment research'] },
-      { label: 'Piramisok a világban', seeds: ['pyramids around the world', 'pyramid discovered outside Egypt', 'oldest pyramid in the world'] },
-    ],
-    auto: [
-      { label: 'Új autó modellek és tesztek', seeds: ['new car model review 2026', 'car comparison test', 'best new cars'] },
-      { label: 'Elektromos autók és technológia', seeds: ['electric car news', 'EV technology breakthrough', 'Tesla vs competitors'] },
-      { label: 'Autóipar és piaci trendek', seeds: ['car industry news', 'auto market trends', 'car sales data'] },
-      { label: 'Autó tuning és módosítások', seeds: ['car tuning build', 'car modification project', 'custom car build'] },
-      { label: 'Használt autó tippek', seeds: ['used car buying tips', 'car reliability ranking', 'best used cars value'] },
-    ],
-    sport: [
-      { label: 'Foci és labdarúgás', seeds: ['football transfer news', 'Champions League highlights', 'football tactics analysis'] },
-      { label: 'Sportolói sztoriik', seeds: ['athlete comeback story', 'sports documentary', 'greatest sports moments'] },
-      { label: 'Edzéstervek és fitnesz', seeds: ['workout routine results', 'fitness transformation', 'training plan explained'] },
-      { label: 'Extrém sportok', seeds: ['extreme sports compilation', 'adventure sports challenge', 'dangerous sports explained'] },
-    ],
-    gaming: [
-      { label: 'Új játék megjelenések', seeds: ['new game release review', 'upcoming games 2026', 'game trailer reaction'] },
-      { label: 'Gaming hardver', seeds: ['gaming PC build', 'best gaming setup', 'GPU comparison benchmark'] },
-      { label: 'Esport és verseny', seeds: ['esports tournament highlights', 'pro gamer analysis', 'competitive gaming strategy'] },
-      { label: 'Indie játékok', seeds: ['best indie games', 'indie game hidden gems', 'indie game review'] },
-    ],
-    film: [
-      { label: 'Új filmek és kritikák', seeds: ['new movie review', 'film analysis explained', 'movie breakdown'] },
-      { label: 'Sorozat ajánlók', seeds: ['best new series', 'TV show review', 'series ranking'] },
-      { label: 'Film elméletek és Easter egg-ek', seeds: ['movie theory explained', 'film easter eggs', 'hidden details in movies'] },
-      { label: 'Klasszikus filmek újragondolva', seeds: ['classic movie retrospective', 'movie that aged well', 'underrated films'] },
-    ],
-    horror: [
-      { label: 'Horror filmek és sorozatok', seeds: ['best horror movies', 'horror movie review', 'scariest movies ranked'] },
-      { label: 'Valós horror történetek', seeds: ['true scary stories', 'real horror cases explained', 'creepy true events'] },
-      { label: 'Rejtélyek és paranormális', seeds: ['unsolved mysteries explained', 'paranormal investigation', 'unexplained events'] },
-      { label: 'Horror játékok', seeds: ['horror game playthrough', 'scariest video games', 'horror game review'] },
-    ],
-    penz: [
-      { label: 'Befektetési stratégiák', seeds: ['investing strategy explained', 'stock market analysis', 'portfolio building tips'] },
-      { label: 'Crypto és blockchain', seeds: ['cryptocurrency news today', 'Bitcoin analysis', 'crypto market update'] },
-      { label: 'Pénzügyi szabadság tippek', seeds: ['financial freedom tips', 'passive income ideas', 'money saving strategies'] },
-      { label: 'Gazdasági hírek', seeds: ['economy news explained', 'market crash analysis', 'inflation explained'] },
-    ],
-    tech: [
-      { label: 'AI és mesterséges intelligencia', seeds: ['AI news breakthrough', 'artificial intelligence explained', 'new AI tool review'] },
-      { label: 'Gadget tesztek', seeds: ['tech review gadget', 'best tech products', 'smartphone comparison'] },
-      { label: 'Programozás és fejlesztés', seeds: ['coding tutorial project', 'programming language comparison', 'developer tools review'] },
-      { label: 'Tech ipar és cégek', seeds: ['big tech news', 'tech company strategy', 'startup success story'] },
-    ],
-    egeszseg: [
-      { label: 'Táplálkozás és diéta', seeds: ['nutrition science explained', 'healthy diet research', 'food myths debunked'] },
-      { label: 'Edzéstervek', seeds: ['workout routine for beginners', 'exercise science explained', 'fitness tips research'] },
-      { label: 'Mentális egészség', seeds: ['mental health tips research', 'anxiety management science', 'sleep science explained'] },
-      { label: 'Orvosi felfedezések', seeds: ['medical breakthrough discovery', 'health research news', 'new treatment explained'] },
-    ],
-    tortenel: [
-      { label: 'Furcsa történelmi események', seeds: ['strange history events explained', 'bizarre historical facts', 'weird history stories'] },
-      { label: 'Háborúk és csaták', seeds: ['famous battle explained', 'war documentary history', 'military strategy analysis'] },
-      { label: 'Ókori civilizációk', seeds: ['ancient civilization discovery', 'archaeology new discovery', 'lost civilization explained'] },
-      { label: 'Modern történelem', seeds: ['cold war secrets revealed', '20th century history explained', 'historical turning points'] },
-    ],
-    zene: [
-      { label: 'Új zenei kiadások', seeds: ['new album review', 'music review analysis', 'song breakdown explained'] },
-      { label: 'Zenei elméletek', seeds: ['music theory explained', 'song structure analysis', 'why this song works'] },
-      { label: 'Zeneipar és trendek', seeds: ['music industry news', 'music streaming data', 'viral music trends'] },
-      { label: 'Hangszer és produkció', seeds: ['music production tutorial', 'instrument comparison', 'home studio setup'] },
-    ],
-    utaz: [
-      { label: 'Úti célok és tippek', seeds: ['travel destination guide', 'best places to visit', 'travel tips budget'] },
-      { label: 'Kalandtúrák', seeds: ['adventure travel vlog', 'extreme travel challenge', 'remote places explored'] },
-      { label: 'Kulturális felfedezések', seeds: ['cultural experience travel', 'local food travel', 'hidden gems destination'] },
-    ],
-    foz: [
-      { label: 'Receptek és technikák', seeds: ['cooking technique explained', 'recipe tutorial easy', 'chef tips secrets'] },
-      { label: 'Éttermi trendek', seeds: ['restaurant review food', 'food trend explained', 'viral food recipe'] },
-      { label: 'Egészséges konyha', seeds: ['healthy recipe easy', 'meal prep guide', 'nutrition cooking tips'] },
-    ],
-  }
-
-  let matchKey = ''
-  for (const key of Object.keys(subtopicMap)) {
-    if (n.includes(key)) { matchKey = key; break }
-  }
-
-  if (!matchKey) {
-    const expansion = expandTopicQueries(niche, searchRegion, { maxQueries: 12 })
-    const grouped = [
-      { label: `${niche} — friss fejlemények`, types: ['current'] },
-      { label: `${niche} — tudományos magyarázat`, types: ['scientific', 'global_adaptable'] },
-      { label: `${niche} — történet és rejtély`, types: ['storytelling'] },
-      { label: `${niche} — creator feldolgozások`, types: ['youtube_creator', 'hungarian_market'] },
-    ] as Array<{ label: string; types: string[] }>
-
-    return grouped.map(group => {
-      const seeds = expansion.queries
-        .filter(q => group.types.includes(q.expansion_type))
-        .map(q => q.query)
-        .slice(0, 4)
-
-      return {
-        label: group.label,
-        category: expansion.category || category,
-        freshnessWindowDays: Math.max(freshnessWindowDays, 180),
-        searchRegion,
-        seeds: seeds.length > 0 ? seeds : expansion.queries.map(q => q.query).slice(0, 3),
-      }
-    }).filter(pack => pack.seeds.length > 0).slice(0, 5)
-  }
-
-  return subtopicMap[matchKey].map(sub => ({
-    label: sub.label,
-    category,
-    freshnessWindowDays,
+  const packs: BroadDiscoveryPack[] = expansion.packs.map(pack => ({
+    label: pack.label,
+    category: (expansion.category as NicheCategory) || category,
+    freshnessWindowDays: Math.max(freshnessWindowDays, expansion.freshness_window_days),
     searchRegion,
-    seeds: sub.seeds,
-  })).slice(0, 5)
+    seeds: pack.seeds.slice(0, 5),
+  }))
+
+  if (packs.length > 0) return packs.slice(0, 5)
+
+  // Ha az AI nem adott vissza csoportositott packet (pl. fallback-agon fut),
+  // essunk vissza a nyers validation_seedekre, egyetlen packkent.
+  return expansion.validation_seeds.length > 0
+    ? [{ label: niche, category: (expansion.category as NicheCategory) || category, freshnessWindowDays, searchRegion, seeds: expansion.validation_seeds.slice(0, 5) }]
+    : []
 }

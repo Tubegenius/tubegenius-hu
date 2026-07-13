@@ -7,12 +7,18 @@ import type { NicheCategory } from './niche-seeds'
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!
 
+export interface GeneratedSeedPack {
+  label: string
+  seed_indexes: number[]
+}
+
 export interface GeneratedSeeds {
   seeds: string[]
   freshness_window_days: number
   category: NicheCategory
   is_time_sensitive: boolean
   language_note: string
+  packs: GeneratedSeedPack[]
 }
 
 function extractJson(text: string): unknown {
@@ -29,7 +35,7 @@ function extractJson(text: string): unknown {
 export async function generateSeedsForNiche(
   nicheText: string,
   region: 'HU' | 'US',
-  maxSeeds = 5,
+  maxSeeds = 18,
 ): Promise<GeneratedSeeds> {
 
   const regionRules = region === 'HU'
@@ -63,10 +69,14 @@ SEED GENERÁLÁSI SZABÁLYOK:
 2. Minden seed legyen KONKRÉT altéma vagy trend — ne az eredeti niche szó ismétlése
 3. A seedek 2-5 szó hosszúak legyenek
 4. Keresőoptimalizált kifejezések legyenek (ahogy valaki YouTube-on keresne)
-5. Fedjenek le KÜLÖNBÖZŐ altémákat a niche-en belül
+5. Fedjenek le KÜLÖNBÖZŐ altémákat a niche-en belül — generálj ${maxSeeds} DIVERZ seedet, ne ismételd ugyanazt a gondolatot más szavakkal
 6. Kerüld az általános szavakat önmagukban: "news", "facts", "interesting", "viral", "trending"
 7. Ha a niche időérzékeny (hírek, crypto, politika) → rövidebb freshness window
 8. Ha evergreen (történelem, pszichológia, életmód) → hosszabb freshness window
+9. Ez a mechanizmus BÁRMILYEN niche-re működnie kell (tech, egészség, sport, gaming, szépség, pénzügy, edukáció, pszichológia, gasztro, utazás, autó, ingatlan, kertészkedés, állattartás, történelem, üzlet, lifestyle stb.) — sose hivatkozz egy fix, előre megírt témalistára, mindig a MEGADOTT niche-ből indulj ki
+
+CSOPORTOSÍTÁS (packs):
+Csoportosítsd a generált seedeket 3-5 rövid, ember-olvasható tematikus irányba (pl. "Friss fejlemények", "Tudományos háttér", "Történet/rejtély szög", "Gyakorlati tippek" — de ezek a labelek is a KONKRÉT niche-hez igazodjanak, ne generikus placeholder szövegek legyenek). Minden pack a hozzá tartozó seedek 0-alapú indexét sorolja fel a "seeds" tömbből.
 
 FRESHNESS WINDOW:
 - Napi hírek, crypto, tőzsde: 7-14 nap
@@ -81,7 +91,8 @@ KRITIKUS JSON SZABÁLYOK:
 
 Válaszolj KIZÁRÓLAG valid JSON-ban:
 {
-  "seeds": ["seed1", "seed2", "seed3", "seed4", "seed5"],
+  "seeds": ["seed1", "seed2", "seed3", "..."],
+  "packs": [{"label": "...", "seed_indexes": [0, 1, 2]}, {"label": "...", "seed_indexes": [3, 4]}],
   "freshness_window_days": 60,
   "category": "news_current",
   "is_time_sensitive": false,
@@ -100,7 +111,7 @@ Lehetséges category értékek: news_current, tech_ai, science_medical, space_di
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 500,
+        max_tokens: 1500,
         messages: [{ role: 'user', content: prompt }],
       }),
     })
@@ -115,12 +126,19 @@ Lehetséges category értékek: news_current, tech_ai, science_medical, space_di
       if (region === 'HU') {
         seeds = validateHungarianSeeds(seeds, nicheText)
       }
+      const packs = Array.isArray(parsed.packs)
+        ? parsed.packs
+            .filter(p => p && typeof p.label === 'string' && Array.isArray(p.seed_indexes))
+            .map(p => ({ label: p.label, seed_indexes: p.seed_indexes.filter(i => i >= 0 && i < seeds.length) }))
+            .filter(p => p.seed_indexes.length > 0)
+        : []
       return {
         seeds,
         freshness_window_days: parsed.freshness_window_days || 60,
         category: (parsed.category as NicheCategory) || 'default',
         is_time_sensitive: parsed.is_time_sensitive || false,
         language_note: parsed.language_note || '',
+        packs,
       }
     }
   } catch (e) {
@@ -183,11 +201,13 @@ function fallbackSeedGeneration(nicheText: string, region: 'HU' | 'US'): Generat
         `${words} update`,
       ]
 
+  const finalSeeds = seeds.slice(0, 5)
   return {
-    seeds: seeds.slice(0, 5),
+    seeds: finalSeeds,
     freshness_window_days: 60,
     category: 'default',
     is_time_sensitive: false,
     language_note: `fallback generálás - ${region} régió`,
+    packs: [{ label: nicheText, seed_indexes: finalSeeds.map((_, i) => i) }],
   }
 }

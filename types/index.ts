@@ -101,6 +101,14 @@ export interface CreatorProfile {
 // OPPORTUNITY ENGINE
 // ============================================================
 
+// niche_based: a niche STRATEGIAI IRANY, sose direkt kereso-query — kotelezo
+// niche expansion + validacio. specific_topic: a topic mar kozel-direkt
+// validacios query lehet, a profil niche-e nem torzithatja el. discovery_random:
+// nincs kotelezo user-inputolt niche/topic, a rendszer a creator profil/
+// csatorna-jelek alapjan valaszt kiindulasi iranyt, de meg mindig validalt
+// eredmenyt ad, nem vak randomot.
+export type OpportunitySearchMode = 'niche_based' | 'specific_topic' | 'discovery_random'
+
 export interface OpportunityTopic {
   id: string
   title: string

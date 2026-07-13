@@ -89,83 +89,6 @@ function translateTopic(topic: string) {
   return topic
 }
 
-function specialQueries(topic: string, region: 'HU' | 'US'): TopicExpansionQuery[] {
-  const n = asciiFold(topic)
-  const add = (query: string, expansion_type: ExpansionType, language: 'hu' | 'en', intent: ExpansionIntent, regionOverride?: 'HU' | 'US' | 'GLOBAL'): TopicExpansionQuery => ({
-    query,
-    expansion_type,
-    language,
-    region: regionOverride || (language === 'hu' ? 'HU' : 'GLOBAL'),
-    intent,
-  })
-
-  if (/\b(piramis|piramisok|pyramid|giza|gizai)\b/.test(n)) {
-    return [
-      add('piramis rezgés', 'scientific', 'hu', 'find_web_evidence'),
-      add('gízai piramis földrengés', 'scientific', 'hu', 'find_web_evidence'),
-      add('nagy piramis rezgési frekvencia', 'scientific', 'hu', 'find_web_evidence'),
-      add('piramis rezonancia', 'scientific', 'hu', 'find_story_angle'),
-      add('új kutatás piramisokról', 'current', 'hu', 'find_trend'),
-      add('miért állnak még mindig a piramisok', 'storytelling', 'hu', 'find_story_angle'),
-      add('Great Pyramid vibration', 'scientific', 'en', 'find_web_evidence'),
-      add('Great Pyramid earthquake resistance', 'scientific', 'en', 'find_web_evidence'),
-      add('pyramid resonance study', 'scientific', 'en', 'find_web_evidence'),
-      add('Great Pyramid natural frequency', 'global_adaptable', 'en', 'find_trend'),
-    ]
-  }
-
-  if (/\b(ai|mesterséges intelligencia|artificial intelligence)\b/.test(n)) {
-    return [
-      add('AI orvosi áttörés', 'current', 'hu', 'find_trend'),
-      add('új AI kutatás', 'current', 'hu', 'find_web_evidence'),
-      add('AI veszélyek 2026', 'storytelling', 'hu', 'find_story_angle'),
-      add('AI és munkahelyek', 'storytelling', 'hu', 'find_story_angle'),
-      add('AI cancer diagnosis', 'scientific', 'en', 'find_web_evidence'),
-      add('AI drug discovery', 'scientific', 'en', 'find_web_evidence'),
-      add('new AI model breakthrough', 'current', 'en', 'find_trend'),
-      add('AI explained', 'youtube_creator', 'en', 'find_youtube_evidence'),
-    ]
-  }
-
-  if (/\b(pszichologia|psychology|memoria|memory)\b/.test(n)) {
-    return [
-      add('hamis emlékek', 'storytelling', 'hu', 'find_story_angle'),
-      add('döntési torzítás', 'scientific', 'hu', 'find_web_evidence'),
-      add('pszichológiai kísérlet emlékek', 'storytelling', 'hu', 'find_story_angle'),
-      add('az agy újraépíti az emlékeket', 'scientific', 'hu', 'find_web_evidence'),
-      add('dopamine addiction', 'scientific', 'en', 'find_web_evidence'),
-      add('why people remember things wrong', 'youtube_creator', 'en', 'find_youtube_evidence'),
-      add('psychology experiment false memory', 'storytelling', 'en', 'find_story_angle'),
-      add('cognitive bias explained', 'youtube_creator', 'en', 'find_youtube_evidence'),
-    ]
-  }
-
-  if (/\b(tortenelem|history|romai|rome|regeszet|archaeology)\b/.test(n)) {
-    return [
-      add('elfelejtett történelmi esemény', 'storytelling', 'hu', 'find_story_angle'),
-      add('furcsa történelmi tény', 'storytelling', 'hu', 'find_story_angle'),
-      add('új régészeti felfedezés', 'current', 'hu', 'find_trend'),
-      add('római birodalom rejtély', 'storytelling', 'hu', 'find_story_angle'),
-      add('ancient mystery', 'storytelling', 'en', 'find_story_angle'),
-      add('historical discovery', 'current', 'en', 'find_trend'),
-      add('archaeology discovery explained', 'youtube_creator', 'en', 'find_youtube_evidence'),
-    ]
-  }
-
-  if (/\b(alvas|sleep)\b/.test(n)) {
-    return [
-      add('alvás friss kutatás', 'current', 'hu', 'find_web_evidence'),
-      add('miért álmodunk', 'scientific', 'hu', 'find_story_angle'),
-      add('alvás és memória kutatás', 'scientific', 'hu', 'find_web_evidence'),
-      add('sleep science new study', 'current', 'en', 'find_web_evidence'),
-      add('why we dream explained', 'youtube_creator', 'en', 'find_youtube_evidence'),
-      add('sleep affects decision making study', 'scientific', 'en', 'find_web_evidence'),
-    ]
-  }
-
-  return []
-}
-
 function genericQueries(topic: string, region: 'HU' | 'US', storyteller = false): TopicExpansionQuery[] {
   const t = normalize(topic)
   const en = translateTopic(t)
@@ -210,7 +133,6 @@ export function expandTopicQueries(
   const storyteller = /story|sztori|narrat|dokumentar|mrballen/i.test(options.creatorStyle || '')
   const maxQueries = options.maxQueries || 12
   const queries = uniqueByQuery([
-    ...specialQueries(normalized, region),
     ...genericQueries(normalized, region, storyteller),
   ]).slice(0, maxQueries)
 
@@ -228,16 +150,6 @@ export function expansionSeedStrings(input: string, region: 'HU' | 'US', options
 }
 
 export function suggestSpecificTopics(input: string) {
-  const n = asciiFold(input)
-  if (/\b(piramis|piramisok|pyramid)\b/.test(n)) {
-    return ['gízai piramisok tudományos kutatása', 'piramisok és földrengések', 'piramisok rejtélyei tudományos magyarázattal']
-  }
-  if (/\b(ai|mesterséges intelligencia)\b/.test(n)) {
-    return ['AI-alapú rákdiagnózis', 'AI gyógyszerkutatási áttörések', 'AI és munkahelyek 2026']
-  }
-  if (/\b(pszichologia|memory|memoria)\b/.test(n)) {
-    return ['hamis emlékek pszichológiája', 'döntési torzítások hétköznapokban', 'pszichológiai kísérletek emlékezetről']
-  }
   return [
     `${input} friss kutatás`,
     `${input} tudományos magyarázat`,
