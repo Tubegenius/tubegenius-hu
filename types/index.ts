@@ -8,6 +8,8 @@ export type CreatorLevel = 'beginner' | 'growing' | 'advanced' | 'professional'
 export type VideoLength = 'short' | 'medium' | 'long'
 export type TopicState = 'saved' | 'in_progress' | 'completed' | 'rejected'
 export type Region = 'HU' | 'US' | 'BOTH'
+export type ChannelUsageMode = 'primary_profile' | 'stats_only' | 'niche_discovery' | 'manual'
+export type ChannelConnectionType = 'public' | 'oauth' | 'mismatch'
 export type Market = 'HU' | 'CEE' | 'US' | 'UK' | 'DE' | 'GLOBAL_EN' | 'LATAM'
 export type Currency = 'HUF' | 'EUR' | 'USD' | 'GBP'
 export type VideoIdeaWorkflowStatus =
@@ -50,6 +52,13 @@ export const NARRATION_STYLES: { value: NarrationStyle; label: string; desc: str
 // USER & PROFILE
 // ============================================================
 
+export interface NicheCandidate {
+  main_category: string
+  specific_focus: string
+  confidence: number
+  rationale: string
+}
+
 export interface CreatorProfile {
   id: string
   user_id: string
@@ -69,6 +78,21 @@ export interface CreatorProfile {
   narration_style: NarrationStyle
   custom_prompt: string | null
   onboarding_completed: boolean
+  // Csatorna-első onboarding + channel_usage_mode (migráció 029)
+  channel_usage_mode: ChannelUsageMode
+  youtube_channel_url: string | null
+  youtube_handle: string | null
+  channel_avatar_url: string | null
+  channel_published_at: string | null
+  total_view_count: number | null
+  video_count: number | null
+  channel_synced_at: string | null
+  last_channel_audit_at: string | null
+  detected_niche_candidates: NicheCandidate[] | null
+  niche_confidence: number | null
+  selected_main_niche: string | null
+  active_channel_id: string | null
+  channel_connection_type: ChannelConnectionType | null
   created_at: string
   updated_at: string
 }

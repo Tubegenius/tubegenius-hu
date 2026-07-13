@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserId } from '@/lib/credits'
 import { getOAuth2Client, getOAuthCallbackRedirectUri, saveYoutubeOAuthTokens, YOUTUBE_OAUTH_SCOPES } from '@/lib/youtube-analytics'
+import { detectChannelConnectionType, syncChannelProfileFromOAuth } from '@/lib/channel-profile-sync'
 
 // GET — a sajat Google OAuth2 kor callbackje (ld. app/api/youtube/connect).
 // Fuggetlen a Supabase Auth-tol: kozvetlenul a googleapis kliensunkkel
@@ -49,6 +50,16 @@ export async function GET(request: NextRequest) {
       expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
       scope: YOUTUBE_OAUTH_SCOPES.join(' '),
     })
+
+    // Ha a userneknek meg nincs publikus (onboardingban megadott) csatornaja,
+    // vagy mar van es EGYEZIK az OAuth csatornaval, azonnal szinkronizaljuk
+    // a profiles kijelzo-mezoit, hogy a Header Card frissen mutassa. Ha
+    // ELTER, SOSEM iratjuk felul automatikusan — a profil oldal mismatch
+    // kartyaja varja a user dontesét (app/api/youtube/resolve-mismatch).
+    const connectionType = await detectChannelConnectionType(userId)
+    if (connectionType !== 'mismatch') {
+      await syncChannelProfileFromOAuth(userId)
+    }
 
     return redirectToChannelAudit('connected')
   } catch (error) {

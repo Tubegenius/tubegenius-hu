@@ -22,10 +22,8 @@ export default async function DashboardLayout({
     .eq('user_id', user.id)
     .single()
 
-  // Ha nincs profil kitöltve, onboardingra irányítás
-  if (profile && !profile.onboarding_completed) {
-    // Csak ha nem az onboarding oldalon vagyunk
-  }
+  // Onboarding-kényszer: lásd middleware.ts (pathname-tudatos, itt a
+  // layoutban self-redirect hurkot okozna a /dashboard/profile oldalon).
 
   return (
     <div className="min-h-screen bg-background flex">

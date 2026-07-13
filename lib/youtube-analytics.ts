@@ -128,6 +128,10 @@ export interface OwnChannelInfo {
   subscriberCount: number | null
   viewCount: number | null
   videoCount: number | null
+  thumbnailUrl: string | null
+  customUrl: string | null
+  publishedAt: string | null
+  country: string | null
 }
 
 export async function fetchOwnChannelInfo(userId: string): Promise<OwnChannelInfo | null> {
@@ -145,6 +149,10 @@ export async function fetchOwnChannelInfo(userId: string): Promise<OwnChannelInf
     subscriberCount: channel.statistics?.subscriberCount ? Number(channel.statistics.subscriberCount) : null,
     viewCount: channel.statistics?.viewCount ? Number(channel.statistics.viewCount) : null,
     videoCount: channel.statistics?.videoCount ? Number(channel.statistics.videoCount) : null,
+    thumbnailUrl: channel.snippet?.thumbnails?.high?.url || channel.snippet?.thumbnails?.medium?.url || channel.snippet?.thumbnails?.default?.url || null,
+    customUrl: channel.snippet?.customUrl || null,
+    publishedAt: channel.snippet?.publishedAt || null,
+    country: channel.snippet?.country || null,
   }
   await updateChannelInfo(userId, info.channelId, info.title)
   return info

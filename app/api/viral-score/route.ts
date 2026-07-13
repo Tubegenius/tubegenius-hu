@@ -22,6 +22,7 @@ import {
   type VideoIdeaWorkflowStatus,
 } from '@/lib/video-ideas/video-idea-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 
 // ── Téma-relevancia szűrés ────────────────────────────────────
 // A YouTube/Serper keresés önmagában fuzzy — pl. "AI botrányok"-ra simán
@@ -235,8 +236,14 @@ export async function POST(request: NextRequest) {
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    const { data: profileRow } = await createAdminClient().from('profiles').select('niche').eq('user_id', userId).single()
-    const userNiche = profileRow?.niche || ''
+    const { data: profileRow } = await createAdminClient().from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+    // Korabban ez a route csak a legacy `niche` oszlopot olvasta, relevancia-
+    // szures/stats_only-gatelas nelkul — egy topic-tol teljesen fuggetlen
+    // profil niche torzithatta a nicheFitScore-t. Most a megosztott kapun megy at.
+    const { niche: rawUserNiche, useNiche: userNicheRelevant } = resolveCreatorNicheContext({
+      topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus,
+    })
+    const userNiche = userNicheRelevant ? rawUserNiche : ''
 
     // ─── Perzisztens, user-szintű eredmény-cache ─────────────────
     // Amit a user egyszer kredittel lefuttatott, azt bármikor újra meg

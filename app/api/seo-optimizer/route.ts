@@ -6,7 +6,7 @@ import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidR
 import { createAdminClient } from '@/lib/supabase-server'
 import { computeSeoHeuristics, buildSeoOptimizerPrompt, type SeoPackage } from '@/lib/seo-optimizer'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
-import { shouldUseProfileNiche } from '@/lib/niche-relevance'
+import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
@@ -29,9 +29,8 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single()
-    const niche = profileRow?.niche || ''
-    const useNiche = shouldUseProfileNiche({ topic, profileNiche: niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+    const { niche, useNiche } = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
     const keywordList: string[] = Array.isArray(keywords) ? keywords : (typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()).filter(Boolean) : [])

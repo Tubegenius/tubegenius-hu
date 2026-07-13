@@ -8,6 +8,7 @@ import { buildScoreBreakdown, getConfidenceLevel } from '@/lib/opportunity-scori
 import { fetchKeywordSignals, fetchSeedVideoStats, buildKeywordClusterPrompt, type RelatedKeywordSuggestion } from '@/lib/keyword-research'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,8 +21,15 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profileRow } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
-    const niche = nicheOverride || profileRow?.niche || ''
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+    // Explicit kliens-oldali niche override mindig elsobbseget elvez (mar
+    // korabban is igy volt); ha nincs, a megosztott kapun (resolveCreatorNicheContext)
+    // megy at a profil niche-e — korabban ez a route csak a legacy `niche`
+    // oszlopot olvasta, semmilyen relevancia-szures/stats_only-gatelas nelkul.
+    const niche = nicheOverride || (() => {
+      const gated = resolveCreatorNicheContext({ topic: seed_keyword, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+      return gated.useNiche ? gated.niche : ''
+    })()
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 

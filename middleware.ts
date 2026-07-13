@@ -41,6 +41,23 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
+  // Onboarding-kenyszer: befejezetlen profillal (onboarding_completed=false)
+  // minden /dashboard/* utvonal /dashboard/profile-ra iranyul, MAGAT a
+  // profil oldalt kiveve (kulonben vegtelen redirect-hurok lenne). A
+  // korabbi, app/dashboard/layout.tsx-ben levo ellenorzes holt kod volt
+  // (ures if-ag, sosem hivott redirect()) — ez a pathname-tudatos
+  // middleware a biztonsagos hely erre, mert mar amugy is minden
+  // navigacion lefut.
+  if (user
+    && request.nextUrl.pathname.startsWith('/dashboard')
+    && !request.nextUrl.pathname.startsWith('/dashboard/profile')
+  ) {
+    const { data: profile } = await supabase.from('profiles').select('onboarding_completed').eq('user_id', user.id).single()
+    if (profile && !profile.onboarding_completed) {
+      return NextResponse.redirect(new URL('/dashboard/profile?onboarding=1', request.url))
+    }
+  }
+
   return supabaseResponse
 }
 

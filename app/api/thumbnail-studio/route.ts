@@ -7,7 +7,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { checkThumbnailText, buildThumbnailStudioPrompt, type ThumbnailConcept } from '@/lib/thumbnail-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
-import { shouldUseProfileNiche } from '@/lib/niche-relevance'
+import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export async function POST(request: NextRequest) {
@@ -21,9 +21,8 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single()
-    const niche = profileRow?.niche || ''
-    const useNiche = shouldUseProfileNiche({ topic, profileNiche: niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+    const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+    const { niche, useNiche } = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 

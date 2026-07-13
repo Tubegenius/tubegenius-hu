@@ -15,6 +15,8 @@ import {
   type QualityStatus,
 } from '@/lib/fact-safety'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { createAdminClient } from '@/lib/supabase-server'
+import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import {
   STYLE_PROMPTS,
   getShortsTarget,
@@ -170,7 +172,16 @@ export async function POST(request: NextRequest) {
     // ── 2. GENERÁLÁS ──────────────────────────────────────────
 
     const stylePrompt = narration_style === 'sajat' && custom_prompt ? custom_prompt : STYLE_PROMPTS[narration_style]
-    const creatorContext = channel_context || niche || ''
+    // A kliens altal kifejezetten kuldott channel_context/niche tovabbra is
+    // elsobbseget elvez (mar korabban is igy volt) — csak akkor esunk vissza
+    // a profilra, ha EGYIK sincs megadva, es azt is a megosztott relevancia-
+    // kapun (stats_only-tudatos) engedjuk csak at, sose nyersen.
+    let creatorContext = channel_context || niche || ''
+    if (!creatorContext) {
+      const { data: profileRow } = await createAdminClient().from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+      const gated = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+      creatorContext = gated.useNiche ? gated.niche : ''
+    }
     const uploadTimes = getUploadTimes(platform)
 
     const opportunitySection = opportunity_context

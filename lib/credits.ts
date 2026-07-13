@@ -28,6 +28,7 @@ export type FeatureName =
   | 'seo_optimizer'
   | 'content_gap_finder'
   | 'channel_audit'
+  | 'niche_discovery_refresh'
 
 // Credit költségek funkciónként (a spec szerint)
 export const CREDIT_COSTS: Record<FeatureName, number> = {
@@ -49,6 +50,7 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
   seo_optimizer: 1,
   content_gap_finder: 2,
   channel_audit: 2,
+  niche_discovery_refresh: 1,
 }
 
 // A kulcsok a lib/models.ts MODELS ertekeivel egyeznek — korabban itt elavult

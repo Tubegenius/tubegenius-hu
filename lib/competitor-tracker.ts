@@ -15,6 +15,11 @@ export interface ChannelSnapshot {
   subscriberCount: number
   videoCount: number
   uploadsPlaylistId: string | null
+  customUrl: string | null
+  thumbnailHigh: string | null
+  publishedAt: string | null
+  country: string | null
+  totalViewCount: number
 }
 
 export interface CompetitorVideo {
@@ -54,6 +59,11 @@ async function fetchChannelByParam(param: string, apiKey: string): Promise<Chann
     subscriberCount: parseInt(item.statistics?.subscriberCount || '0'),
     videoCount: parseInt(item.statistics?.videoCount || '0'),
     uploadsPlaylistId: item.contentDetails?.relatedPlaylists?.uploads || null,
+    customUrl: item.snippet?.customUrl || null,
+    thumbnailHigh: item.snippet?.thumbnails?.high?.url || null,
+    publishedAt: item.snippet?.publishedAt || null,
+    country: item.snippet?.country || null,
+    totalViewCount: parseInt(item.statistics?.viewCount || '0'),
   }
 }
 

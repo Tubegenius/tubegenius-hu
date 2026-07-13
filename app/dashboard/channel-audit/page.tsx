@@ -6,6 +6,7 @@ import Link from 'next/link'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import ChannelHeaderCard, { type ChannelProfile } from '@/components/channel-audit/ChannelHeaderCard'
 
 interface ChannelVideoPerformance {
   videoId: string
@@ -84,6 +85,7 @@ export default function ChannelAuditPage() {
 
   const [channelAnalytics, setChannelAnalytics] = useState<ChannelAnalyticsSummary | null>(null)
   const [channelConnected, setChannelConnected] = useState<boolean | null>(null)
+  const [channelProfile, setChannelProfile] = useState<ChannelProfile | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
 
@@ -132,17 +134,29 @@ export default function ChannelAuditPage() {
       const res = await fetch('/api/youtube/analytics')
       if (res.status === 404) {
         setChannelConnected(false)
+        setChannelProfile(null)
         return
       }
       const body = await res.json()
       if (!res.ok) {
         setChannelConnected(false)
+        setChannelProfile(null)
         return
       }
-      setChannelAnalytics(body)
-      setChannelConnected(true)
+      setChannelProfile(body.channel_profile || null)
+      // A "channelConnected" tovabbra is a PRIVAT OAuth-analitika (nezettseg,
+      // watch time) meglletet jelzi — a Header Card ettol fuggetlenul, a
+      // channelProfile alapjan jelenik meg, publikus (nem-OAuth) usereknel is.
+      if (body.analytics_available) {
+        setChannelAnalytics(body)
+        setChannelConnected(true)
+      } else {
+        setChannelAnalytics(null)
+        setChannelConnected(false)
+      }
     } catch {
       setChannelConnected(false)
+      setChannelProfile(null)
     }
   }
 
@@ -249,10 +263,18 @@ export default function ChannelAuditPage() {
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Az eddigi Videódiagnózisaid mintázata — mi erős, mi gyenge, mit gyárts legközelebb.</p>
       </div>
 
+      {channelProfile && (
+        <div className="mb-6">
+          <ChannelHeaderCard channel={channelProfile} />
+        </div>
+      )}
+
       {channelConnected === false && (
         <div className="card mb-6 flex items-center justify-between gap-4 flex-wrap" style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)' }}>
           <div>
-            <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>🔗 Kösd össze a YouTube csatornád</p>
+            <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
+              {channelProfile ? '🔗 YouTube-fiók összekötése mélyebb elemzéshez' : '🔗 Kösd össze a YouTube csatornád'}
+            </p>
             <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Valós nézettség, watch time és feliratkozó-adatok jelennek meg a kézi audit-mintázat mellett.</p>
           </div>
           <button onClick={connectChannel} disabled={connecting} className="btn-primary text-sm px-4 py-1.5 flex-shrink-0">
