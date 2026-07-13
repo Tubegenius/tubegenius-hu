@@ -26,6 +26,7 @@ export async function GET() {
     trackedRes,
     paidResultsRes,
     videoIdeasRes,
+    trackedCompetitorsRes,
   ] = await Promise.all([
     admin.from('user_credits').select('balance, total_used, plan').eq('user_id', userId).single(),
     admin.from('creator_memory').select('id, topic, state, platform, opportunity_score, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
@@ -37,6 +38,7 @@ export async function GET() {
     admin.from('tracked_trend_candidates').select('id, candidate_topic').eq('user_id', userId).eq('status', 'active'),
     admin.from('paid_results').select('id, tool_type, original_input, created_at, last_opened_at, credit_cost, status').eq('user_id', userId).eq('status', 'completed').order('last_opened_at', { ascending: false, nullsFirst: false }).limit(30),
     admin.from('video_ideas').select('id, title, topic, platform, language, market, content_format, viral_score, opportunity_score, competition_score, proof_summary, video_package_id, calendar_status, publish_status, workflow_status, updated_at, created_at').eq('user_id', userId).order('updated_at', { ascending: false }).limit(25),
+    admin.from('tracked_competitors').select('id, channel_title, channel_thumbnail, niche').eq('user_id', userId).order('added_at', { ascending: false }),
   ])
 
   const memory = memoryRes.data || []
@@ -46,6 +48,7 @@ export async function GET() {
   const tracked = trackedRes.data || []
   const paidResults = paidResultsRes.data || []
   const videoIdeas = videoIdeasRes.data || []
+  const trackedCompetitors = trackedCompetitorsRes.data || []
 
   // Proof signal aggregáció a command centerhez — a cél, hogy a rangsorolás
   // ne csak a score mezőket, hanem a ténylegesen mögé gyűjtött bizonyítékok
@@ -571,6 +574,43 @@ export async function GET() {
     },
   }
 
+  // ── Versenytársfigyelő — legutóbbi outlier videók a figyelt csatornáktól ──
+  // Külön lekérdezés, mert a tracked_competitor_videos a tracked_competitors
+  // id-jeitől függ (ugyanaz a minta, mint a proof signal lekérdezésnél fent).
+  type CompetitorMoveRow = {
+    video_id: string
+    title: string | null
+    thumbnail_url: string | null
+    view_count: number | null
+    outlier_ratio: number | null
+    published_at: string | null
+    first_seen_at: string
+    tracked_competitor_id: string
+  }
+  const competitorIds = trackedCompetitors.map(c => c.id)
+  const competitorMovesRes = competitorIds.length > 0
+    ? await admin.from('tracked_competitor_videos')
+        .select('video_id, title, thumbnail_url, view_count, outlier_ratio, published_at, first_seen_at, tracked_competitor_id')
+        .in('tracked_competitor_id', competitorIds)
+        .eq('is_outlier', true)
+        .order('first_seen_at', { ascending: false })
+        .limit(8)
+    : { data: [] as CompetitorMoveRow[] }
+  const competitorById = new Map(trackedCompetitors.map(c => [c.id, c]))
+  const competitorMoves = ((competitorMovesRes.data || []) as CompetitorMoveRow[]).map(v => {
+    const competitor = competitorById.get(v.tracked_competitor_id)
+    return {
+      video_id: v.video_id,
+      title: v.title,
+      thumbnail_url: v.thumbnail_url,
+      view_count: v.view_count,
+      outlier_ratio: v.outlier_ratio,
+      published_at: v.published_at,
+      channel_title: competitor?.channel_title || null,
+      channel_thumbnail: competitor?.channel_thumbnail || null,
+    }
+  })
+
   // ── YouTube jelek — passzívan gyűjtött snapshot adatvagyon (globális, nem user-specifikus) ──
   const youtubeSignals = {
     videos_seen: videosSeenRes.count ?? 0,
@@ -590,5 +630,6 @@ export async function GET() {
     command_center: commandCenter,
     content_direction_insight: contentDirectionInsight,
     youtube_signals: youtubeSignals,
+    competitor_moves: competitorMoves,
   })
 }

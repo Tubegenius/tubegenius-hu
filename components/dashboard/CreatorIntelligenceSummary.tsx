@@ -19,6 +19,17 @@ interface ActivityItem {
   view_history: number[]
 }
 
+interface CompetitorMove {
+  video_id: string
+  title: string | null
+  thumbnail_url: string | null
+  view_count: number | null
+  outlier_ratio: number | null
+  published_at: string | null
+  channel_title: string | null
+  channel_thumbnail: string | null
+}
+
 interface DashboardSummary {
   has_data: boolean
   packages: { total: number; shorts: number; long: number }
@@ -29,6 +40,7 @@ interface DashboardSummary {
   recent_activity: ActivityItem[]
   content_direction_insight: string
   youtube_signals: { videos_seen: number; snapshots_count: number; top_viral_score: number | null; fresh_ratio: number | null }
+  competitor_moves: CompetitorMove[]
 }
 
 const PANEL_STYLE: React.CSSProperties = {
@@ -175,7 +187,7 @@ export default function CreatorIntelligenceSummary() {
     )
   }
 
-  const { packages, audits, credits, memory, fact_safety, recent_activity, content_direction_insight, youtube_signals } = summary
+  const { packages, audits, credits, memory, fact_safety, recent_activity, content_direction_insight, youtube_signals, competitor_moves } = summary
   const memoryTotal = memory.saved + memory.in_progress + memory.completed + memory.rejected
   const projects = recent_activity.filter(a => a.type === 'video_package' || a.type === 'video_audit').slice(0, 4)
 
@@ -315,6 +327,39 @@ export default function CreatorIntelligenceSummary() {
           </div>
         </div>
       </div>
+
+      {competitor_moves.length > 0 && (
+        <div className="mt-4 p-5" style={PANEL_STYLE}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: '#F8FAFC' }}>
+              <i className="ti ti-telescope" style={{ color: '#F97316' }} />
+              Versenytársfigyelő — friss kiugró videók
+            </h3>
+            <Link href="/dashboard/competitors" className="text-xs flex-shrink-0" style={{ color: '#3B82F6' }}>Összes →</Link>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {competitor_moves.slice(0, 6).map(move => (
+              <a key={move.video_id} href={`https://www.youtube.com/watch?v=${move.video_id}`} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-2.5 py-2 px-2 -mx-1 rounded-lg transition-colors hover:bg-white/[0.03]">
+                {move.thumbnail_url ? (
+                  <img src={move.thumbnail_url} alt="" className="w-14 h-9 rounded object-cover flex-shrink-0" />
+                ) : (
+                  <div className="w-14 h-9 rounded flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }} />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs truncate" style={{ color: '#F8FAFC' }}>{clean(move.title || 'Cím nélkül')}</p>
+                  <p className="text-xs truncate" style={{ color: '#64748B' }}>{move.channel_title}</p>
+                </div>
+                {move.outlier_ratio != null && (
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ color: '#F97316', background: 'rgba(249,115,22,0.12)' }}>
+                    {move.outlier_ratio.toFixed(1)}x
+                  </span>
+                )}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       {youtube_signals.videos_seen > 0 && (
         <div className="mt-4 p-5" style={PANEL_STYLE}>
