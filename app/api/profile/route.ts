@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { discoverChannelNiches } from '@/lib/channel-niche-discovery'
+import type { NicheCandidate } from '@/types'
 
 // Csak ezek a mezok irhatok a klienstol jovo raw JSON body-bol — a
 // channel_usage_mode/onboarding bovites miatt szelesedett a route felulete,
@@ -48,6 +50,48 @@ export async function POST(request: NextRequest) {
     const updatePayload: Record<string, unknown> = {}
     for (const field of ALLOWED_PROFILE_FIELDS) {
       if (field in body) updatePayload[field] = body[field]
+    }
+
+    // "primary_profile" mod eseten a csatorna legyen a niche forrasa. A
+    // profil oldal fo mentes-gombja MINDIG kuldi a main_category/specific_focus
+    // mezoket (kotelezo urlap-mezok), tehat a jelenlet/hianyuk NEM hasznalhato
+    // jelzeskent — ehelyett azt nezzuk, hogy a csatorna niche-e MEG SOSEM lett
+    // levezetve (detected_niche_candidates ures). Ez eppen a megfigyelt hibat
+    // fedi le: a user beallitotta "primary_profile"-ra a modot, de a mezok
+    // sosem frissultek a regi, kezzel beirt niche-rol (pl. "Ai, es orvostudomany")
+    // a csatorna tenyleges tartalmara. Csak EGYSZER fut le csatornankent — utana
+    // detected_niche_candidates mar nem ures, a kesobbi kezi szerkesztesek
+    // megmaradnak (a "user szerkesztheti / feluliraja" szabaly szerint).
+    const effectiveMode = (updatePayload.channel_usage_mode as string | undefined) ?? undefined
+    if (effectiveMode === 'primary_profile') {
+      const { data: currentProfile } = await supabase
+        .from('profiles')
+        .select('channel_usage_mode, youtube_channel_id, youtube_channel_url, detected_niche_candidates')
+        .eq('user_id', user.id)
+        .single()
+
+      const channelInput = currentProfile?.youtube_channel_url || currentProfile?.youtube_channel_id
+      const alreadyDerived = Array.isArray(currentProfile?.detected_niche_candidates) && currentProfile.detected_niche_candidates.length > 0
+
+      if (channelInput && !alreadyDerived) {
+        try {
+          const result = await discoverChannelNiches({ channelInput })
+          if (!('error' in result) && result.candidates.length > 0) {
+            const top: NicheCandidate = result.candidates[0]
+            updatePayload.main_category = top.main_category
+            updatePayload.specific_focus = top.specific_focus
+            updatePayload.niche = top.specific_focus
+            updatePayload.selected_main_niche = top.specific_focus
+            updatePayload.detected_niche_candidates = result.candidates
+            updatePayload.niche_confidence = top.confidence
+          }
+        } catch (discoverError) {
+          // Nem blokkolja a profil mentest — ha a csatorna-alapu felismeres
+          // sikertelen (pl. nincs elerheto videoja), a user meglevo kezi
+          // niche-e marad ervenyben, csak nem all elo automatikus javaslat.
+          console.error('[Profile] primary_profile niche-felismeres sikertelen:', discoverError)
+        }
+      }
     }
 
     const { error } = await supabase
