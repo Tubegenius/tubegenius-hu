@@ -75,6 +75,12 @@ function adminClient() {
   )
 }
 
+const CREDIT_CHARGE_MAX_ATTEMPTS = 3
+
+function waitForCreditRetry(attempt: number) {
+  return new Promise(resolve => setTimeout(resolve, 25 * attempt))
+}
+
 export async function getUserId(): Promise<string | null> {
   const cookieStore = await cookies()
   const supabase = createServerClient(
@@ -137,45 +143,59 @@ export async function chargeFeature(
   const admin = adminClient()
   const cost = CREDIT_COSTS[feature]
 
-  const { data: current, error: fetchErr } = await admin
-    .from('user_credits')
-    .select('balance, total_used')
-    .eq('user_id', userId)
-    .single()
+  let updatedBalance: number | undefined
+  let lastObservedBalance: number | undefined
 
-  if (fetchErr || !current) {
-    return { success: false, error: 'Kredit egyenleg nem található' }
+  for (let attempt = 1; attempt <= CREDIT_CHARGE_MAX_ATTEMPTS; attempt++) {
+    const { data: current, error: fetchErr } = await admin
+      .from('user_credits')
+      .select('balance, total_used')
+      .eq('user_id', userId)
+      .single()
+
+    if (fetchErr || !current) {
+      if (fetchErr) console.error('[Credits] chargeFeature balance read hiba:', fetchErr)
+      return { success: false, error: 'Kredit egyenleg nem található' }
+    }
+
+    const currentBalance = Number(current.balance)
+    lastObservedBalance = currentBalance
+    if (currentBalance < cost) {
+      return { success: false, new_balance: currentBalance, error: 'Nincs elég kredit' }
+    }
+
+    const { data: updated, error: updateErr } = await admin
+      .from('user_credits')
+      .update({
+        balance: currentBalance - cost,
+        total_used: Number(current.total_used ?? 0) + cost,
+      })
+      .eq('user_id', userId)
+      .eq('balance', currentBalance)
+      .gte('balance', cost)
+      .select('balance')
+      .single()
+
+    if (updated) {
+      updatedBalance = Number(updated.balance)
+      break
+    }
+
+    // PGRST116 itt a compare-and-swap feltétel elvesztését jelenti: egy másik,
+    // jogos kreditművelet előbb módosította az egyenleget. Friss egyenlegből
+    // újraszámolunk; más adatbázishibát nem fedünk el retry-val.
+    const optimisticLockMiss = !updateErr || updateErr.code === 'PGRST116'
+    if (!optimisticLockMiss) {
+      console.error('[Credits] chargeFeature DB hiba:', updateErr)
+      break
+    }
+    if (attempt < CREDIT_CHARGE_MAX_ATTEMPTS) await waitForCreditRetry(attempt)
   }
 
-  const currentBalance = Number(current.balance)
-  const currentTotalUsed = Number(current.total_used ?? 0)
-
-  if (currentBalance < cost) {
-    return { success: false, new_balance: currentBalance, error: 'Nincs elég kredit' }
-  }
-
-  const newBalance = currentBalance - cost
-  const newTotalUsed = currentTotalUsed + cost
-
-  const { data: updated, error: updateErr } = await admin
-    .from('user_credits')
-    .update({ balance: newBalance, total_used: newTotalUsed })
-    .eq('user_id', userId)
-    .eq('balance', currentBalance)
-    .gte('balance', cost)
-    .select('balance')
-    .single()
-
-  if (updateErr || !updated) {
-    // Beta Hardening Test (2026-07-11): ha az optimista zar utkozik (parhuzamos
-    // keres ugyanarra a userre), az updateErr nyers Postgres/PostgREST hibat
-    // tartalmaz (pl. "Cannot coerce the result to a single JSON object"), ami
-    // sem magyar, sem erthetheto, es felrevezeto is — nem "nincs eleg kredit",
-    // hanem race-vesztes. A nyers hibat csak logoljuk, a userhez fix szoveg megy.
-    if (updateErr) console.error('[Credits] chargeFeature race/DB hiba:', updateErr)
+  if (updatedBalance === undefined) {
     return {
       success: false,
-      new_balance: currentBalance,
+      new_balance: lastObservedBalance,
       error: 'A kredit levonás nem sikerült — túl sok egyidejű kérés. Próbáld újra.',
     }
   }
@@ -191,5 +211,5 @@ export async function chargeFeature(
     metadata: { ...metadata, type: 'charge' },
   })
 
-  return { success: true, new_balance: Number(updated.balance) }
+  return { success: true, new_balance: updatedBalance }
 }

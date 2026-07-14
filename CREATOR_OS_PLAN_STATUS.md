@@ -2,6 +2,13 @@
 
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
+## 2026-07-15 — PRODUCTION UTÓELLENŐRZÉS + KREDIT-RACE ROBUSZTUSSÁG
+
+- A production Opportunity Engine → Gyártási csomag folyamat élőben sikeresen lefutott az új Anthropic kulccsal. A dedikált Bizonyíték videók blokk 2 valós YouTube-videót helyesen megjelenített.
+- Javítva és productionbe deployolva (`b3cf94f`): a Gyártási csomag után a fejléc és az oldalsáv kreditértéke azonnal szinkronizálódik; a Producer brief már nem számolja a YouTube-forrásokat webes forrásként is. Vercel deploy: Ready.
+- Javítva a korábbi P2 kredit-race backlog: `chargeFeature()` és `chargeProtectedFeature()` compare-and-swap ütközésnél legfeljebb 3-szor, friss balance/total_used értékből próbálkozik újra (25/50 ms várakozás). Csak a PostgREST `PGRST116`/üres update — vagyis elvesztett optimista zárolás — retry-olható; valódi DB-hiba, hiányzó egyenleg és elégtelen kredit nem. A dupla levonás elleni `WHERE balance = currentBalance` védelem minden próbálkozásban megmarad.
+- Ellenőrzés: `npx tsc --noEmit --incremental false` ✅; `npm run build` ✅ (77/77 oldal). A kredit-race javításnál nem futott új kreditfogyasztó élő teszt.
+
 ## 2026-07-14 — MARKET READINESS HARDENING, 1. JAVÍTÁSI CSOMAG
 
 Teljes backend/terméklogikai audit után az első P0/P1 javításcsomag elkészült:

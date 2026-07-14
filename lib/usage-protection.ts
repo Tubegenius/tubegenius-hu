@@ -238,36 +238,55 @@ export async function chargeProtectedFeature(
   const admin = adminClient()
   const cost = FREE_LIMITS[feature].creditCost
 
-  const { data: current, error: fetchError } = await admin
-    .from('user_credits')
-    .select('balance, total_used')
-    .eq('user_id', userId)
-    .single()
+  let updatedBalance: number | undefined
+  let lastObservedBalance = 0
 
-  const currentBalance = Number(current?.balance ?? 0)
-  if (fetchError || !current || currentBalance < cost) {
-    return { success: false, newBalance: currentBalance, error: 'Nincs elég kredit' }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { data: current, error: fetchError } = await admin
+      .from('user_credits')
+      .select('balance, total_used')
+      .eq('user_id', userId)
+      .single()
+
+    const currentBalance = Number(current?.balance ?? 0)
+    lastObservedBalance = currentBalance
+    if (fetchError || !current) {
+      if (fetchError) console.error('[UsageProtection] balance read hiba:', fetchError)
+      return { success: false, newBalance: currentBalance, error: 'Kredit egyenleg nem található' }
+    }
+    if (currentBalance < cost) {
+      return { success: false, newBalance: currentBalance, error: 'Nincs elég kredit' }
+    }
+
+    const { data: updated, error } = await admin
+      .from('user_credits')
+      .update({
+        balance: currentBalance - cost,
+        total_used: Number(current.total_used ?? 0) + cost,
+      })
+      .eq('user_id', userId)
+      .eq('balance', currentBalance)
+      .gte('balance', cost)
+      .select('balance')
+      .single()
+
+    if (updated) {
+      updatedBalance = Number(updated.balance)
+      break
+    }
+
+    const optimisticLockMiss = !error || error.code === 'PGRST116'
+    if (!optimisticLockMiss) {
+      console.error('[UsageProtection] chargeProtectedFeature DB hiba:', error)
+      break
+    }
+    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 25 * attempt))
   }
 
-  const newBalance = currentBalance - cost
-  const newTotalUsed = Number(current.total_used ?? 0) + cost
-
-  const { data: updated, error } = await admin
-    .from('user_credits')
-    .update({ balance: newBalance, total_used: newTotalUsed })
-    .eq('user_id', userId)
-    .eq('balance', currentBalance)
-    .gte('balance', cost)
-    .select('balance')
-    .single()
-
-  if (error || !updated) {
-    // Beta Hardening Test (2026-07-11): lasd lib/credits.ts chargeFeature() —
-    // ugyanaz a nyers-hiba-szivargas osztaly, ugyanaz a javitas.
-    if (error) console.error('[UsageProtection] chargeProtectedFeature race/DB hiba:', error)
+  if (updatedBalance === undefined) {
     return {
       success: false,
-      newBalance: currentBalance,
+      newBalance: lastObservedBalance,
       error: 'A kredit levonás nem sikerült — túl sok egyidejű kérés. Próbáld újra.',
     }
   }
@@ -283,7 +302,7 @@ export async function chargeProtectedFeature(
     metadata: { type: 'protected_feature_charge', feature, ...extraMetadata },
   })
 
-  return { success: true, newBalance: Number(updated.balance) }
+  return { success: true, newBalance: updatedBalance }
 }
 export function getGlobalQuotaLevel(): 'normal' | 'throttled' | 'critical' | 'exhausted' {
   const { getQuotaState } = require('./youtube-service')
