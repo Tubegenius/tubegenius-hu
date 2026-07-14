@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import type { CreatorProfile } from '@/types'
 import Logo from '@/components/brand/Logo'
+import { CREDIT_BALANCE_UPDATED_EVENT } from '@/lib/credit-balance-events'
 
 interface SidebarProps {
   profile: CreatorProfile | null
@@ -46,6 +47,15 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
   useEffect(() => {
     fetch('/api/credits').then(r => r.json()).then(setCredits).catch(() => {})
   }, [pathname])
+
+  useEffect(() => {
+    const handleCreditUpdate = (event: Event) => {
+      const balance = (event as CustomEvent<number>).detail
+      setCredits(current => current ? { ...current, balance } : current)
+    }
+    window.addEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
+    return () => window.removeEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
+  }, [])
 
   // Route váltáskor mobilon automatikusan záródjon a drawer, hogy ne kelljen
   // külön becsukni minden navigáció után.

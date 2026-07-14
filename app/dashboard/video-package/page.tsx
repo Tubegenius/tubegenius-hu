@@ -7,6 +7,7 @@ import type { CreatorProfile } from '@/types'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { publishCreditBalance } from '@/lib/credit-balance-events'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -227,9 +228,28 @@ function getQualityMeta(status?: string) {
   return { label: 'Általános csomag', color: '#CBD5E1', bg: 'rgba(139,155,180,0.08)' }
 }
 
+function isYouTubeSource(url: string) {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, '')
+    return hostname === 'youtube.com' || hostname.endsWith('.youtube.com') || hostname === 'youtu.be'
+  } catch {
+    return false
+  }
+}
+
+function getSourceCounts(pkg: VideoPackageResult, context: OpportunityPackageContext | null) {
+  const videoEvidenceCount = context?.evidence_videos?.length
+    ?? pkg.sources_used?.filter(source => isYouTubeSource(source.url)).length
+    ?? 0
+  const webSourceCount = context?.web_sources?.length
+    ?? pkg.sources_used?.filter(source => !isYouTubeSource(source.url)).length
+    ?? 0
+
+  return { webSourceCount, videoEvidenceCount }
+}
+
 function getProductionBrief(pkg: VideoPackageResult, context: OpportunityPackageContext | null) {
-  const sourceCount = pkg.sources_used?.length || context?.web_sources?.length || 0
-  const videoEvidenceCount = context?.evidence_videos?.length || 0
+  const { webSourceCount, videoEvidenceCount } = getSourceCounts(pkg, context)
   const readiness = pkg.opportunity_context?.ready_to_produce_label || context?.ready_to_produce_label || 'Kézi ellenőrzés javasolt'
   const risks = pkg.opportunity_context?.risk_flags || context?.risk_flags || []
 
@@ -240,7 +260,7 @@ function getProductionBrief(pkg: VideoPackageResult, context: OpportunityPackage
     `PLATFORM: ${pkg.platform}`,
     `HOSSZ: ${pkg.estimated_duration || pkg.video_length}`,
     `NARRÁCIÓ: ${pkg.estimated_word_count || ''}`,
-    `FORRÁSOK: ${sourceCount} webes forrás, ${videoEvidenceCount} bizonyíték videó`,
+    `FORRÁSOK: ${webSourceCount} webes forrás, ${videoEvidenceCount} bizonyíték videó`,
     risks.length ? `KOCKÁZATOK: ${risks.join(' | ')}` : 'KOCKÁZATOK: nincs kiemelt kockázat',
     '',
     `HOOK: ${pkg.hook}`,
@@ -755,6 +775,9 @@ export default function VideoPackagePage() {
         return
       }
       setResult(data)
+      if (data._credits_remaining !== undefined) {
+        publishCreditBalance(data._credits_remaining)
+      }
 
       // Mentés sessionStorage-ba — böngésző vissza gomb támogatás
       sessionStorage.setItem('willviral_video_package_state', JSON.stringify({
@@ -1201,6 +1224,7 @@ export default function VideoPackagePage() {
               const quality = getQualityMeta(result.quality_status)
               const context = result.opportunity_context || opportunityContext
               const riskFlags = context?.risk_flags || []
+              const { webSourceCount, videoEvidenceCount } = getSourceCounts(result, opportunityContext)
               return (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -1214,7 +1238,7 @@ export default function VideoPackagePage() {
                     </div>
                     <div className="rounded-lg p-3" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
                       <p className="text-xs mb-1" style={{ color: '#CBD5E1' }}>Források</p>
-                      <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{result.sources_used?.length || opportunityContext?.web_sources?.length || 0} web · {opportunityContext?.evidence_videos?.length || 0} video</p>
+                      <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{webSourceCount} web · {videoEvidenceCount} video</p>
                     </div>
                     <div className="rounded-lg p-3" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
                       <p className="text-xs mb-1" style={{ color: '#CBD5E1' }}>Célhossz</p>

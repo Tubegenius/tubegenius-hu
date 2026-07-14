@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 import type { CreatorProfile } from '@/types'
+import { CREDIT_BALANCE_UPDATED_EVENT } from '@/lib/credit-balance-events'
 
 interface HeaderProps {
   user: User
@@ -15,6 +16,12 @@ export default function DashboardHeader({ user, profile }: HeaderProps) {
 
   useEffect(() => {
     fetch('/api/credits').then(r => r.json()).then(d => setCredits(d.balance)).catch(() => {})
+
+    const handleCreditUpdate = (event: Event) => {
+      setCredits((event as CustomEvent<number>).detail)
+    }
+    window.addEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
+    return () => window.removeEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
   }, [])
 
   return (
