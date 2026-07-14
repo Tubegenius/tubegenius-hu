@@ -1,6 +1,26 @@
 // lib/niche-fit.ts
 // WillViral — Niche Semantic Fit rendszer
 // Bármilyen vesszős niche-et szétbont és semantic matching-gel értékeli a videó illeszkedést
+//
+// FONTOS, user által élőben talált hiba (2026-07-13): a NICHE_SEMANTIC_MAP csak
+// 17 kategóriát ismer fel szinonima-listával — minden MÁS niche (pl. "futónövények
+// gondozása", "kutyanevelés lakásban") a findMatchingCategories() fallback ágára esik,
+// ami KIZÁRÓLAG a niche saját szavainak SZÓ SZERINTI előfordulását keresi a jelölt
+// cím/leírás szövegében. Egy valóban releváns jelölt (pl. "Borostyán szobanövény
+// betegségei" a "futónövények gondozása" niche-hez) szinte sosem tartalmazza szó
+// szerint a niche szavait, ezért score=0 lett — ez pedig blokkolta a "Gyártható most"
+// döntést (decide.ts nicheFit>=60 küszöb), a usernek több körben, kredit árán kellett
+// újrapróbálkoznia. Ez a modul EZUTÁN SEM query-generálásra való (ld. lenti megjegyzés) —
+// csak a findMatchingCategories() fallback lett puhábbá (tokenizált/prefix-alapú
+// egyezés, lib/niche-relevance.ts újrahasznosításával) és a "relevance contradiction
+// guard" működik matchedCategories nélkül is, ha a felsőbb szintű (topic-specifikus,
+// FÜGGETLENÜL számolt) relevance_average már önmagában erős jelet ad.
+//
+// query_source: mindig 'dynamic_expansion' (lib/niche-expansion.ts) — ez a fájl
+// SOHA nem használható keresési seed/query előállítására, kizárólag már megtalált
+// jelöltek relevancia-pontozására (scoring_source: 'niche_fit').
+
+import { tokenize, sharedPrefixLength } from './niche-relevance'
 
 export const NICHE_SEMANTIC_MAP: Record<string, string[]> = {
   tudomany: ['science', 'scientific', 'research', 'study', 'experiment', 'discovery', 'breakthrough', 'physics', 'biology', 'chemistry', 'astronomy', 'space', 'archaeology', 'quantum', 'nasa', 'kutatas', 'felfedezes', 'kiserlet'],
@@ -33,8 +53,8 @@ function normalizeForMatch(value: string): string {
   return value.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function findMatchingCategories(nicheCategories: string[]): Array<{ category: string; semanticTerms: string[] }> {
-  const results: Array<{ category: string; semanticTerms: string[] }> = []
+function findMatchingCategories(nicheCategories: string[]): Array<{ category: string; semanticTerms: string[]; isFallback: boolean }> {
+  const results: Array<{ category: string; semanticTerms: string[]; isFallback: boolean }> = []
 
   for (const cat of nicheCategories) {
     const normalized = normalizeForMatch(cat)
@@ -42,18 +62,38 @@ function findMatchingCategories(nicheCategories: string[]): Array<{ category: st
 
     for (const [key, terms] of Object.entries(NICHE_SEMANTIC_MAP)) {
       if (normalized.includes(key) || key.includes(normalized.slice(0, Math.min(normalized.length, 6)))) {
-        results.push({ category: cat, semanticTerms: terms })
+        results.push({ category: cat, semanticTerms: terms, isFallback: false })
         matched = true
         break
       }
     }
 
     if (!matched) {
-      results.push({ category: cat, semanticTerms: [normalized, ...normalized.split(/\s+/)] })
+      results.push({ category: cat, semanticTerms: [normalized, ...normalized.split(/\s+/)], isFallback: true })
     }
   }
 
   return results
+}
+
+// A NICHE_SEMANTIC_MAP-en KÍVÜLI (barmilyen, a 17 hardcode-olt kategorian tuli)
+// niche-hez nincs szinonima-lista — a szo szerinti includes() szinte sosem talal
+// (pl. "Borostyan szobanoveny betegsegei" cim nem tartalmazza szo szerint a
+// "futonovenyek" szot). Puhabb, hardcode-mentes tartalek: token-szintu egyezes
+// vagy legalabb 5 karakteres kozos prefix a niche es a jelolt szoveg tokenjei
+// kozott — ugyanaz a mintazat, mint a lib/niche-relevance.ts prompt-injekcios
+// kapujaban, csak itt pontozashoz hasznaljuk, nem query-generalashoz.
+function fuzzyTokenMatch(nicheText: string, videoText: string): boolean {
+  const nicheTokens = tokenize(nicheText)
+  const videoTokens = tokenize(videoText)
+  for (const n of nicheTokens) {
+    if (n.length < 3) continue
+    for (const v of videoTokens) {
+      if (v.length < 3) continue
+      if (n === v || sharedPrefixLength(n, v) >= 5) return true
+    }
+  }
+  return false
 }
 
 export interface NicheFitResult {
@@ -84,6 +124,7 @@ export function calculateNicheFit(
   const matchedCategories: string[] = []
   const matchedTerms: string[] = []
   let totalMatches = 0
+  let hasFallbackFuzzyMatch = false
 
   for (const profile of categoryProfiles) {
     let categoryMatched = false
@@ -99,6 +140,16 @@ export function calculateNicheFit(
         totalMatches++
       }
     }
+    // A hardcode-olt NICHE_SEMANTIC_MAP-en kivuli kategoriaknal (isFallback)
+    // a szo szerinti egyezes szinte sosem talal — token-szintu/prefix-alapu
+    // tartalek próba, hogy a "futónövények" niche a "Borostyán szobanövény
+    // betegségei" cimhez is passzoljon (kozos "növény" gyok), ne csak a
+    // szo szerinti egyezes.
+    if (!categoryMatched && profile.isFallback && fuzzyTokenMatch(profile.category, videoText)) {
+      matchedCategories.push(profile.category)
+      hasFallbackFuzzyMatch = true
+      totalMatches++
+    }
   }
 
   // Score calculation
@@ -106,11 +157,31 @@ export function calculateNicheFit(
   const termScore = Math.min(100, totalMatches * 15)
   let score = Math.round(categoryRatio * 50 + Math.min(50, termScore))
 
-  // Relevance contradiction guard
-  if (relevanceScore !== undefined && relevanceScore >= 80 && score < 40 && matchedCategories.length > 0) {
-    score = Math.max(score, 50)
+  // Relevance contradiction guard — a relevanceScore FÜGGETLENÜL számolt
+  // (lib/trend-radar.ts scoreVideoRelevanceForTopic, a konkrét TÉMÁHOZ, nem
+  // a niche-hez viszonyítva), ezért önmagában is valid jelzés akkor is, ha a
+  // hardcode-olt NICHE_SEMANTIC_MAP és a fuzzy tartalék egyike sem talált
+  // semmit (pl. teljesen új, korábban nem látott niche). Korábban ez a
+  // védőháló KIZÁRÓLAG matchedCategories.length>0 esetén működött, ami pont
+  // azoknál a niche-eknél hagyta 0-n a score-t, amikre a legjobban kellett
+  // volna — élő hiba, a user találta: minden a 17 hardcode-olt kategórián
+  // kívüli niche (pl. "futónövények gondozása") minden jelöltje "Kutatandó
+  // irány"-nál ragadt, sose "Gyártható most", mert a nicheFit>=60 küszöböt
+  // 0 pontszámmal sosem lehetett elérni (decide.ts).
+  if (relevanceScore !== undefined && relevanceScore >= 85 && score < 60) {
+    score = Math.max(score, matchedCategories.length > 0 ? 65 : 60)
+  } else if (relevanceScore !== undefined && relevanceScore >= 75 && score < 55) {
+    score = Math.max(score, matchedCategories.length > 0 ? 55 : 55)
+  } else if (relevanceScore !== undefined && relevanceScore >= 60 && score < 50) {
+    score = Math.max(score, matchedCategories.length > 0 ? 50 : 45)
+  } else if (relevanceScore !== undefined && relevanceScore >= 45 && score === 0) {
+    // Meg akkor is adjunk nem nulla alapot, ha sem a térkép, sem a fuzzy
+    // tartalék nem talált semmit, de a topic-specifikus relevancia már
+    // közepes — így legalább a "research_required" küszöböt átlépheti,
+    // nem ragad automatikusan elutasításnál.
+    score = 25
   }
-  if (relevanceScore !== undefined && relevanceScore >= 70 && matchedCategories.length > 0 && score < 60) {
+  if (hasFallbackFuzzyMatch && score < 45) {
     score = Math.max(score, 45)
   }
 

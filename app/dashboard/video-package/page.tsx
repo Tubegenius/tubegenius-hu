@@ -137,7 +137,7 @@ interface OpportunityPackageContext {
   preparation_mode?: boolean
   hook_suggestion?: string
   web_sources?: Array<{ title: string; url: string; snippet?: string; date?: string; source?: string }>
-  evidence_videos?: Array<{ video_id: string; title: string; url: string; channel_title: string; view_count: number; like_count: number; comment_count: number; published_at: string }>
+  evidence_videos?: Array<{ video_id: string; title: string; url: string; channel_title: string; thumbnail_url?: string; view_count: number; like_count: number; comment_count: number; published_at: string }>
   score_breakdown?: Record<string, number>
 }
 
@@ -1560,6 +1560,34 @@ export default function VideoPackagePage() {
                   </li>
                 ))}
               </ul>
+            </Block>
+          )}
+
+          {/* Bizonyíték videók — a valós opportunityContext.evidence_videos tömbből,
+              NEM az AI által szabadon generált sources_used-ból (az csak a
+              webes forrásokat szokta megbízhatóan visszaadni, a videókat
+              gyakran figyelmen kívül hagyja — ezért korábban a fenti "X web ·
+              Y video" számláló Y-t mutatott, de sehol nem jelent meg a Y videó). */}
+          {opportunityContext?.evidence_videos && opportunityContext.evidence_videos.length > 0 && (
+            <Block title={`🎥 Bizonyíték videók (${opportunityContext.evidence_videos.length})`} accent="rgba(59,130,246,0.15)">
+              <p className="text-xs mb-3" style={{ color: '#CBD5E1' }}>
+                Ezek a YouTube-videók igazolják, hogy a témának van piaci/nézettségi jele.
+              </p>
+              <div className="space-y-2">
+                {opportunityContext.evidence_videos.map((v, i) => (
+                  <a key={v.video_id || i} href={v.url} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 rounded-lg p-2 transition-all hover:opacity-80"
+                    style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div className="w-16 h-10 rounded overflow-hidden flex-shrink-0" style={{ background: '#121826' }}>
+                      {v.thumbnail_url && <img src={v.thumbnail_url} alt="" className="w-full h-full object-cover" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium line-clamp-1" style={{ color: '#F8FAFC' }}>{v.title}</p>
+                      <p className="text-xs" style={{ color: '#94A3B8' }}>{v.channel_title} · 👁 {v.view_count?.toLocaleString('hu-HU') || 0}</p>
+                    </div>
+                  </a>
+                ))}
+              </div>
             </Block>
           )}
 
