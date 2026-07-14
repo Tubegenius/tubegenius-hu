@@ -12,7 +12,7 @@ import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } fro
 
 export async function POST(request: NextRequest) {
   try {
-    const { topic, platform, region } = await request.json()
+    const { topic, platform, region, force_refresh } = await request.json()
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
@@ -26,8 +26,8 @@ export async function POST(request: NextRequest) {
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ topic, platform: platformValue })
-    const inputHash = buildPaidResultHash({ userId, toolType: 'thumbnail_studio', normalizedInput, platform: platformValue })
+    const normalizedInput = normalizePaidResultInput({ topic, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
+    const inputHash = buildPaidResultHash({ userId, toolType: 'thumbnail_studio', normalizedInput, platform: platformValue, region: regionValue })
 
     const lock = await acquireRequestLock({ userId, toolType: 'thumbnail_studio', inputHash })
     if (!lock.acquired) {
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const paid = await getPaidResultByHash({ userId, toolType: 'thumbnail_studio', inputHash })
+      const paid = !force_refresh ? await getPaidResultByHash({ userId, toolType: 'thumbnail_studio', inputHash }) : null
       if (paid) {
         const opened = await openPaidResult(paid)
         return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })

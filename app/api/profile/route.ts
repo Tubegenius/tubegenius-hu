@@ -13,8 +13,8 @@ import type { NicheCandidate } from '@/types'
 // video_count, channel_published_at) SZANDEKOSAN nincsenek a listan — azokat
 // kizarolag lib/channel-profile-sync.ts irja, sosem kozvetlen kliens JSON.
 const ALLOWED_PROFILE_FIELDS = [
-  'channel_name', 'platform', 'language', 'niche', 'main_category', 'specific_focus',
-  'audience', 'avoid_topics', 'video_length', 'creator_level', 'region', 'subscriber_count',
+  'platform', 'language', 'niche', 'main_category', 'specific_focus',
+  'audience', 'avoid_topics', 'video_length', 'creator_level', 'region',
   'narration_style', 'custom_prompt', 'channel_usage_mode', 'selected_main_niche',
 ] as const
 
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     
     if (authError) {
       console.error('Auth error:', authError)
-      return NextResponse.json({ error: 'Auth hiba: ' + authError.message }, { status: 401 })
+      return NextResponse.json({ error: 'A munkamenet ellenőrzése sikertelen.' }, { status: 401 })
     }
     
     if (!user) {

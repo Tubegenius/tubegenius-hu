@@ -90,6 +90,11 @@ export async function getYoutubeOAuthTokens(userId: string): Promise<YoutubeOAut
 
 export async function deleteYoutubeOAuthTokens(userId: string): Promise<void> {
   const supabase = createAdminClient()
+  const tokens = await getYoutubeOAuthTokens(userId)
+  if (tokens?.refresh_token) {
+    const oauth2Client = getOAuth2Client()
+    await oauth2Client.revokeToken(tokens.refresh_token)
+  }
   await supabase.from('youtube_oauth_tokens').delete().eq('user_id', userId)
 }
 

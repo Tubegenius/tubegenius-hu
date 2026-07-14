@@ -10,7 +10,7 @@
 // kreditlevonas NELKUL kap baratsagos hibat.
 import { createServerClient } from '@supabase/ssr'
 
-const LOCK_TTL_MS = 45000 // boven tobb, mint egy tipikus AI-hivas — de nem tart oraig, ha egy hivas lezuhan lock-felszabaditas nelkul
+const LOCK_TTL_MS = 5 * 60 * 1000
 
 function adminClient() {
   return createServerClient(

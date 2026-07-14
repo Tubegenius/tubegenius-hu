@@ -35,8 +35,8 @@ export async function POST(request: NextRequest) {
     const regionValue = region || 'HU'
     const keywordList: string[] = Array.isArray(keywords) ? keywords : (typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()).filter(Boolean) : [])
 
-    const normalizedInput = normalizePaidResultInput({ topic, existing_title, keywords: keywordList, platform: platformValue })
-    const inputHash = buildPaidResultHash({ userId, toolType: 'seo_optimizer', normalizedInput, platform: platformValue })
+    const normalizedInput = normalizePaidResultInput({ topic, existing_title, keywords: keywordList, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
+    const inputHash = buildPaidResultHash({ userId, toolType: 'seo_optimizer', normalizedInput, platform: platformValue, region: regionValue })
 
     const lock = await acquireRequestLock({ userId, toolType: 'seo_optimizer', inputHash })
     if (!lock.acquired) {

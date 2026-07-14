@@ -184,7 +184,7 @@ export async function ensureVideoIdea(
       market,
     })
 
-    const payload = compactRecord({
+    const insertPayload = compactRecord({
       user_id: input.userId,
       title: (input.title || topic).trim(),
       topic,
@@ -216,17 +216,42 @@ export async function ensureVideoIdea(
       .eq('input_hash', inputHash)
       .single()
 
+    // Meglevo otletnel PATCH semantics: egy reszleges tool-hivas nem nullazhatja
+    // a masik tool altal mar elmentett score/niche/proof/metadata mezoket.
+    const updatePayload = compactRecord({
+      title: input.title !== undefined ? (input.title || topic).trim() : undefined,
+      topic,
+      short_description: input.shortDescription,
+      niche: input.niche,
+      platform: input.platform,
+      language: input.language,
+      market: input.market,
+      country: input.country,
+      currency: input.currency,
+      timezone: input.timezone,
+      content_format: input.contentFormat,
+      keywords: input.keywords,
+      viral_score: input.viralScore,
+      opportunity_score: input.opportunityScore,
+      competition_score: input.competitionScore,
+      proof_summary: input.proofSummary,
+      workflow_status: input.workflowStatus,
+      paid_result_reference: input.paidResultReference,
+      metadata: input.metadata,
+      updated_at: new Date().toISOString(),
+    })
+
     const query = existing?.id
       ? admin
         .from('video_ideas')
-        .update(payload)
+        .update(updatePayload)
         .eq('id', existing.id)
         .eq('user_id', input.userId)
         .select('*')
         .single()
       : admin
         .from('video_ideas')
-        .insert(payload)
+        .insert(insertPayload)
         .select('*')
         .single()
 
@@ -267,7 +292,7 @@ export async function addVideoIdeaProofSignal(admin: SupabaseClient, input: Proo
   try {
     const { data, error } = await admin
       .from('video_idea_proof_signals')
-      .insert({
+      .upsert({
         user_id: input.userId,
         video_idea_id: input.videoIdeaId,
         signal_type: input.signalType,
@@ -282,7 +307,7 @@ export async function addVideoIdeaProofSignal(admin: SupabaseClient, input: Proo
         strength: input.strength || null,
         reason: input.reason || null,
         payload: input.payload || {},
-      })
+      }, { onConflict: 'video_idea_id,signal_type,source_tool,source_id,url' })
       .select('id')
       .single()
 

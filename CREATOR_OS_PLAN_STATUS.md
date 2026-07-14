@@ -2,6 +2,24 @@
 
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
+## 2026-07-14 — MARKET READINESS HARDENING, 1. JAVÍTÁSI CSOMAG
+
+Teljes backend/terméklogikai audit után az első P0/P1 javításcsomag elkészült:
+
+- Stripe webhook middleware-kivétel: a Stripe szerver–szerver POST már eljut a signature-ellenőrző route-ig.
+- Új idempotens `credit_ledger` + `apply_credit_event()` RPC (migráció 030): top-up és invoice jóváírás külső eseményazonosítóval deduplikált, atomi és auditálható.
+- Az első subscription checkout már nem ír jóvá külön kreditet; kredit kizárólag invoice alapján jár, így nincs dupla első havi jóváírás.
+- Webhook feldolgozási hiba 5xx-et ad és újrapróbálható; aktív előfizetés mellett új subscription checkout tiltott.
+- Next.js 14.2.0 → 14.2.35: a korábbi critical middleware authorization bypass megszűnt. `npm audit`: critical 1→0.
+- Similar Videos in-flight lock, request lock TTL 45 mp → 5 perc.
+- Video Idea meglévő rekordnál patch/merge semantics: részleges tool-hívás nem nulláz korábbi score/niche/proof mezőket.
+- Memory `completed` workflow mapping egységesítve `published` értékre.
+- Migráció 031: proof/event tenant ownership policy és proof deduplikáció.
+- Cache hash javítás: Title/SEO/Thumbnail/Content Gap/Channel Audit régió-, niche- és snapshot-tudatos; Thumbnail explicit `force_refresh` támogatás.
+- Cron fail-closed hiányzó secret esetén; Facts/Quota saját auth; profil kliens által írható derived mezői szűkítve; Google OAuth disconnect token revoke.
+
+Ellenőrzés: `npx tsc --noEmit` 0 hiba; `npm run build` sikeres (77/77 oldal). **A 030 és 031 migráció még NEM futott le az éles adatbázison; deploy előtt kötelező.** Élő kreditfogyasztó teszt ebben a csomagban nem történt.
+
 **Utolsó frissítés**: 2026-07-13
 **Utolsó commit**: ld. lent "Niche Expansion Engine + 3 keresési mód" szakasz — a user élőben talált egy komoly hardcode-problémát az Opportunity Engine-ben, ez a kör kijavította. Ezt megelőzően: [b1257fc] `feat: Channel Header Card + csatorna-első onboarding (channel_usage_mode)`, migráció [029](supabase/migrations/029_channel_profile_and_usage_mode.sql) élesben lefuttatva és élőben megerősítve. Korábban: Phase 1 lezárva, teljes Phase 2, Launch Readiness Audit+Hotfix Sprint, Beta Hardening Test, funkció-bejárás 11/28 tétele — mind commitolva (`8ddcdcf`, `9b68574`, `ec9bca5`, `6915997`).
 

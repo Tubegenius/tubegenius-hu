@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
     platform: platform || 'youtube',
     opportunityScore: opportunity_score ?? null,
     viralScore: viral_score ?? null,
-    workflowStatus: state === 'rejected' ? 'rejected' : state === 'completed' ? 'validated' : 'new_idea',
+    workflowStatus: state === 'rejected' ? 'rejected' : state === 'completed' ? 'published' : 'new_idea',
     metadata: {
       source_context: source_context || 'creator_memory',
       search_keyword: search_keyword || null,

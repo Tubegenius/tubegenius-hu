@@ -24,6 +24,7 @@ import {
   getVideoIdeaWorkflowStatus,
   forwardWorkflowStatus,
 } from '@/lib/video-ideas/video-idea-service'
+import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const MIN_SIMILAR_VIDEO_RELEVANCE = 60
@@ -437,6 +438,7 @@ async function hydrateStats(items: YouTubeSearchItem[]) {
 }
 
 export async function POST(request: NextRequest) {
+  let requestLockId: string | undefined
   try {
     const { topic, region, max_results = 9, user_niche, use_profile_niche, platform, language, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
     if (!topic) {
@@ -512,6 +514,12 @@ export async function POST(request: NextRequest) {
         usage_blocked: true,
       })
     }
+    const lock = await acquireRequestLock({ userId, toolType: 'similar_videos', inputHash: paidInputHash })
+    if (!lock.acquired) {
+      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+    }
+    requestLockId = lock.lockId
+
     // Kredit levonást később végezzük, a YouTube keresés után — csak ha nem cache hit
     let creditCharged = false
     if (usageCheck.cost > 0) {
@@ -875,6 +883,8 @@ export async function POST(request: NextRequest) {
     console.error('Similar Videos error:', error)
     const reason = (error as { errors?: Array<{ reason?: string }> })?.errors?.[0]?.reason || null
     return NextResponse.json({ videos: [], error: 'Videók betöltése sikertelen.', error_detail: reason }, { status: 500 })
+  } finally {
+    await releaseRequestLock(requestLockId)
   }
 }
 

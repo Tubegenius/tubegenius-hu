@@ -8,11 +8,13 @@ import { refreshDueCandidates } from '@/lib/trend-tracking'
 // Cron-ból hívható (Vercel Cron / külső scheduler), CRON_SECRET fejléccel védve.
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET
-  if (secret) {
-    const auth = request.headers.get('authorization')
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+  if (!secret) {
+    console.error('[cron/refresh-trends] CRON_SECRET nincs beállítva')
+    return NextResponse.json({ error: 'Cron not configured' }, { status: 503 })
+  }
+  const auth = request.headers.get('authorization')
+  if (auth !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   try {

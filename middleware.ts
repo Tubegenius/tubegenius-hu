@@ -2,7 +2,8 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith('/api/cron/')) {
+  if (request.nextUrl.pathname.startsWith('/api/cron/')
+    || request.nextUrl.pathname === '/api/stripe/webhook') {
     return NextResponse.next({ request })
   }
 

@@ -21,8 +21,8 @@ export async function POST(request: NextRequest) {
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ niche, platform: platformValue })
-    const inputHash = buildPaidResultHash({ userId, toolType: 'content_gap', normalizedInput, platform: platformValue })
+    const normalizedInput = normalizePaidResultInput({ niche, platform: platformValue, region: regionValue })
+    const inputHash = buildPaidResultHash({ userId, toolType: 'content_gap', normalizedInput, platform: platformValue, region: regionValue })
 
     const lock = await acquireRequestLock({ userId, toolType: 'content_gap', inputHash })
     if (!lock.acquired) {

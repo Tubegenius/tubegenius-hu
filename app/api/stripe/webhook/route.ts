@@ -47,11 +47,20 @@ export async function POST(req: NextRequest) {
 
   if (claimError) {
     if (claimError.code === '23505') {
-      console.log(`Stripe webhook: event ${event.id} (${event.type}) mar fel lett dolgozva korabban, kihagyva.`)
-      return NextResponse.json({ received: true, duplicate: true })
+      const { data: previous } = await admin.from('stripe_webhook_events')
+        .select('status').eq('event_id', event.id).single()
+      if (previous?.status === 'failed') {
+        const { error: retryError } = await admin.from('stripe_webhook_events')
+          .update({ status: 'processing', error_message: null, processed_at: null })
+          .eq('event_id', event.id).eq('status', 'failed')
+        if (retryError) return NextResponse.json({ error: 'Retry claim failed' }, { status: 500 })
+      } else {
+        return NextResponse.json({ received: true, duplicate: true })
+      }
+    } else {
+      console.error('Stripe webhook: idempotency claim sikertelen:', claimError)
+      return NextResponse.json({ error: 'Idempotency check failed' }, { status: 500 })
     }
-    console.error('Stripe webhook: idempotency claim sikertelen:', claimError)
-    return NextResponse.json({ error: 'Idempotency check failed' }, { status: 500 })
   }
 
   try {
@@ -77,7 +86,6 @@ export async function POST(req: NextRequest) {
             subscription_status: 'active',
             stripe_customer_id: session.customer as string,
             stripe_subscription_id: session.subscription as string,
-            balance: planConfig.credits,
             monthly_allowance: planConfig.credits,
           }, { onConflict: 'user_id' })
         } else if (session.mode === 'payment') {
@@ -87,9 +95,13 @@ export async function POST(req: NextRequest) {
 
           // Atomi increment RPC-vel — korabban select-update (read-then-write)
           // volt, ami ket kozel egyideju esemenynel elveszithetett egy frissitest.
-          const { data: newBalance, error: rpcError } = await admin.rpc('increment_topup_credits', {
+          const { data: newBalance, error: rpcError } = await admin.rpc('apply_credit_event', {
             p_user_id: userId,
             p_delta: topupConfig.credits,
+            p_cap: null,
+            p_external_ref: `stripe:${event.id}`,
+            p_reason: 'topup_purchase',
+            p_metadata: { package: pkg, stripe_event_id: event.id },
           })
           if (rpcError) throw rpcError
 
@@ -115,26 +127,36 @@ export async function POST(req: NextRequest) {
           .eq('stripe_subscription_id', invoiceSubscription as string)
           .single()
 
-        if (!userRow || !userRow.plan) break
+        let resolvedUserId = userRow?.user_id as string | undefined
+        let resolvedPlan = userRow?.plan as PlanKey | undefined
+        if (!resolvedUserId || !resolvedPlan) {
+          const subscription = await stripe.subscriptions.retrieve(invoiceSubscription as string)
+          resolvedUserId = subscription.metadata?.user_id
+          resolvedPlan = subscription.metadata?.plan as PlanKey | undefined
+        }
+        if (!resolvedUserId || !resolvedPlan) throw new Error('Invoice subscription user/plan nem oldhato fel')
 
-        const planConfig = PLANS[userRow.plan as PlanKey]
+        const planConfig = PLANS[resolvedPlan]
         if (!planConfig) break
 
         // Atomi increment RPC-vel, a rollover-sapka (rolloverCap) a fuggvenyen
         // belul LEAST()-tel ervenyesul — korabban ez is select-update volt.
-        const { data: newBalance, error: rpcError } = await admin.rpc('increment_subscription_credits', {
-          p_user_id: userRow.user_id,
+        const { data: newBalance, error: rpcError } = await admin.rpc('apply_credit_event', {
+          p_user_id: resolvedUserId,
           p_delta: planConfig.credits,
           p_cap: planConfig.rolloverCap,
+          p_external_ref: `stripe:invoice:${invoice.id}`,
+          p_reason: 'subscription_renewal',
+          p_metadata: { plan: resolvedPlan, invoice_id: invoice.id, stripe_event_id: event.id },
         })
         if (rpcError) throw rpcError
 
         // Log
         await admin.from('ai_usage_logs').insert({
-          user_id: userRow.user_id,
+          user_id: resolvedUserId,
           action: 'subscription_renewal',
           credits_used: -planConfig.credits,
-          metadata: { plan: userRow.plan, new_balance: newBalance, stripe_event_id: event.id },
+          metadata: { plan: resolvedPlan, new_balance: newBalance, stripe_event_id: event.id },
         })
         break
       }
@@ -190,6 +212,7 @@ export async function POST(req: NextRequest) {
     await admin.from('stripe_webhook_events')
       .update({ status: 'failed', error_message: String(err?.message || err), processed_at: new Date().toISOString() })
       .eq('event_id', event.id)
+    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
 
   return NextResponse.json({ received: true })

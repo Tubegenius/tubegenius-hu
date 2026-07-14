@@ -10,6 +10,9 @@ export async function POST(request: NextRequest) {
 
     const { feature } = await request.json() as { feature: ProtectedFeature }
     if (!feature) return NextResponse.json({ error: 'Feature megadása kötelező' }, { status: 400 })
+    if (!['similar_videos', 'opportunity_engine'].includes(feature)) {
+      return NextResponse.json({ error: 'Érvénytelen feature' }, { status: 400 })
+    }
 
     const result = await checkUsagePermission(user.id, feature)
     return NextResponse.json(result)

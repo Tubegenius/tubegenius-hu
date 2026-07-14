@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isFactRelevantToTopic } from '@/lib/fact-safety'
+import { getUserId } from '@/lib/credits'
 
 interface FactSource {
   title: string
@@ -73,6 +74,8 @@ async function fetchSerper(query: string): Promise<FactSource[]> {
 
 export async function POST(request: NextRequest) {
   try {
+    const userId = await getUserId()
+    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
     const { topic, language } = await request.json()
 
     if (!topic) {

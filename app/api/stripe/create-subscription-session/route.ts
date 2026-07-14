@@ -21,9 +21,14 @@ export async function POST(req: NextRequest) {
     // Get or create stripe customer
     const { data: creditRow } = await admin
       .from('user_credits')
-      .select('stripe_customer_id')
+      .select('stripe_customer_id, stripe_subscription_id, subscription_status')
       .eq('user_id', user.id)
       .single()
+
+    if (creditRow?.stripe_subscription_id
+      && ['active', 'trialing', 'past_due'].includes(creditRow.subscription_status || '')) {
+      return NextResponse.json({ error: 'Már van aktív előfizetésed. A csomagváltást a számlázási portálon végezheted el.' }, { status: 409 })
+    }
 
     let stripeCustomerId = creditRow?.stripe_customer_id
 
@@ -49,6 +54,7 @@ export async function POST(req: NextRequest) {
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?success=true`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?canceled=true`,
       metadata: { user_id: user.id, plan },
+      subscription_data: { metadata: { user_id: user.id, plan } },
     })
 
     return NextResponse.json({ url: session.url })

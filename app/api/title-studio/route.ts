@@ -26,8 +26,8 @@ export async function POST(request: NextRequest) {
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ topic, existing_title, platform: platformValue })
-    const inputHash = buildPaidResultHash({ userId, toolType: 'title_studio', normalizedInput, platform: platformValue })
+    const normalizedInput = normalizePaidResultInput({ topic, existing_title, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
+    const inputHash = buildPaidResultHash({ userId, toolType: 'title_studio', normalizedInput, platform: platformValue, region: regionValue })
 
     // Beta Hardening Test (2026-07-11): ket egyideju azonos keres (pl. ket
     // bongeszofulben) nelkule mindketto vegigfutna es kulon-kulon kreditet

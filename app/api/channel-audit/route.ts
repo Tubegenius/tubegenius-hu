@@ -111,7 +111,8 @@ export async function POST(request: NextRequest) {
     const strongTopics = sorted.slice(0, 3).map(a => a.topic || a.video_title)
     const weakTopics = sorted.slice(-3).map(a => a.topic || a.video_title)
 
-    const normalizedInput = normalizePaidResultInput({ weakest: weakest?.label || '', strongTopics, weakTopics, auditCount: auditList.length })
+    const auditSnapshot = auditList.map(a => ({ title: a.video_title, topic: a.topic, score: a.overall_score, final: a.final_scores }))
+    const normalizedInput = normalizePaidResultInput({ weakest: weakest?.label || '', strongTopics, weakTopics, auditSnapshot, niche: effectiveNiche })
     const inputHash = buildPaidResultHash({ userId, toolType: 'channel_audit', normalizedInput })
 
     const lock = await acquireRequestLock({ userId, toolType: 'channel_audit', inputHash })
