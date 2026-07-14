@@ -18,7 +18,7 @@ Teljes backend/terméklogikai audit után az első P0/P1 javításcsomag elkész
 - Cache hash javítás: Title/SEO/Thumbnail/Content Gap/Channel Audit régió-, niche- és snapshot-tudatos; Thumbnail explicit `force_refresh` támogatás.
 - Cron fail-closed hiányzó secret esetén; Facts/Quota saját auth; profil kliens által írható derived mezői szűkítve; Google OAuth disconnect token revoke.
 
-Ellenőrzés: `npx tsc --noEmit` 0 hiba; `npm run build` sikeres (77/77 oldal). **A 030 és 031 migráció még NEM futott le az éles adatbázison; deploy előtt kötelező.** Élő kreditfogyasztó teszt ebben a csomagban nem történt.
+Ellenőrzés: `npx tsc --noEmit` 0 hiba; `npm run build` sikeres (77/77 oldal). **A 030 és 031 migráció 2026-07-14-én lefutott az éles Supabase adatbázison.** Visszaellenőrizve: `credit_ledger`, `apply_credit_event(...)`, proof unique index és mindkét tenant insert policy létezik. A 031 éles futtatásakor talált PostgreSQL index-szintaxis hiba javítva (`NULLS NOT DISTINCT` az oszloplista után). Élő kreditfogyasztó teszt ebben a csomagban még nem történt.
 
 **Utolsó frissítés**: 2026-07-13
 **Utolsó commit**: ld. lent "Niche Expansion Engine + 3 keresési mód" szakasz — a user élőben talált egy komoly hardcode-problémát az Opportunity Engine-ben, ez a kör kijavította. Ezt megelőzően: [b1257fc] `feat: Channel Header Card + csatorna-első onboarding (channel_usage_mode)`, migráció [029](supabase/migrations/029_channel_profile_and_usage_mode.sql) élesben lefuttatva és élőben megerősítve. Korábban: Phase 1 lezárva, teljes Phase 2, Launch Readiness Audit+Hotfix Sprint, Beta Hardening Test, funkció-bejárás 11/28 tétele — mind commitolva (`8ddcdcf`, `9b68574`, `ec9bca5`, `6915997`).

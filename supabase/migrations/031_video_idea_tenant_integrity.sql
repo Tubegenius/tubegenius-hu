@@ -29,7 +29,7 @@ WHERE a.id > b.id
   AND COALESCE(a.url, '') = COALESCE(b.url, '');
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_video_idea_proof_identity
-  ON public.video_idea_proof_signals
-  NULLS NOT DISTINCT (video_idea_id, signal_type, source_tool, source_id, url);
+  ON public.video_idea_proof_signals (video_idea_id, signal_type, source_tool, source_id, url)
+  NULLS NOT DISTINCT;
 
 NOTIFY pgrst, 'reload schema';
