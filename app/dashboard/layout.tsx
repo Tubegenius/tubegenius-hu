@@ -2,6 +2,7 @@ import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
 import DashboardSidebar from '@/components/dashboard/Sidebar'
 import DashboardHeader from '@/components/dashboard/Header'
+import OnboardingGuard from '@/components/dashboard/OnboardingGuard'
 
 export default async function DashboardLayout({
   children,
@@ -35,7 +36,9 @@ export default async function DashboardLayout({
         <DashboardHeader user={user} profile={profile} />
         
         <main className="flex-1 p-6 overflow-auto">
-          {children}
+          <OnboardingGuard onboardingCompleted={profile?.onboarding_completed === true}>
+            {children}
+          </OnboardingGuard>
         </main>
       </div>
     </div>
