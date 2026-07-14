@@ -63,6 +63,10 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // Supabase's server client uses dependencies that are not guaranteed to be
+  // Edge-compatible. Next.js 15.5 supports the Node.js middleware runtime
+  // natively, which also prevents Vercel's `__dirname is not defined` crash.
+  runtime: 'nodejs',
   matcher: [
     '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],

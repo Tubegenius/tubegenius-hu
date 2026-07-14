@@ -5,8 +5,9 @@ import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-track
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // POST — versenytars ujraellenorzese: friss videok + outlier ujraszamitas.
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
@@ -14,7 +15,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const { data: competitor } = await admin
       .from('tracked_competitors')
       .select('*')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', userId)
       .single()
 

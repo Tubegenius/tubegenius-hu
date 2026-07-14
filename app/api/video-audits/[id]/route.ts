@@ -12,8 +12,9 @@ const DECISION_LABELS: Record<string, string> = {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params
   const supabase = createServerSupabaseClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -22,7 +23,7 @@ export async function GET(
   const { data, error } = await admin
     .from('video_audits')
     .select('*')
-    .eq('id', params.id)
+    .eq('id', id)
     .eq('user_id', user.id)
     .single()
 
