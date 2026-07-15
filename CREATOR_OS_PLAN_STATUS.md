@@ -1,12 +1,19 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TREND ALERT VPH-MÓDSZERTAN ÉS GYAKORISÁG
+
+- Megszűnt a kumulatív YouTube-össznézettség negatív deltájából képzett hamis „gyengülő trend”. A státusz most az előző és aktuális, tényleges időintervallumból számolt megtekintés/óra legalább 25%-os gyorsulásából vagy lassulásából készül.
+- Hiányos videóminta, eltűnt YouTube-statisztika, negatív számlálódifferencia vagy nem összehasonlítható snapshot fail-closed: nem ad trendirányt. Érdemi riasztáshoz továbbra is legalább két snapshot és 500 új megtekintés kell; sebességváltozáshoz gyakorlatban legalább három mérés szükséges.
+- A 033-as production migrációval minden figyelt trend napi, heti vagy kikapcsolt riasztási gyakoriságot kapott. A napi/heti deduplikáció külön időbucketet használ, a kikapcsolt trend nem képez riasztást; a beállítás tenant-szűrt PATCH útvonalon menthető.
+- Ellenőrzés: TypeScript ✅; 13 tesztfájl, 49/49 teszt ✅. A közvetlen competitor-VPH küszöbriasztás még külön benchmark-rés.
+
 ## 2026-07-15 — VIDIQ COMPETITOR MÉRÉSI ALAP + STUDIO PROVENANCE
 
 - A Competitor Tracker már valódi idősoros snapshotokat tárol. Videó-VPH kizárólag legalább két mérés megtekintéskülönbségéből és eltelt idejéből számolódik; az első mérésnél nem jelenít meg hamis becslést. Csatornaszinten 7/14/28 napos feliratkozó- és megtekintésnövekedés készül.
 - A 032-es production migráció létrehozta a tenant-védett snapshot táblát, indexeket és RLS policykat. A sémafüggő alkalmazáskód csak ezután kerülhet deployra.
 - A meglévő, CRON_SECRET-tel védett napi háttérfolyamat legfeljebb 20 esedékes versenytársat is megmér, 20 órás minimumintervallummal és user-kredit nélkül. Csatornánkénti hiba izolált; `last_checked_at` csak a videó- és snapshotmentés után frissül, ezért részleges hiba újrapróbálható.
 - Title Studio és Thumbnail Studio választás csak a bejelentkezett user saját, megfelelő tool-típusú fizetett eredményéből menthető; fabrikált klienscím vagy koncepció 403-at kap.
-- Ellenőrzés: TypeScript ✅; 12 tesztfájl, 45/45 teszt ✅. A competitor vidIQ benchmark státusza valódi mérési alapra javult; automatikus napi mintavétel továbbra is nyitott.
+- Ellenőrzés: TypeScript ✅; a competitor mérési alap és automatikus napi mintavétel igazolt.
 
 ## 2026-07-15 — VIDIQ FUNKCIONÁLIS BENCHMARK ELINDÍTVA
 

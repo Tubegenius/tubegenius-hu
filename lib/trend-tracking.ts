@@ -10,6 +10,7 @@
 
 import { createServerClient } from '@supabase/ssr'
 import { youtubeStats } from '@/lib/youtube-service'
+import { classifyTrendVelocity } from '@/lib/trend-alerts'
 
 function adminClient() {
   return createServerClient(
@@ -173,21 +174,19 @@ async function refreshOneCandidate(
   // Előző snapshot a delta/velocity számításhoz
   const { data: prevSnapshots } = await admin
     .from('trend_candidate_snapshots')
-    .select('total_views, checked_at')
+    .select('total_views, checked_at, trend_velocity, youtube_relevant_videos_count')
     .eq('tracked_candidate_id', candidate.id)
     .order('checked_at', { ascending: false })
     .limit(1)
 
   const prev = prevSnapshots?.[0]
-  const viewsDelta = prev ? totalViews - (prev.total_views || 0) : null
+  const comparableSample = prev && Number(prev.youtube_relevant_videos_count || 0) === relevantCount && relevantCount === videoIds.length
+  const rawViewsDelta = prev && comparableSample ? totalViews - (prev.total_views || 0) : null
+  const viewsDelta = rawViewsDelta != null && rawViewsDelta >= 0 ? rawViewsDelta : null
   const hoursSincePrev = prev ? (Date.now() - new Date(prev.checked_at).getTime()) / (1000 * 60 * 60) : null
   const trendVelocity = viewsDelta != null && hoursSincePrev && hoursSincePrev > 0 ? Math.round((viewsDelta / hoursSincePrev) * 100) / 100 : null
 
-  let trendStatus: 'rising' | 'stable' | 'declining' = 'stable'
-  if (viewsDelta != null) {
-    if (viewsDelta > 0 && (prev?.total_views ? viewsDelta / Math.max(prev.total_views, 1) > 0.02 : true)) trendStatus = 'rising'
-    else if (viewsDelta < 0) trendStatus = 'declining'
-  }
+  const trendStatus = classifyTrendVelocity(trendVelocity, prev?.trend_velocity == null ? null : Number(prev.trend_velocity))
 
   const engagementRate = totalViews > 0 ? Math.round(((totalLikes + totalComments) / totalViews) * 10000) / 100 : null
 
