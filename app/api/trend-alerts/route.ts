@@ -76,6 +76,13 @@ export async function POST(request: NextRequest) {
   if (!candidate_id || !alert_signature) return NextResponse.json({ error: 'Hiányzó adatok' }, { status: 400 })
 
   const admin = createAdminClient()
+  const { data: ownedCandidate } = await admin
+    .from('tracked_trend_candidates')
+    .select('id')
+    .eq('id', candidate_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!ownedCandidate) return NextResponse.json({ error: 'A kovetett trend nem talalhato.' }, { status: 404 })
   const { error } = await admin.from('trend_alert_dismissals').upsert({
     user_id: user.id,
     tracked_candidate_id: candidate_id,

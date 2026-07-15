@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchExternal } from '@/lib/external-fetch'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
-import { chargeFeature, checkPaidFeatureAccess } from '@/lib/credits'
+import { chargeFeature, checkPaidFeatureAccess, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
@@ -224,6 +224,14 @@ export async function POST(request: NextRequest) {
       ? 'alacsony'
       : 'alacsony'
 
+  const charge = await chargeFeature(user.id, 'trend_deep_refresh', {
+    candidate_id: row.id,
+    topic,
+    added_videos: addedVideoCount,
+    added_web_sources: addedWebSourceCount,
+  })
+  if (!charge.success) return NextResponse.json({ error: charge.error || 'Credit charge failed.' }, { status: 402 })
+
   const { error: updateError } = await admin
     .from('tracked_trend_candidates')
     .update({
@@ -236,19 +244,17 @@ export async function POST(request: NextRequest) {
     .eq('id', row.id)
     .eq('user_id', user.id)
 
-  if (updateError) return NextResponse.json({ error: 'A frissítés mentése nem sikerült.' }, { status: 500 })
+  if (updateError) {
+    const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'tracked_trend_save_failed' })
+    return NextResponse.json({ error: refund.success ? 'A frissítés mentése sikertelen volt, a kreditet visszaadtuk.' : 'A frissítés mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
+  }
 
-  await refreshTrackedCandidateNow(row.id)
-
-  const charge = await chargeFeature(user.id, 'trend_deep_refresh', {
-    candidate_id: row.id,
-    topic,
-    added_videos: addedVideoCount,
-    added_web_sources: addedWebSourceCount,
-  })
-
-  if (!charge.success) {
-    return NextResponse.json({ error: charge.error || 'A kredit levonása nem sikerült.' }, { status: 402 })
+  try {
+    await refreshTrackedCandidateNow(row.id)
+  } catch (error) {
+    console.error('[TrendDeepRefresh] snapshot refresh failed:', error)
+    const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'trend_snapshot_save_failed' })
+    return NextResponse.json({ error: refund.success ? 'A trend snapshot mentése sikertelen volt, a kreditet visszaadtuk.' : 'A trend snapshot mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
   }
 
   return NextResponse.json({

@@ -1,5 +1,10 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TELJES BACKEND AUDIT, TREND TENANT ÉS KREDIT-SORREND
+
+- A Trend Deep Refresh most a tartós fizetett módosítás előtt von kreditet; ha a trendjelölt vagy az új snapshot mentése hibázik, automatikus kompenzáló refund fut. Korábban az adat előbb frissült, és csak utána történhetett sikertelen terhelés.
+- Trendriasztás elutasítása előtt kötelező a candidate user-tulajdonjog ellenőrzése, így idegen tenant trendazonosítójához nem hozható létre dismissal rekord.
+
 ## 2026-07-15 — TELJES BACKEND AUDIT, WORKFLOW-MENTÉS ÉS AI-KIMENETEK
 
 - Niche discovery fizetős újraelemzés, competitor add és competitor refresh mentési hibái többé nem hagynak levont kreditet tartós eredmény nélkül: minden fő- és gyermekrekord-írás ellenőrzött, hibánál kompenzáló refund fut. A competitor add részleges gyermekmentésnél a félkész főrekordot is visszagörgeti.
