@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeSeoScore, isValidSeoPackage } from '@/lib/seo-optimizer'
 import { isValidThumbnailConcept } from '@/lib/thumbnail-studio'
+import { isValidTitleVariation } from '@/lib/title-studio'
 
 describe('studio output validation', () => {
   it('weights SEO keyword coverage as one quarter of the total score', () => {
@@ -11,5 +12,7 @@ describe('studio output validation', () => {
     expect(isValidSeoPackage({ seo_title: 'x' })).toBe(false)
     expect(isValidThumbnailConcept({ contrast_attention_score: 250 })).toBe(false)
     expect(isValidThumbnailConcept({ concept_label: 'A', visual_description: 'v', thumbnail_text: 't', composition_note: 'c', emotion_or_conflict: 'e', contrast_attention_score: 70, clutter_risk: 'low' })).toBe(true)
+    expect(isValidTitleVariation({ title: 'Egy valos magyar cim', curiosity_score: 70, clarity_score: 80, clickability_score: 75, risk_score: 20, reasoning: 'Indok' })).toBe(true)
+    expect(isValidTitleVariation({ title: 'Hibas', curiosity_score: 170, clarity_score: 80, clickability_score: 75, risk_score: 20, reasoning: 'Indok' })).toBe(false)
   })
 })

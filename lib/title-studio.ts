@@ -44,6 +44,13 @@ export interface TitleVariation {
   reasoning: string
 }
 
+export function isValidTitleVariation(value: unknown): value is TitleVariation {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  const score = (key: string) => typeof v[key] === 'number' && Number.isFinite(v[key]) && (v[key] as number) >= 0 && (v[key] as number) <= 100
+  return typeof v.title === 'string' && v.title.trim().length > 0 && v.title.length <= 200 && typeof v.reasoning === 'string' && v.reasoning.length <= 2000 && score('curiosity_score') && score('clarity_score') && score('clickability_score') && score('risk_score')
+}
+
 // ── Magyar nyelvi guard ──────────────────────────────────────
 // MVP: ismert idegen (angol/portugál/spanyol) szavak/kifejezések feketelistája,
 // amik korábban megjelentek generált magyar címekben (pl. "amit az AI

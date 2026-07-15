@@ -1,5 +1,9 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TITLE STUDIO KIMENETI INTEGRITÁS
+
+- Title Studio csak pontosan öt, nem üres és méretkorlátos variációt fogad el; curiosity, clarity, clickability és risk score minden esetben véges 0–100 érték. Hibás AI-válasz a kreditlevonás előtt fail-closed.
+
 ## 2026-07-15 — CRUD HIBASZEMANTIKA ÉS WORKFLOW-ATOMOSSÁG
 
 - Tracked Trends, Trend Alerts és Competitor videólista adatbázishibánál nem ad többé megtévesztő üres eredményt; a szolgáltatási hiba külön 500-as válasz.

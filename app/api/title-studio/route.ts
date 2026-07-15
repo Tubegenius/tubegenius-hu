@@ -4,7 +4,7 @@ import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COST
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle, sanitizeHungarianTitle, type TitleVariation } from '@/lib/title-studio'
+import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle, sanitizeHungarianTitle, isValidTitleVariation, type TitleVariation } from '@/lib/title-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
@@ -67,6 +67,7 @@ export async function POST(request: NextRequest) {
       })
 
       const rawVariations = extractJson<TitleVariation[]>(aiCall.text)
+      if (!Array.isArray(rawVariations) || rawVariations.length !== 5 || !rawVariations.every(isValidTitleVariation)) throw new Error('Invalid title variations returned by AI provider')
       const variations = rawVariations.map(v => {
         const polishedTitle = polishHungarianText(v.title || '')
         const { ok } = validateHungarianTitle(polishedTitle)
