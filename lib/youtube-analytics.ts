@@ -27,6 +27,8 @@ export const YOUTUBE_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
 ]
 
+export const YOUTUBE_OAUTH_STATE_COOKIE = 'willviral_youtube_oauth_state'
+
 export function getOAuthCallbackRedirectUri(origin: string): string {
   return `${origin}/api/youtube/oauth-callback`
 }

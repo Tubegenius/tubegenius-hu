@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserId } from '@/lib/credits'
-import { getOAuth2Client, getOAuthCallbackRedirectUri, saveYoutubeOAuthTokens, YOUTUBE_OAUTH_SCOPES } from '@/lib/youtube-analytics'
+import { getOAuth2Client, getOAuthCallbackRedirectUri, saveYoutubeOAuthTokens, YOUTUBE_OAUTH_SCOPES, YOUTUBE_OAUTH_STATE_COOKIE } from '@/lib/youtube-analytics'
 import { detectChannelConnectionType, syncChannelProfileFromOAuth } from '@/lib/channel-profile-sync'
 
 // GET — a sajat Google OAuth2 kor callbackje (ld. app/api/youtube/connect).
@@ -17,17 +17,24 @@ export async function GET(request: NextRequest) {
     const url = new URL('/dashboard/channel-audit', origin)
     url.searchParams.set('youtube_oauth', status)
     if (message) url.searchParams.set('youtube_oauth_message', message)
-    return NextResponse.redirect(url)
-  }
-
-  if (oauthError) {
-    return redirectToChannelAudit('error', oauthError)
+    const response = NextResponse.redirect(url)
+    response.cookies.set(YOUTUBE_OAUTH_STATE_COOKIE, '', {
+      httpOnly: true,
+      secure: request.nextUrl.protocol === 'https:',
+      sameSite: 'lax',
+      maxAge: 0,
+      path: '/api/youtube/oauth-callback',
+    })
+    return response
   }
 
   const userId = await getUserId()
-  if (!userId || !code || state !== userId) {
+  const expectedState = request.cookies.get(YOUTUBE_OAUTH_STATE_COOKIE)?.value
+  if (!userId || !state || !expectedState || state !== expectedState) {
     return redirectToChannelAudit('error', 'invalid_state')
   }
+  if (oauthError) return redirectToChannelAudit('error', oauthError)
+  if (!code) return redirectToChannelAudit('error', 'missing_code')
 
   try {
     const oauth2Client = getOAuth2Client(getOAuthCallbackRedirectUri(origin))
