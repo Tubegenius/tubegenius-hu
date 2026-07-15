@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import {
   buildPaidResultHash,
@@ -227,6 +227,9 @@ export async function POST(request: NextRequest) {
     })
     if (!paidSave.success) {
       console.error('[Transcript] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'transcript_extract', CREDIT_COSTS.transcript_extract, { reason: 'paid_result_save_failed' })
+      if (!refund.success) console.error('[Transcript] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+      return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })

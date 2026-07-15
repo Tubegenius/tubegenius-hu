@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, logUsage, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, logUsage, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
@@ -231,6 +231,9 @@ Valaszolj KIZAROLAG valid JSON-ban:
     })
     if (!paidSave.success) {
       console.error('[ScriptExtract] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'script_extract', CREDIT_COSTS.script_extract, { reason: 'paid_result_save_failed' })
+      if (!refund.success) console.error('[ScriptExtract] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+      return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })

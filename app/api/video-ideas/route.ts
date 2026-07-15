@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient, createServerSupabaseClient } from '@/lib/supabase-server'
 import { ensureVideoIdea } from '@/lib/video-ideas/video-idea-service'
 import type { VideoIdeaWorkflowStatus } from '@/types'
+import { isJsonWithinLimit, isOptionalTextWithinLimit, isPlainRecord, isScoreOrNull, topicInputTooLong } from '@/lib/api-input-validation'
 
 const WORKFLOW_STATUSES: VideoIdeaWorkflowStatus[] = [
   'new_idea',
@@ -65,7 +66,11 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
   const body = await request.json()
-  if (!body.topic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+  if (typeof body.topic !== 'string' || !body.topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+  if (topicInputTooLong(body.topic)) return NextResponse.json({ error: 'A téma legfeljebb 300 karakter lehet' }, { status: 400 })
+  if (![body.viral_score, body.opportunity_score, body.competition_score].every(isScoreOrNull)) return NextResponse.json({ error: 'A score értékeknek 0 és 100 közé kell esniük' }, { status: 400 })
+  if (body.metadata !== undefined && (!isPlainRecord(body.metadata) || !isJsonWithinLimit(body.metadata))) return NextResponse.json({ error: 'Érvénytelen vagy túl nagy metadata' }, { status: 400 })
+  if (!isOptionalTextWithinLimit(body.short_description, 2000) || !isOptionalTextWithinLimit(body.proof_summary, 5000)) return NextResponse.json({ error: 'Túl hosszú szöveges mező' }, { status: 400 })
 
   const admin = createAdminClient()
   const result = await ensureVideoIdea(admin, {
@@ -88,7 +93,8 @@ export async function POST(request: NextRequest) {
     proofSummary: body.proof_summary || null,
     workflowStatus: isWorkflowStatus(body.workflow_status) ? body.workflow_status : 'new_idea',
     paidResultReference: body.paid_result_reference || null,
-    inputHash: body.input_hash || null,
+    // Publikus CRUD-ból nem fogadunk el kliens által választott deduplikációs hash-t.
+    inputHash: null,
     metadata: body.metadata || {},
   })
 
@@ -109,6 +115,8 @@ export async function PATCH(request: NextRequest) {
   if (workflow_status && !isWorkflowStatus(workflow_status)) {
     return NextResponse.json({ error: 'Érvénytelen workflow státusz' }, { status: 400 })
   }
+  if (!isOptionalTextWithinLimit(calendar_status, 50) || !isOptionalTextWithinLimit(publish_status, 50) || !isOptionalTextWithinLimit(calendar_notes, 5000)) return NextResponse.json({ error: 'Érvénytelen vagy túl hosszú naptármező' }, { status: 400 })
+  if (scheduled_publish_date !== undefined && scheduled_publish_date !== null && (typeof scheduled_publish_date !== 'string' || !Number.isFinite(new Date(scheduled_publish_date).getTime()))) return NextResponse.json({ error: 'Érvénytelen publikálási dátum' }, { status: 400 })
 
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (workflow_status) update.workflow_status = workflow_status

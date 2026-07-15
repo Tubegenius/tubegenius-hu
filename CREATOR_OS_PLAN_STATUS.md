@@ -7,6 +7,12 @@
 - Decision Engine fail-closed: `NaN` score 0, jövőbeli/hibás publikálási dátum nem friss, és az outlier-kivétel sem kerülheti meg ezt a kaput.
 - Video Audit módszertani javítás: like-arány és leíráshossz többé nem retenciós bizonyíték; feltöltési óra közönség-időzóna nélkül nem pontozódik; thumbnail URL puszta megléte nem minőségi/CTR jel; YouTube API metadata retention/CTR nélkül legfeljebb közepes confidence. Manuális adatoknál platformegyezés, szám-, arány-, hossz- és tömbkorlátok kerültek a költséges AI-hívás elé.
 
+## 2026-07-15 — TELJES BACKEND AUDIT, ADATINTEGRITÁS ÉS FIZETETT MENTÉS
+
+- Video Ideas és Creator Memory nyilvános CRUD bemenetvédelme: 0–100 közötti véges score-ok, engedélyezett workflow/memóriaállapotok, 300 karakteres téma, szöveg- és metadata-méretkorlát, valid dátum. A kliens többé nem adhat saját deduplikációs `input_hash` értéket a központi Video Idea rekordhoz.
+- A fizetett eredmény mentési hibája többé nem hagyja a felhasználót kreditveszteséggel és újranyitható eredmény nélkül. Viral Score, Similar Videos, Opportunity Engine, Video Audit, Video Package, Title/Thumbnail/SEO Studio, Keyword Research, Content Gap, Script Extractor, Transcript, Channel Audit és Opportunity Explain/Similar mentési hibánál optimista zárolású automatikus kompenzáló visszatérítést futtat, negatív auditlog-eseménnyel; a route 500-at ad, nem állít sikert.
+- A napi soft limit nettó kredithasználatot számol: a persistence-refund negatív eseménye csökkenti az aznapi felhasználást, ezért a sikertelen mentés a napi keretet sem fogyasztja el.
+
 ## 2026-07-15 — REGRESSZIÓS TESZTEK + NAPI SOFT LIMIT + PROMPT VERZIÓZÁS
 
 - Bevezetve a Vitest regressziós alapcsomag és GitHub Actions quality workflow (`npm test` + TypeScript). 20 determinisztikus, kreditmentes teszt fedi a kreditlevonási matematikát és CAS-hibát, paid-result hash/cache/újranyitást, Video Idea CRUD-identitást és workflow-előrelépést, proof relevanciát, API input-hibákat, napi limiteket, kliensoldali felülbírálást és prompt-template verziózást.

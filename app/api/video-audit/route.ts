@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
-import { chargeFeature, checkPaidFeatureAccess, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { chargeFeature, checkPaidFeatureAccess, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
@@ -384,6 +384,9 @@ export async function POST(req: NextRequest) {
     })
     if (!paidSave.success) {
       console.error('[VideoAudit] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      const refund = await refundCreditsAfterPersistenceFailure(user.id, 'video_audit', CREDIT_COSTS.video_audit, { reason: 'paid_result_save_failed' })
+      if (!refund.success) console.error('[VideoAudit] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+      return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
     }
 
     return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })

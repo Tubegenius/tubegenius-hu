@@ -56,15 +56,17 @@ export async function checkDailySoftLimit(
     admin.from('ai_usage_logs')
       .select('credits_charged,created_at')
       .eq('user_id', userId)
-      .gt('credits_charged', 0)
+      // A negatív persistence-refund események csökkentik az aznapi nettó
+      // felhasználást; különben a visszaadott kredit továbbra is limitet enne.
+      .neq('credits_charged', 0)
       .gte('created_at', new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString()),
   ])
   const today = budapestDateKey(new Date())
-  const usedToday = (recentCharges || []).reduce((sum, row) => {
+  const usedToday = Math.max(0, (recentCharges || []).reduce((sum, row) => {
     return budapestDateKey(new Date(row.created_at)) === today
       ? sum + Number(row.credits_charged || 0)
       : sum
-  }, 0)
+  }, 0))
   return evaluateDailySoftLimit({ plan: credits?.plan || 'free', usedToday, cost, override })
 }
 

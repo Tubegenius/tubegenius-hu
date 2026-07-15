@@ -16,6 +16,7 @@ import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsFo
 import { buildNicheExpansion } from '@/lib/niche-expansion'
 import type { OpportunityTopic, OpportunitySearchMode } from '@/types'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
+import { refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import {
@@ -940,6 +941,12 @@ KRITIKUS JSON SZABÁLYOK:
       })
       if (!paidSave.success) {
         console.error('[Opportunity] KRITIKUS: paid_results mentés sikertelen:', paidSave.error)
+        if (creditsCharged > 0) {
+          const refund = await refundCreditsAfterPersistenceFailure(user.id, 'opportunity_engine', creditsCharged, { reason: 'paid_result_save_failed' })
+          if (!refund.success) console.error('[Opportunity] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+          return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
+        }
+        return NextResponse.json({ error: 'Az ingyenes eredmény mentése sikertelen volt. Próbáld újra.' }, { status: 500 })
       }
       savedPaidResultId = paidSave.record?.id || null
     }

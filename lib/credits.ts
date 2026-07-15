@@ -8,7 +8,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { MODELS } from '@/lib/models'
-import { calculateCreditMutation, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
+import { calculateCreditMutation, calculateCreditRefund, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
 import { checkDailySoftLimit, type DailySoftLimitDecision } from '@/lib/daily-soft-limit'
 
 export type FeatureName =
@@ -215,6 +215,34 @@ export async function chargeFeature(
   })
 
   return { success: true, new_balance: updatedBalance }
+}
+
+export async function refundCreditsAfterPersistenceFailure(
+  userId: string,
+  feature: string,
+  cost: number,
+  metadata: Record<string, unknown> = {}
+): Promise<{ success: boolean; new_balance?: number }> {
+  const admin = adminClient()
+  for (let attempt = 1; attempt <= CREDIT_CHARGE_MAX_ATTEMPTS; attempt++) {
+    const { data: current, error: fetchError } = await admin.from('user_credits').select('balance,total_used').eq('user_id', userId).single()
+    if (fetchError || !current) return { success: false }
+    const currentBalance = Number(current.balance)
+    const refund = calculateCreditRefund(currentBalance, Number(current.total_used ?? 0), cost)
+    const { data: updated, error } = await admin.from('user_credits').update({ balance: refund.newBalance, total_used: refund.newTotalUsed })
+      .eq('user_id', userId).eq('balance', currentBalance).select('balance').single()
+    if (updated) {
+      await admin.from('ai_usage_logs').insert({
+        user_id: userId, feature_name: feature, model: 'system_refund', input_tokens: 0,
+        output_tokens: 0, estimated_cost_usd: 0, credits_charged: -cost,
+        metadata: { ...metadata, type: 'persistence_failure_refund' },
+      })
+      return { success: true, new_balance: Number(updated.balance) }
+    }
+    if (!isOptimisticCreditLockMiss(error)) return { success: false }
+    if (attempt < CREDIT_CHARGE_MAX_ATTEMPTS) await waitForCreditRetry(attempt)
+  }
+  return { success: false }
 }
 
 export async function checkPaidFeatureAccess(

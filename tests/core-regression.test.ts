@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { calculateCreditMutation, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
+import { calculateCreditMutation, calculateCreditRefund, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
 import { buildPaidResultHash, normalizePaidResultInput, paidCacheStatus, paidResultResponseMeta, type PaidResultRecord } from '@/lib/paid-results/paid-results-service'
 import { buildVideoIdeaInputHash, forwardWorkflowStatus, mapMemoryStateToWorkflowStatus, matchRelatedOutcomes, type DecisiveVideoIdea } from '@/lib/video-ideas/video-idea-service'
 
@@ -15,6 +15,10 @@ describe('credit deduction', () => {
   it('retries only optimistic locking conflicts', () => {
     expect(isOptimisticCreditLockMiss({ code: 'PGRST116' })).toBe(true)
     expect(isOptimisticCreditLockMiss({ code: '42501' })).toBe(false)
+  })
+  it('compensates a charged but unpersisted result', () => {
+    expect(calculateCreditRefund(8, 6, 2)).toEqual({ newBalance: 10, newTotalUsed: 4 })
+    expect(calculateCreditRefund(0, 1, 2)).toEqual({ newBalance: 2, newTotalUsed: 0 })
   })
 })
 

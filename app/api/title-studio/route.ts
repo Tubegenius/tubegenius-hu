@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
@@ -113,6 +113,9 @@ export async function POST(request: NextRequest) {
       })
       if (!paidSave.success) {
         console.error('[TitleStudio] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'title_studio', CREDIT_COSTS.title_studio, { reason: 'paid_result_save_failed' })
+        if (!refund.success) console.error('[TitleStudio] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+        return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
       }
 
       return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })

@@ -4,7 +4,7 @@ import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { calcEngagementRate, calcTrendVelocity, calcViewOutlierScore, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import { calculateNicheFit } from '@/lib/niche-fit'
 import type { SimilarVideo } from '@/types'
-import { getUserId, logUsage, chargeFeature, checkPaidFeatureAccess } from '@/lib/credits'
+import { getUserId, logUsage, chargeFeature, checkPaidFeatureAccess, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import type { ViralScoreResult, ViralScoreConfidence } from '@/types'
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
@@ -584,6 +584,9 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
     })
     if (!paidSave.success) {
       console.error('[ViralScore] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'viral_score', 1, { reason: 'paid_result_save_failed' })
+      if (!refund.success) console.error('[ViralScore] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+      return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
     }
 
     const saveRes = await saveViralScoreResult({

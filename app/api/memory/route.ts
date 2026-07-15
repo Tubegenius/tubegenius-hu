@@ -11,6 +11,13 @@ import {
   matchRelatedOutcomes,
 } from '@/lib/video-ideas/video-idea-service'
 import type { TopicState, MemoryProofSignalSummary, MemoryInsight, VideoIdeaProofSignal, VideoIdeaEvent } from '@/types'
+import { isOptionalTextWithinLimit, isScoreOrNull, topicInputTooLong } from '@/lib/api-input-validation'
+
+const MEMORY_STATES: TopicState[] = ['saved', 'in_progress', 'completed', 'rejected']
+
+function isMemoryState(value: unknown): value is TopicState {
+  return typeof value === 'string' && MEMORY_STATES.includes(value as TopicState)
+}
 
 // GET: temak listazasa
 export async function GET(request: NextRequest) {
@@ -133,9 +140,13 @@ export async function POST(request: NextRequest) {
 
   const { topic, search_keyword, state, opportunity_score, viral_score, audit_score, audit_id, video_package_id, platform, notes, source_context, quality_status } = await request.json()
 
-  if (!topic) {
+  if (typeof topic !== 'string' || !topic.trim()) {
     return NextResponse.json({ error: "Tema kotelezo" }, { status: 400 })
   }
+  if (topicInputTooLong(topic)) return NextResponse.json({ error: 'A téma legfeljebb 300 karakter lehet' }, { status: 400 })
+  if (state !== undefined && !isMemoryState(state)) return NextResponse.json({ error: 'Érvénytelen memóriaállapot' }, { status: 400 })
+  if (![opportunity_score, viral_score, audit_score].every(isScoreOrNull)) return NextResponse.json({ error: 'A score értékeknek 0 és 100 közé kell esniük' }, { status: 400 })
+  if (!isOptionalTextWithinLimit(notes, 5000) || !isOptionalTextWithinLimit(search_keyword, 300) || !isOptionalTextWithinLimit(source_context, 100) || !isOptionalTextWithinLimit(quality_status, 100)) return NextResponse.json({ error: 'Túl hosszú szöveges mező' }, { status: 400 })
   const isJunkTopic = topic.includes("#") || (topic.length > 100 && !opportunity_score && !viral_score)
   if (isJunkTopic) return NextResponse.json({ skipped: true })
   const admin = createAdminClient()
@@ -221,6 +232,9 @@ export async function PATCH(request: NextRequest) {
   }
 
   const { id, state, notes } = await request.json()
+  if (typeof id !== 'string' || !id) return NextResponse.json({ error: 'Azonosító kötelező' }, { status: 400 })
+  if (!isMemoryState(state)) return NextResponse.json({ error: 'Érvénytelen memóriaállapot' }, { status: 400 })
+  if (!isOptionalTextWithinLimit(notes, 5000)) return NextResponse.json({ error: 'A jegyzet túl hosszú' }, { status: 400 })
   const admin = createAdminClient()
 
   const { data, error } = await admin

@@ -22,9 +22,9 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Competitor Tracker | `/api/competitors` | csatornafeloldás + jelmentés | kredit + lock | tenant CRUD | CRUD alap | részleges |
 | Trend tracking/alerts | `/api/dashboard/tracked-trends`, `/api/trend-alerts` | frissesség és trendjel | deep refresh kredit | tenant CRUD + cron | függőben | függőben |
 | Niche discovery | `/api/youtube/discover-niche` | csatornaalapú jelöltlista | cache + refresh kredit | aktív csatorna tenanttal | függőben | függőben |
-| Creator Memory | `/api/memory` | döntés utáni tanulási minta | nem fizetős | tenant CRUD + workflow sync | workflow alap | részleges |
-| Video Ideas/Calendar | `/api/video-ideas` | központi állapotgép | nem fizetős | tenant CRUD | identity/workflow alap | részleges |
-| Stripe/credits | `/api/stripe/*`, `/api/credits` | ledger, idempotencia, rollover | atomi jóváírás/levonás + soft limit | webhook signature/auth | credit policy alap | részleges |
+| Creator Memory | `/api/memory` | döntés utáni tanulási minta | nem fizetős | tenant CRUD + validált state/score/text + workflow sync | workflow/input alap | lezárt |
+| Video Ideas/Calendar | `/api/video-ideas` | központi állapotgép | nem fizetős | tenant CRUD + score/metadata/dátum/hash védelem | identity/workflow/input alap | lezárt |
+| Stripe/credits | `/api/stripe/*`, `/api/credits` | ledger, idempotencia, rollover | atomi jóváírás/levonás + soft limit + paid-save kompenzáció | webhook signature/auth | credit/refund policy alap | részleges |
 | YouTube OAuth/Analytics | `/api/youtube/*` | snapshot/analytics | cache | nonce CSRF + tenant token | függőben | részleges |
 | AI provider layer | `lib/services/ai-provider-service.ts` | provider fallback + JSON | usage telemetry | szerveroldali kulcsok | függőben | függőben |
 

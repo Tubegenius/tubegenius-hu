@@ -17,3 +17,10 @@ export function calculateCreditMutation(balance: number, totalUsed: number, cost
 export function isOptimisticCreditLockMiss(error: { code?: string } | null | undefined): boolean {
   return !error || error.code === 'PGRST116'
 }
+
+export function calculateCreditRefund(balance: number, totalUsed: number, cost: number) {
+  const safeBalance = Number.isFinite(balance) ? Math.max(0, balance) : 0
+  const safeTotalUsed = Number.isFinite(totalUsed) ? Math.max(0, totalUsed) : 0
+  const safeCost = Number.isFinite(cost) ? Math.max(0, cost) : 0
+  return { newBalance: safeBalance + safeCost, newTotalUsed: Math.max(0, safeTotalUsed - safeCost) }
+}

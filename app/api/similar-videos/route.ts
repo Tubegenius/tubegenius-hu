@@ -12,6 +12,7 @@ import { youtubeSearch, youtubeStats, getEffectiveBudget, quotaSummary, startNew
 import { generateSimilarVideoQueries } from '@/lib/similar-query-expansion'
 import { calculateNicheFit } from '@/lib/niche-fit'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
+import { refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { normalizeTopic as normalizeTopicForHash, buildSearchContextHash, getCachedSearch, touchLastOpened, saveSearchResult } from '@/lib/similar-videos-cache'
@@ -789,6 +790,12 @@ export async function POST(request: NextRequest) {
       })
       if (!paidSave.success) {
         console.error('[SimilarVideos] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
+        if (usageCheck.cost > 0) {
+          const refund = await refundCreditsAfterPersistenceFailure(userId, 'similar_videos', usageCheck.cost, { reason: 'paid_result_save_failed' })
+          if (!refund.success) console.error('[SimilarVideos] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
+          return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
+        }
+        return NextResponse.json({ error: 'Az ingyenes eredmény mentése sikertelen volt. Próbáld újra.' }, { status: 500 })
       }
       savedPaidResultId = paidSave.record?.id || null
 
