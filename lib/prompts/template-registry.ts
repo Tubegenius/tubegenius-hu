@@ -46,3 +46,22 @@ export function renderPromptTemplate(
 export function listPromptTemplates(): PromptTemplateDescriptor[] {
   return Array.from(registry.values()).map(item => ({ ...item }))
 }
+
+export function getPromptTemplate(
+  id: string,
+  version: string,
+  locale: PromptLocale = 'hu-HU'
+): PromptTemplateDescriptor | null {
+  const descriptor = registry.get(key(id, version, locale))
+  return descriptor ? { ...descriptor } : null
+}
+
+export function assertPromptTemplateRegistered(
+  id: string,
+  version: string,
+  locale: PromptLocale = 'hu-HU'
+): PromptTemplateDescriptor {
+  const descriptor = getPromptTemplate(id, version, locale)
+  if (!descriptor) throw new Error(`Unregistered prompt template: ${id}@${version}:${locale}`)
+  return descriptor
+}

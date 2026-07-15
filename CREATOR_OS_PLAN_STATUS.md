@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TELJES BACKEND AUDIT, PROMPT GOVERNANCE
+
+- Az AI provider réteg most minden hívásnál kötelezően megköveteli a központi katalógusban regisztrált prompt ID + verzió párost; ismeretlen vagy verzió nélküli prompt fail-closed hibát ad az AI-hívás előtt.
+- A teljes jelenlegi AI-funkciókészlet promptazonosítói bekerültek a katalógusba. A dinamikus seed-generátor közvetlen Anthropic `fetch` hívása megszűnt, az egységes provider-, usage- és költségtelemetria rétegen fut.
+- Javítva a HU seed-szűrő két sérült reguláris kifejezése és a korábban nem alkalmazott generikus-seed tiltólista; az angol/generikus zaj most ténylegesen magyar fallbackre cserélődik.
+
 ## 2026-07-15 — TELJES BACKEND AUDIT, MÓDSZERTANI BLOKK 1
 
 - Létrejött a folyamatosan vezetett `BACKEND_AUDIT_MATRIX.md`, amely funkciónként külön választja a lezárt, részleges és függőben lévő auditot; a korábbi általános „átnézve” megfogalmazás helyett csak teszttel és builddel igazolt blokk kaphat lezárt státuszt.

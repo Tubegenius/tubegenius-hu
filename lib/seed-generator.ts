@@ -4,8 +4,7 @@
 // US régióban MINDIG angol seedek
 
 import type { NicheCategory } from './niche-seeds'
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!
+import { callAIProvider, extractJson } from './services/ai-provider-service'
 
 export interface GeneratedSeedPack {
   label: string
@@ -19,17 +18,6 @@ export interface GeneratedSeeds {
   is_time_sensitive: boolean
   language_note: string
   packs: GeneratedSeedPack[]
-}
-
-function extractJson(text: string): unknown {
-  let cleaned = text.replace(/```json|```/g, '').trim()
-  const firstBrace = cleaned.indexOf('{')
-  const lastBrace = cleaned.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1)
-  }
-  try { return JSON.parse(cleaned) }
-  catch { return null }
 }
 
 export async function generateSeedsForNiche(
@@ -102,23 +90,14 @@ Válaszolj KIZÁRÓLAG valid JSON-ban:
 Lehetséges category értékek: news_current, tech_ai, science_medical, space_discovery, psychology, health_wellness, finance_crypto, history_strange, gaming, entertainment, default`
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1500,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+    const aiCall = await callAIProvider({
+      model: 'claude-haiku-4-5-20251001',
+      maxTokens: 1500,
+      messages: [{ role: 'user', content: prompt }],
+      promptTemplateId: 'seed_generator',
+      promptVersion: 'v2',
     })
-
-    const data = await res.json()
-    const text = data.content?.[0]?.text || ''
-    const parsed = extractJson(text) as GeneratedSeeds | null
+    const parsed = extractJson<GeneratedSeeds>(aiCall.text)
 
     if (parsed && parsed.seeds && parsed.seeds.length > 0) {
       // Validálás: HU régióban ne legyenek angol seedek
@@ -149,7 +128,7 @@ Lehetséges category értékek: news_current, tech_ai, science_medical, space_di
 }
 
 // HU régióban ellenőrzés: ha angol seed csúszik be, cseréljük magyarra
-function validateHungarianSeeds(seeds: string[], nicheText: string): string[] {
+export function validateHungarianSeeds(seeds: string[], nicheText: string): string[] {
   // Tiltott generic seedek — HU régióban ezek irreleváns globális zajt hoznak
 const BANNED_HU_SEEDS = [
   'latest political developments', 'breaking news', 'current events',
@@ -164,16 +143,16 @@ function isBannedSeed(seed: string): boolean {
   if (BANNED_GENERIC_PATTERNS.test(lower)) return true
   if (BANNED_HU_SEEDS.some(b => lower.includes(b.toLowerCase()))) return true
   // Túl rövid seed (1-2 szó generic) is tiltott
-  if (lower.split(/s+/).length <= 1 && lower.length < 6) return true
+  if (lower.split(/\s+/).length <= 1 && lower.length < 6) return true
   return false
 }
 
-const englishPatterns = /(news|latest|breaking|current|today|explained|update|review|guide|how to|what is|why|best)/i
+const englishPatterns = /\b(news|latest|breaking|current|today|explained|update|review|guide|how to|what is|why|best)\b/i
   const year = new Date().getFullYear()
   const nicheWords = nicheText.split(/\s+/).slice(0, 2).join(' ')
 
   return seeds.map(seed => {
-    if (englishPatterns.test(seed)) {
+    if (isBannedSeed(seed) || englishPatterns.test(seed)) {
       // Angol seed → magyar fallback
       return `${nicheWords} ${year}`
     }

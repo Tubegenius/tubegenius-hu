@@ -26,7 +26,7 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Video Ideas/Calendar | `/api/video-ideas` | központi állapotgép | nem fizetős | tenant CRUD + score/metadata/dátum/hash védelem | identity/workflow/input alap | lezárt |
 | Stripe/credits | `/api/stripe/*`, `/api/credits` | ledger, idempotencia, rollover | atomi jóváírás/levonás + soft limit + paid-save kompenzáció | webhook signature/auth | credit/refund policy alap | részleges |
 | YouTube OAuth/Analytics | `/api/youtube/*` | snapshot/analytics | cache | nonce CSRF + tenant token | függőben | részleges |
-| AI provider layer | `lib/services/ai-provider-service.ts` | provider fallback + JSON | usage telemetry | szerveroldali kulcsok | függőben | függőben |
+| AI provider layer | `lib/services/ai-provider-service.ts` | kötelezően regisztrált prompt ID/verzió + közös JSON parser | usage/költség telemetry | szerveroldali kulcsok; közvetlen Anthropic kivétel megszüntetve | registry alap | részleges |
 
 ## Kötelező lezárási kritérium funkciónként
 

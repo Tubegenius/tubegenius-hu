@@ -12,6 +12,8 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { estimateCost } from '@/lib/credits'
+import '@/lib/prompts/catalog'
+import { assertPromptTemplateRegistered } from '@/lib/prompts/template-registry'
 
 export type AIProviderName = 'anthropic' | 'openai'
 
@@ -80,6 +82,10 @@ async function callAnthropic(input: AICallInput): Promise<AICallResult> {
 // Whisper-hivasa (fajl-alapu, nem szoveges chat completion) mas alaku API,
 // azt kulon fazisban erdemes idehozni, nem ezen az interfeszen keresztul.
 export async function callAIProvider(input: AICallInput): Promise<AICallResult> {
+  if (!input.promptTemplateId || !input.promptVersion) {
+    throw new Error('Every AI call must declare a versioned prompt template')
+  }
+  assertPromptTemplateRegistered(input.promptTemplateId, input.promptVersion)
   const provider = input.provider || 'anthropic'
   if (provider === 'anthropic') return callAnthropic(input)
   throw new Error(`Nem tamogatott AI provider: ${provider}`)
