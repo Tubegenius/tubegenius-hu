@@ -34,6 +34,7 @@ export default function ThumbnailStudioPage() {
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedConcepts, setSavedConcepts] = useState<Set<number>>(new Set())
   const [fromPaidResult, setFromPaidResult] = useState(false)
+  const [paidResultId, setPaidResultId] = useState<string | null>(null)
 
   // Mentett eredmény visszaállítása: explicit paidResultId a linkből (pl. a
   // Command Center "Legutóbbi történeted" paneljéről), vagy a sessionStorage-ból.
@@ -49,6 +50,7 @@ export default function ThumbnailStudioPage() {
         const state = JSON.parse(saved)
         if (state.topic) setTopic(state.topic)
         if (state.concepts) setConcepts(state.concepts)
+        if (state.paidResultId) setPaidResultId(state.paidResultId)
       } catch {}
     }
   }, [])
@@ -65,6 +67,7 @@ export default function ThumbnailStudioPage() {
       }
       setTopic(data.topic || '')
       setConcepts(data.concepts || null)
+      setPaidResultId(data.paid_result_id || id)
       setFromPaidResult(true)
     } catch {
       setError('Hiba a mentett eredmény betöltésekor.')
@@ -112,7 +115,8 @@ export default function ThumbnailStudioPage() {
         return
       }
       setConcepts(data.concepts)
-      sessionStorage.setItem('willviral_thumbnail_studio_state', JSON.stringify({ topic, concepts: data.concepts }))
+      setPaidResultId(data.paid_result_id || null)
+      sessionStorage.setItem('willviral_thumbnail_studio_state', JSON.stringify({ topic, concepts: data.concepts, paidResultId: data.paid_result_id || null }))
     } catch {
       setError('Kapcsolati hiba.')
     } finally {
@@ -125,7 +129,7 @@ export default function ThumbnailStudioPage() {
     await fetch('/api/thumbnail-studio', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, concept, platform: 'youtube' }),
+      body: JSON.stringify({ topic, concept, platform: 'youtube', paid_result_id: paidResultId }),
     })
   }
 

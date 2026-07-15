@@ -132,11 +132,16 @@ export async function POST(request: NextRequest) {
 // PATCH — kivalasztott cim mentese a Video Idea title_ideas mezojebe.
 export async function PATCH(request: NextRequest) {
   try {
-    const { topic, title, platform } = await request.json()
-    if (!topic || !title) return NextResponse.json({ error: 'Hiányzó adatok' }, { status: 400 })
+    const { topic, title, platform, paid_result_id } = await request.json()
+    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || typeof title !== 'string' || !title.trim() || title.length > 200 || typeof paid_result_id !== 'string') return NextResponse.json({ error: 'Hiányzó vagy hibás adatok' }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+
+    const paid = await getPaidResultById(userId, paid_result_id)
+    const paidPayload = paid?.result_json as { topic?: unknown; variations?: unknown } | null
+    const paidVariations = Array.isArray(paidPayload?.variations) ? paidPayload.variations as Array<{ title?: unknown }> : []
+    if (!paid || paid.tool_type !== 'title_studio' || paidPayload?.topic !== topic || !paidVariations.some(v => v?.title === title)) return NextResponse.json({ error: 'A cím nem tartozik a saját fizetett Title Studio eredményedhez.' }, { status: 403 })
 
     const admin = createAdminClient()
     const platformValue = platform || 'youtube'
@@ -160,7 +165,8 @@ export async function PATCH(request: NextRequest) {
     })
     if (!result.success || !result.idea) return NextResponse.json({ error: 'Mentés sikertelen.' }, { status: 500 })
 
-    await admin.from('video_ideas').update({ title_ideas: updatedTitleIdeas }).eq('id', result.idea.id)
+    const { error: updateError } = await admin.from('video_ideas').update({ title_ideas: updatedTitleIdeas }).eq('id', result.idea.id).eq('user_id', userId)
+    if (updateError) return NextResponse.json({ error: 'Mentés sikertelen.' }, { status: 500 })
 
     return NextResponse.json({ success: true, video_idea_id: result.idea.id })
   } catch (error) {

@@ -48,6 +48,7 @@ export default function TitleStudioPage() {
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedTitles, setSavedTitles] = useState<Set<string>>(new Set())
   const [fromPaidResult, setFromPaidResult] = useState(false)
+  const [paidResultId, setPaidResultId] = useState<string | null>(null)
 
   // Mentett eredmény visszaállítása: explicit paidResultId a linkből (pl. a
   // Command Center "Legutóbbi történeted" paneljéről), vagy — ennek hiányában —
@@ -65,6 +66,7 @@ export default function TitleStudioPage() {
         if (state.topic) setTopic(state.topic)
         if (state.existingTitle) setExistingTitle(state.existingTitle)
         if (state.variations) setVariations(state.variations)
+        if (state.paidResultId) setPaidResultId(state.paidResultId)
       } catch {}
     }
   }, [])
@@ -81,6 +83,7 @@ export default function TitleStudioPage() {
       }
       setTopic(data.topic || '')
       setVariations(data.variations || null)
+      setPaidResultId(data.paid_result_id || id)
       setFromPaidResult(true)
     } catch {
       setError('Hiba a mentett eredmény betöltésekor.')
@@ -128,8 +131,9 @@ export default function TitleStudioPage() {
         return
       }
       setVariations(data.variations)
+      setPaidResultId(data.paid_result_id || null)
       sessionStorage.setItem('willviral_title_studio_state', JSON.stringify({
-        topic, existingTitle, variations: data.variations,
+        topic, existingTitle, variations: data.variations, paidResultId: data.paid_result_id || null,
       }))
     } catch {
       setError('Kapcsolati hiba.')
@@ -143,7 +147,7 @@ export default function TitleStudioPage() {
     await fetch('/api/title-studio', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, title, platform: 'youtube' }),
+      body: JSON.stringify({ topic, title, platform: 'youtube', paid_result_id: paidResultId }),
     })
   }
 
