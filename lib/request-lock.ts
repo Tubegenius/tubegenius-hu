@@ -4,10 +4,10 @@
 // Ket egyideju, azonos tartalmu keres (pl. ket bongeszofulben ugyanazzal
 // a userrel) nelkule mindketto vegigfut es mindketto kulon kreditet von
 // le ugyanazert az erdemi eredmenyert. Ez a helper egy rovid eletu
-// "foglaltsag" sort probal beszurni (user_id, tool_type, input_hash)
-// egyedi kulccsal, mielott egy route elindítana a draga AI-hivast —
-// ha mar letezik ilyen sor, a masodik keres azonnal, AI-hivas es
-// kreditlevonas NELKUL kap baratsagos hibat.
+// "foglaltsag" sort probal beszurni, mielott egy route elindítana a draga
+// AI-hivast. A zár user-szintű, nem csak azonos inputra érvényes: két eltérő
+// fizetős kérés se olvashassa egyszerre ugyanazt a kredit-egyenleget, majd
+// okozzon utólagos levonási race-t.
 import { createServerClient } from '@supabase/ssr'
 
 const LOCK_TTL_MS = 5 * 60 * 1000
@@ -34,6 +34,8 @@ export interface RequestLockHandle {
 export async function acquireRequestLock(key: RequestLockKey): Promise<RequestLockHandle> {
   const admin = adminClient()
   const staleThreshold = new Date(Date.now() - LOCK_TTL_MS).toISOString()
+  const lockToolType = '__user_paid_operation__'
+  const lockInputHash = 'active'
 
   // Elavult (feltehetoen lezuhant hivasbol maradt) lock opportunista takaritasa,
   // hogy egy korabbi crash ne zarja ki a usert vegleg ugyanarra a bemenetre.
@@ -41,13 +43,13 @@ export async function acquireRequestLock(key: RequestLockKey): Promise<RequestLo
     .from('in_flight_requests')
     .delete()
     .eq('user_id', key.userId)
-    .eq('tool_type', key.toolType)
-    .eq('input_hash', key.inputHash)
+    .eq('tool_type', lockToolType)
+    .eq('input_hash', lockInputHash)
     .lt('created_at', staleThreshold)
 
   const { data, error } = await admin
     .from('in_flight_requests')
-    .insert({ user_id: key.userId, tool_type: key.toolType, input_hash: key.inputHash })
+    .insert({ user_id: key.userId, tool_type: lockToolType, input_hash: lockInputHash })
     .select('id')
     .single()
 
@@ -74,4 +76,4 @@ export async function releaseRequestLock(lockId?: string | null): Promise<void> 
   await admin.from('in_flight_requests').delete().eq('id', lockId)
 }
 
-export const REQUEST_IN_PROGRESS_ERROR = 'Ez a kérés már folyamatban van egy másik lapon vagy eszközön. Kérlek várj, amíg befejeződik, mielőtt újra elindítod.'
+export const REQUEST_IN_PROGRESS_ERROR = 'Már folyamatban van egy generálásod egy másik lapon vagy eszközön. Kérlek várj, amíg befejeződik, mielőtt újat indítasz.'
