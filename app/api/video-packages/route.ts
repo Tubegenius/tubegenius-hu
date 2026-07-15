@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { ensureVideoIdea, linkVideoIdeaToLegacyRecord, logVideoIdeaEvent, markVideoIdeaReadyToProduce } from '@/lib/video-ideas/video-idea-service'
+import { getPaidResultById } from '@/lib/paid-results/paid-results-service'
 
 // GET: lista vagy egy konkrét csomag (?id=...)
 export async function GET(request: NextRequest) {
@@ -46,7 +47,16 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-  const body = await request.json()
+  const requestBody = await request.json()
+  if (typeof requestBody.paid_result_id !== 'string') return NextResponse.json({ error: 'Érvényes fizetett videócsomag-eredmény szükséges.' }, { status: 400 })
+  const paidResult = await getPaidResultById(user.id, requestBody.paid_result_id)
+  if (!paidResult || paidResult.tool_type !== 'video_package' || !paidResult.result_json || typeof paidResult.result_json !== 'object') {
+    return NextResponse.json({ error: 'A fizetett videócsomag-eredmény nem található.' }, { status: 404 })
+  }
+  const body = paidResult.result_json as Record<string, any>
+  if (typeof body.topic !== 'string' || !body.topic.trim() || typeof body.hook !== 'string' || typeof body.narration !== 'string') {
+    return NextResponse.json({ error: 'A mentett videócsomag szerkezete hibás.' }, { status: 422 })
+  }
   const admin = createAdminClient()
 
   const { data, error } = await admin

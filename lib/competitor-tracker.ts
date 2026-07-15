@@ -146,7 +146,7 @@ export async function saveOutlierAsProofSignal(input: {
   })
   if (!ideaResult.success || !ideaResult.idea) return { success: false }
 
-  await addVideoIdeaProofSignal(admin, {
+  const proofResult = await addVideoIdeaProofSignal(admin, {
     userId: input.userId,
     videoIdeaId: ideaResult.idea.id,
     signalType: 'competitor_video',
@@ -161,6 +161,7 @@ export async function saveOutlierAsProofSignal(input: {
     reason: `${input.video.outlierRatio}x jobban teljesít a csatorna átlagánál`,
     payload: { outlier_ratio: input.video.outlierRatio },
   })
+  if (!proofResult.success) return { success: false }
 
   await logVideoIdeaEvent(admin, {
     userId: input.userId,

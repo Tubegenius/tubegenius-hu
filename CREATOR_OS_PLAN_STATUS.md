@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — PRODUCTION DIAGNÓZIS ÉS BIZONYÍTÉK-LÁNC
+
+- A korábbi böngésző-újratöltési elakadást tiszta production lapon megismételve nem alkalmazáshiba okozta: az első Vercel hidegindítás 11,8 s alatt betöltött és `/dashboard`-ra irányított, majd Overview, Credits, Competitors és Trend Alerts 1,97–2,55 s alatt, konzolhiba nélkül működött. Kreditfogyasztó művelet nem futott.
+- Competitor outlier proof signal csak a user saját `tracked_competitor_videos` rekordjából, szerveroldali cím/nézettség/dátum/outlier értékekkel menthető; fabrikált kliensbizonyíték elutasítva. A proof-signal adatbázisírás hibája már nem jelent sikert.
+- A `video_packages` tartós mentés kizárólag a user saját, completed `video_package` paid-result rekordjából készül. A kliens nem írhat át hitelesített tényblokkot vagy generált csomagtartalmat, és nem emelhet tetszőleges JSON-t ready-to-produce workflow-ba.
+
 ## 2026-07-15 — TELJES BACKEND AUDIT, TREND TENANT ÉS KREDIT-SORREND
 
 - A Trend Deep Refresh most a tartós fizetett módosítás előtt von kreditet; ha a trendjelölt vagy az új snapshot mentése hibázik, automatikus kompenzáló refund fut. Korábban az adat előbb frissült, és csak utána történhetett sikertelen terhelés.

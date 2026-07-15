@@ -62,6 +62,7 @@ type PlatformChecklist =
     }
 
 interface VideoPackageResult {
+  paid_result_id?: string
   topic: string
   platform: string
   video_length: string
@@ -822,6 +823,7 @@ export default function VideoPackagePage() {
       const res = await fetch('/api/video-packages', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          paid_result_id: pkg.paid_result_id,
           topic: pkg.topic,
           search_keyword: searchKeyword || null,
           platform: pkg.platform,
@@ -909,6 +911,7 @@ export default function VideoPackagePage() {
     const res = await fetch('/api/video-packages', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        paid_result_id: result.paid_result_id,
         topic: result.topic,
         search_keyword: searchKeyword || null,
         platform: result.platform,
