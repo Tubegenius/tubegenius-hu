@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
@@ -48,15 +48,20 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
     }
 
-    await admin.from('tracked_competitors').update({
+    const { error: competitorUpdateError } = await admin.from('tracked_competitors').update({
       baseline_avg_views: avgViews,
       baseline_video_count: channel?.videoCount ?? competitor.baseline_video_count,
       baseline_subscriber_count: channel?.subscriberCount ?? competitor.baseline_subscriber_count,
       last_checked_at: new Date().toISOString(),
-    }).eq('id', competitor.id)
+    }).eq('id', competitor.id).eq('user_id', userId)
+
+    if (competitorUpdateError) {
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_refresh_save_failed' })
+      return NextResponse.json({ error: refund.success ? 'A frissítés mentése sikertelen volt, a kreditet visszaadtuk.' : 'A frissítés mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
+    }
 
     if (videos.length > 0) {
-      await admin.from('tracked_competitor_videos').upsert(
+      const { error: videosError } = await admin.from('tracked_competitor_videos').upsert(
         videos.map(v => ({
           tracked_competitor_id: competitor.id,
           user_id: userId,
@@ -72,6 +77,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         })),
         { onConflict: 'tracked_competitor_id,video_id' }
       )
+      if (videosError) {
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_refresh_videos_save_failed' })
+        return NextResponse.json({ error: refund.success ? 'A videók mentése sikertelen volt, a kreditet visszaadtuk.' : 'A videók mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
+      }
     }
 
     return NextResponse.json({ videos, _credits_remaining: charge.new_balance })

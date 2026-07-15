@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { discoverChannelNiches } from '@/lib/channel-niche-discovery'
@@ -43,10 +43,11 @@ export async function POST(request: NextRequest) {
       if ('error' in result) {
         return NextResponse.json({ error: result.error, message: 'Nem sikerült a csatorna videói alapján niche-t javasolni.' }, { status: 422 })
       }
-      await admin.from('profiles').update({
+      const { error: saveError } = await admin.from('profiles').update({
         detected_niche_candidates: result.candidates,
         niche_confidence: result.candidates[0]?.confidence ?? null,
       }).eq('user_id', userId)
+      if (saveError) return NextResponse.json({ error: 'A niche-javaslatok mentése sikertelen.' }, { status: 500 })
       return NextResponse.json({ candidates: result.candidates, niche_confidence: result.candidates[0]?.confidence ?? null, cached: false, charged: false })
     }
 
@@ -74,10 +75,14 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
       }
 
-      await admin.from('profiles').update({
+      const { error: saveError } = await admin.from('profiles').update({
         detected_niche_candidates: result.candidates,
         niche_confidence: result.candidates[0]?.confidence ?? null,
       }).eq('user_id', userId)
+      if (saveError) {
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'niche_discovery_refresh', CREDIT_COSTS.niche_discovery_refresh, { reason: 'profile_save_failed' })
+        return NextResponse.json({ error: refund.success ? 'A mentés sikertelen volt, a kreditet visszaadtuk.' : 'A mentés és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
+      }
 
       return NextResponse.json({
         candidates: result.candidates,

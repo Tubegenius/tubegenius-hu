@@ -4,6 +4,7 @@ import { MODELS } from '@/lib/models'
 import { getUserId, logUsage, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
+import { isValidScriptAnalysis, type ScriptAnalysis } from '@/lib/generated-output-validation'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { getActiveApiKey } from '@/lib/youtube-service'
@@ -176,12 +177,8 @@ Valaszolj KIZAROLAG valid JSON-ban:
       promptVersion: 'v1',
     })
 
-    const analysis = extractJson<{
-      hook: string
-      structure: Array<{ timestamp: string; label: string; content: string; type: string }>
-      key_points: string[]
-      success_factors: string
-    }>(aiCall.text)
+    const analysis = extractJson<ScriptAnalysis>(aiCall.text)
+    if (!isValidScriptAnalysis(analysis)) throw new Error('Invalid script analysis returned by AI provider')
 
     await logUsage(userId, 'script_extract', MODELS.primary, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { videoId, transcript_available: transcriptResult.available })
     const charge = await chargeFeature(userId, 'script_extract', { videoId })

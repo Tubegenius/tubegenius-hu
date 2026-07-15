@@ -62,10 +62,13 @@ export async function discoverChannelNiches(input: {
   })
 
   const rawCandidates = extractJson<{ main_category: string; specific_focus: string; confidence: number; rationale: string }[]>(aiCall.text)
+  if (!Array.isArray(rawCandidates) || rawCandidates.length < 1 || rawCandidates.length > 4) {
+    throw new Error('Invalid niche candidates returned by AI provider')
+  }
   const validCategoryValues = new Set<string>(MAIN_CATEGORIES.map(c => c.value))
 
   const candidates: NicheCandidate[] = rawCandidates
-    .filter(c => c.specific_focus && c.specific_focus.trim())
+    .filter(c => c && typeof c === 'object' && typeof c.specific_focus === 'string' && c.specific_focus.trim() && c.specific_focus.length <= 300 && typeof c.rationale === 'string' && c.rationale.length <= 1000)
     .map(c => ({
       main_category: (validCategoryValues.has(c.main_category) ? c.main_category : 'other') as MainCategory,
       specific_focus: c.specific_focus.trim(),

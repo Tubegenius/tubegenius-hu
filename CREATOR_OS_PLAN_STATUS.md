@@ -1,5 +1,10 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TELJES BACKEND AUDIT, WORKFLOW-MENTÉS ÉS AI-KIMENETEK
+
+- Niche discovery fizetős újraelemzés, competitor add és competitor refresh mentési hibái többé nem hagynak levont kreditet tartós eredmény nélkül: minden fő- és gyermekrekord-írás ellenőrzött, hibánál kompenzáló refund fut. A competitor add részleges gyermekmentésnél a félkész főrekordot is visszagörgeti.
+- Channel Audit, Script Extractor és channel niche discovery AI-kimenete szigorú tömb-, objektum-, mező-, elemszám- és méretvalidációt kapott még a kreditlevonás előtt.
+
 ## 2026-07-15 — TELJES BACKEND AUDIT, KÜLSŐ SZOLGÁLTATÁSI HATÁROK
 
 - Közös megszakítható külső HTTP-réteg készült typed timeout hibával. YouTube, Serper, Wikipedia, OpenAI transcription és a competitor/quick-extract/video-audit/script/trend útvonalak nem tarthatnak nyitva korlátlan ideig fizetett kérést: általánosan 15 másodperc, transcripcióra 60 másodperc a határ.

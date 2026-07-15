@@ -3,6 +3,7 @@ import { MODELS } from '@/lib/models'
 import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
+import { isValidNextVideoSuggestions } from '@/lib/generated-output-validation'
 import { createAdminClient } from '@/lib/supabase-server'
 import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt, filterRelevantAudits } from '@/lib/channel-audit'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
@@ -152,6 +153,7 @@ export async function POST(request: NextRequest) {
     })
 
     const suggestions = extractJson<Array<{ topic: string; reasoning: string }>>(aiCall.text)
+    if (!isValidNextVideoSuggestions(suggestions)) throw new Error('Invalid channel audit suggestions returned by AI provider')
 
     await logUsage(userId, 'channel_audit', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, {})
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
@@ -113,11 +113,12 @@ export async function POST(request: NextRequest) {
 
     if (insertError) {
       console.error('[Competitors] KRITIKUS: mentés sikertelen, a user már fizetett érte:', insertError)
-      return NextResponse.json({ error: 'Mentés sikertelen.' }, { status: 500 })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_save_failed' })
+      return NextResponse.json({ error: refund.success ? 'A mentés sikertelen volt, a kreditet visszaadtuk.' : 'A mentés és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
 
     if (videos.length > 0) {
-      await admin.from('tracked_competitor_videos').insert(
+      const { error: videosError } = await admin.from('tracked_competitor_videos').insert(
         videos.map(v => ({
           tracked_competitor_id: competitor.id,
           user_id: userId,
@@ -132,6 +133,11 @@ export async function POST(request: NextRequest) {
           is_outlier: v.isOutlier,
         }))
       )
+      if (videosError) {
+        await admin.from('tracked_competitors').delete().eq('id', competitor.id).eq('user_id', userId)
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_videos_save_failed' })
+        return NextResponse.json({ error: refund.success ? 'A videók mentése sikertelen volt, a kreditet visszaadtuk.' : 'A videók mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
+      }
     }
 
     return NextResponse.json({
