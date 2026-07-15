@@ -1,6 +1,7 @@
 // lib/youtube-service.ts
 // WillViral — Központi YouTube API szolgáltatás
 // Query budget, cache, quota guard, API key fallback
+import { fetchExternal } from './external-fetch'
 
 // ── Query Budget ─────────────────────────────────────────────
 
@@ -154,7 +155,7 @@ async function ensureActiveKey(): Promise<string> {
   const primary = getPrimaryKey()
   if (!primary) { quotaState.usingBackupKey = true; return backup }
   try {
-    const res = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=test&type=video&maxResults=1&key=${primary}`)
+    const res = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/search?part=snippet&q=test&type=video&maxResults=1&key=${primary}`)
     const data = await res.json()
     if (data.error?.errors?.[0]?.reason === 'rateLimitExceeded' || data.error?.errors?.[0]?.reason === 'dailyLimitExceeded') {
       console.log('[YouTube] Primary key quota exceeded, switching to DEV_BACKUP')
@@ -286,7 +287,7 @@ async function rawYouTubeSearch(
   const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&order=relevance&maxResults=${maxResults}&regionCode=${regionCode}&relevanceLanguage=${lang}&publishedAfter=${publishedAfter}&key=${apiKey}`
 
   try {
-    const res = await fetch(url)
+    const res = await fetchExternal('YouTube', url)
     const data = await res.json()
     if (data.error) {
       const reason = data.error.errors?.[0]?.reason || ''
@@ -376,7 +377,7 @@ export async function youtubeStats(videoIds: string[]): Promise<Map<string, YouT
   const ids = videoIds.join(',')
   try {
     recordStats()
-    const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${apiKey}`)
+    const res = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${apiKey}`)
     const data = await res.json()
     if (data.error) {
       const reason = data.error.errors?.[0]?.reason || ''
@@ -384,7 +385,7 @@ export async function youtubeStats(videoIds: string[]): Promise<Map<string, YouT
         recordQuotaExceeded()
         if (!quotaState.usingBackupKey && switchToBackupKey()) {
           const backup = getBackupKey()
-          const retry = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${backup}`)
+          const retry = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${backup}`)
           const retryData = await retry.json()
           if (!retryData.error) {
             return new Map((retryData.items || []).map((item: YouTubeStatsItem) => [item.id, item]))

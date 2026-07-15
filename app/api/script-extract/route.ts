@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchExternal } from '@/lib/external-fetch'
 import { MODELS } from '@/lib/models'
 import { getUserId, logUsage, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
@@ -86,7 +87,7 @@ export async function POST(request: NextRequest) {
     // 1. YouTube metaadatok lekerese
     const YOUTUBE_API_KEY = getActiveApiKey()
     const videoUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`
-    const videoRes = await fetch(videoUrl)
+    const videoRes = await fetchExternal('YouTube', videoUrl)
     const videoData = await videoRes.json()
 
     if (!videoData.items || videoData.items.length === 0) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchExternal } from '@/lib/external-fetch'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { getActiveApiKey } from '@/lib/youtube-service'
 
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest) {
 
     const apiKey = getActiveApiKey()
     const [metaRes, transcriptResult] = await Promise.all([
-      fetch(`https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}`),
+      fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${apiKey}`),
       tryTranscript(videoId),
     ])
 

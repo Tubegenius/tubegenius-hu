@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchExternal } from '@/lib/external-fetch'
 import { isFactRelevantToTopic } from '@/lib/fact-safety'
 import { getUserId } from '@/lib/credits'
 
@@ -14,7 +15,7 @@ async function fetchWikipedia(query: string, lang: 'hu' | 'en' = 'hu'): Promise<
   try {
     // 1. Keresés a megfelelő cikkre
     const searchUrl = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*&srlimit=1`
-    const searchRes = await fetch(searchUrl)
+    const searchRes = await fetchExternal('Wikipedia', searchUrl)
     const searchData = await searchRes.json()
 
     const firstResult = searchData?.query?.search?.[0]
@@ -24,7 +25,7 @@ async function fetchWikipedia(query: string, lang: 'hu' | 'en' = 'hu'): Promise<
 
     // 2. Cikk kivonat lekérése
     const summaryUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
-    const summaryRes = await fetch(summaryUrl)
+    const summaryRes = await fetchExternal('Wikipedia', summaryUrl)
     if (!summaryRes.ok) return null
     const summaryData = await summaryRes.json()
 
@@ -46,7 +47,7 @@ async function fetchSerper(query: string): Promise<FactSource[]> {
   if (!apiKey) return []
 
   try {
-    const res = await fetch('https://google.serper.dev/search', {
+    const res = await fetchExternal('Serper', 'https://google.serper.dev/search', {
       method: 'POST',
       headers: {
         'X-API-KEY': apiKey,

@@ -1,5 +1,6 @@
 // app/api/video-audit/route.ts
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchExternal } from '@/lib/external-fetch'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
 import { chargeFeature, checkPaidFeatureAccess, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
@@ -28,7 +29,7 @@ async function fetchYouTubeData(videoId: string): Promise<YouTubeApiData | null>
   const apiKey = getActiveApiKey()
   if (!apiKey) return null
   try {
-    const res = await fetch(
+    const res = await fetchExternal('YouTube',
       `https://www.googleapis.com/youtube/v3/videos?id=${videoId}&part=snippet,statistics,contentDetails&key=${apiKey}`
     )
     const data = await res.json()

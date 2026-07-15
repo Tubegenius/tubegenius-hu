@@ -1,5 +1,10 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TELJES BACKEND AUDIT, KÜLSŐ SZOLGÁLTATÁSI HATÁROK
+
+- Közös megszakítható külső HTTP-réteg készült typed timeout hibával. YouTube, Serper, Wikipedia, OpenAI transcription és a competitor/quick-extract/video-audit/script/trend útvonalak nem tarthatnak nyitva korlátlan ideig fizetett kérést: általánosan 15 másodperc, transcripcióra 60 másodperc a határ.
+- Az Anthropic SDK központi kliensén kötelező kulcsellenőrzés, 60 másodperces timeout és egyetlen kontrollált retry van. A timeout-viselkedést determinisztikus fake-timer regressziós teszt védi.
+
 ## 2026-07-15 — TELJES BACKEND AUDIT, PROMPT GOVERNANCE
 
 - Az AI provider réteg most minden hívásnál kötelezően megköveteli a központi katalógusban regisztrált prompt ID + verzió párost; ismeretlen vagy verzió nélküli prompt fail-closed hibát ad az AI-hívás előtt.

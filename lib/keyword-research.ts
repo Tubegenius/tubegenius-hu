@@ -6,6 +6,7 @@
 
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import type { YouTubeVideoStats } from '@/lib/opportunity-scoring'
+import { fetchExternal } from '@/lib/external-fetch'
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY
 
@@ -52,7 +53,7 @@ export async function fetchKeywordSignals(query: string, region: string): Promis
   try {
     const gl = region === 'HU' ? 'hu' : 'us'
     const hl = region === 'HU' ? 'hu' : 'en'
-    const res = await fetch('https://google.serper.dev/search', {
+    const res = await fetchExternal('Serper', 'https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ q: query, gl, hl, num: 10 }),

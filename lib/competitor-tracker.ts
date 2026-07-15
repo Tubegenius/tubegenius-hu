@@ -48,7 +48,7 @@ function extractChannelIdOrHandle(input: string): { type: 'id' | 'handle' | 'que
 }
 
 async function fetchChannelByParam(param: string, apiKey: string): Promise<ChannelSnapshot | null> {
-  const res = await fetch(`https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&${param}&key=${apiKey}`)
+  const res = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&${param}&key=${apiKey}`)
   const data = await res.json()
   const item = data.items?.[0]
   if (!item) return null
@@ -81,7 +81,7 @@ export async function resolveChannel(input: string): Promise<ChannelSnapshot | n
   }
   // Fallback: search.list csatorna nevre — dragabb (100 egyseg), csak akkor
   // hasznaljuk, ha a handle/id alapu felismeres nem sikerult.
-  const searchRes = await fetch(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(parsed.value)}&key=${apiKey}`)
+  const searchRes = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(parsed.value)}&key=${apiKey}`)
   const searchData = await searchRes.json()
   const channelId = searchData.items?.[0]?.snippet?.channelId || searchData.items?.[0]?.id?.channelId
   if (!channelId) return null
@@ -93,13 +93,13 @@ export async function resolveChannel(input: string): Promise<ChannelSnapshot | n
 export async function fetchChannelRecentVideos(uploadsPlaylistId: string, maxResults = 10): Promise<CompetitorVideo[]> {
   const apiKey = getActiveApiKey()
 
-  const playlistRes = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${maxResults}&key=${apiKey}`)
+  const playlistRes = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${maxResults}&key=${apiKey}`)
   const playlistData = await playlistRes.json()
   const items = (playlistData.items || []) as Array<{ snippet: { title: string; publishedAt: string; resourceId: { videoId: string }; thumbnails?: { medium?: { url: string }; default?: { url: string } } } }>
   if (items.length === 0) return []
 
   const videoIds = items.map(i => i.snippet.resourceId.videoId).filter(Boolean)
-  const statsRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${videoIds.join(',')}&key=${apiKey}`)
+  const statsRes = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${videoIds.join(',')}&key=${apiKey}`)
   const statsData = await statsRes.json()
   const statsMap = new Map<string, { viewCount?: string; likeCount?: string; commentCount?: string }>(
     (statsData.items || []).map((v: { id: string; statistics: { viewCount?: string; likeCount?: string; commentCount?: string } }) => [v.id, v.statistics])
@@ -172,3 +172,4 @@ export async function saveOutlierAsProofSignal(input: {
 
   return { success: true, videoIdeaId: ideaResult.idea.id }
 }
+import { fetchExternal } from './external-fetch'

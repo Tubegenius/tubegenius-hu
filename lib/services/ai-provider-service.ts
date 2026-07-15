@@ -44,8 +44,9 @@ export interface AICallResult {
 
 let anthropicClient: Anthropic | null = null
 function getAnthropicClient(): Anthropic {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('Anthropic is not configured')
   if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 60_000, maxRetries: 1 })
   }
   return anthropicClient
 }

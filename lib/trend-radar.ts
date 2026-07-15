@@ -9,6 +9,7 @@ import { youtubeSearch, youtubeStats, getEffectiveBudget, startNewRequest, type 
 import { recordVideoSnapshots, recordTrendCandidates } from './youtube-snapshot'
 import { callAIProvider, extractJson } from './services/ai-provider-service'
 import { MODELS } from './models'
+import { fetchExternal } from './external-fetch'
 
 const SERPER_API_KEY = process.env.SERPER_API_KEY!
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!
@@ -114,7 +115,7 @@ export async function fetchSerperNews(query: string, region: string): Promise<Se
   try {
     const gl = region === 'HU' ? 'hu' : 'us'
     const hl = region === 'HU' ? 'hu' : 'en'
-    const res = await fetch('https://google.serper.dev/news', {
+    const res = await fetchExternal('Serper', 'https://google.serper.dev/news', {
       method: 'POST',
       headers: { 'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ q: query, gl, hl, num: 10 }),
@@ -153,7 +154,7 @@ async function fetchSerperWeb(query: string, region: string): Promise<SerperResu
   try {
     const gl = region === 'HU' ? 'hu' : 'us'
     const hl = region === 'HU' ? 'hu' : 'en'
-    const res = await fetch('https://google.serper.dev/search', {
+    const res = await fetchExternal('Serper', 'https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ q: query, gl, hl, num: 10 }),

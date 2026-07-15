@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchExternal } from '@/lib/external-fetch'
 import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import {
@@ -159,11 +160,11 @@ export async function POST(request: NextRequest) {
     openAiForm.append('response_format', 'verbose_json')
     if (language && language !== 'auto') openAiForm.append('language', language)
 
-    const transcriptionRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const transcriptionRes = await fetchExternal('OpenAI transcription', 'https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}` },
       body: openAiForm,
-    })
+    }, 60_000)
 
     if (!transcriptionRes.ok) {
       const details = await transcriptionRes.text().catch(() => '')

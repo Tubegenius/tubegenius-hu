@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { fetchExternal } from '@/lib/external-fetch'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { chargeFeature, checkPaidFeatureAccess } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
@@ -99,7 +100,7 @@ async function fetchSerper(endpoint: 'news' | 'search', query: string, gl: strin
   if (!apiKey) return []
 
   try {
-    const res = await fetch(`https://google.serper.dev/${endpoint}`, {
+    const res = await fetchExternal('Serper', `https://google.serper.dev/${endpoint}`, {
       method: 'POST',
       headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ q: query, gl, hl, num: 5 }),
