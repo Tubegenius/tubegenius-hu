@@ -40,3 +40,4 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 8. Minden lekérdezés user/tenant határral rendelkezik.
 9. Prompt azonosítható és verziózott; kimenet validált.
 10. Determinisztikus regressziós teszt + production build sikeres.
+11. Piaci benchmark: a `VIDIQ_FUNCTIONAL_BENCHMARK.md` szerint a megfelelő vidIQ-döntési logika, adatforrás, személyre szabás és funkcióhiány tételesen dokumentált; minden eltérés tudatos és védhető.

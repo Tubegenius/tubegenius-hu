@@ -1,5 +1,10 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — VIDIQ FUNKCIONÁLIS BENCHMARK ELINDÍTVA
+
+- A vidIQ-összevetés külön kötelező 11. lezárási kritérium lett. Létrejött a `VIDIQ_FUNCTIONAL_BENCHMARK.md` funkciópár-, adatforrás-, hiány- és differenciálási mátrixszal.
+- Első hivatalos forrásaudit: Daily Ideas, Keyword Research, Competitors, Trend Alerts, Optimize, feature inventory és AI Coach. A vidIQ zárt képletei nem tekinthetők ismertnek; az összevetés termékdöntés, bemenet, frissesség, személyre szabás és állításbiztonság alapján történik.
+
 ## 2026-07-15 — TITLE STUDIO KIMENETI INTEGRITÁS
 
 - Title Studio csak pontosan öt, nem üres és méretkorlátos variációt fogad el; curiosity, clarity, clickability és risk score minden esetben véges 0–100 érték. Hibás AI-válasz a kreditlevonás előtt fail-closed.
