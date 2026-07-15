@@ -42,11 +42,12 @@ export interface TopicDecisionInput {
 
 export function ageDays(publishedAt: string) {
   const time = new Date(publishedAt).getTime()
-  if (!Number.isFinite(time)) return 9999
+  if (!Number.isFinite(time) || time > Date.now() + 60 * 60 * 1000) return 9999
   return Math.max(0, (Date.now() - time) / DAY_MS)
 }
 
 function clampScore(value: number) {
+  if (!Number.isFinite(value)) return 0
   return Math.round(Math.max(0, Math.min(100, value)))
 }
 
@@ -101,7 +102,10 @@ export function decideSimilarVideo(input: VideoDecisionInput): DecisionResult {
 
   // ── Piaci scoring — csak releváns videók kapnak pontot ──
   const market_validation = hasVideoMarketValidation(input)
-  const freshness = ageDays(input.published_at) <= 180 || (input.outlier_score >= 85 && input.view_count >= 5000)
+  const publishedAgeDays = ageDays(input.published_at)
+  const freshness = publishedAgeDays < 9999 && (
+    publishedAgeDays <= 180 || (input.outlier_score >= 85 && input.view_count >= 5000)
+  )
   const evidence = input.view_count >= 100
   const score = scoreValidatedVideo(input)
 

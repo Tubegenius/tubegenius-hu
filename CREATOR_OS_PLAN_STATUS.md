@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — TELJES BACKEND AUDIT, MÓDSZERTANI BLOKK 1
+
+- Létrejött a folyamatosan vezetett `BACKEND_AUDIT_MATRIX.md`, amely funkciónként külön választja a lezárt, részleges és függőben lévő auditot; a korábbi általános „átnézve” megfogalmazás helyett csak teszttel és builddel igazolt blokk kaphat lezárt státuszt.
+- Opportunity scoring javítás: ékezetfüggetlen keresési relevancia; hibás/jövőbeli dátum nem kap frissességet vagy velocity-t; a competition/upload-density milliós, elérhetetlen nevezője a tényleges 25 elemű API-evidenciamintára lett kalibrálva; niche nélkül neutrális 50, explicit eltérésnél gyenge 10 pont jár a korábbi automatikus 40 helyett.
+- Decision Engine fail-closed: `NaN` score 0, jövőbeli/hibás publikálási dátum nem friss, és az outlier-kivétel sem kerülheti meg ezt a kaput.
+- Video Audit módszertani javítás: like-arány és leíráshossz többé nem retenciós bizonyíték; feltöltési óra közönség-időzóna nélkül nem pontozódik; thumbnail URL puszta megléte nem minőségi/CTR jel; YouTube API metadata retention/CTR nélkül legfeljebb közepes confidence. Manuális adatoknál platformegyezés, szám-, arány-, hossz- és tömbkorlátok kerültek a költséges AI-hívás elé.
+
 ## 2026-07-15 — REGRESSZIÓS TESZTEK + NAPI SOFT LIMIT + PROMPT VERZIÓZÁS
 
 - Bevezetve a Vitest regressziós alapcsomag és GitHub Actions quality workflow (`npm test` + TypeScript). 20 determinisztikus, kreditmentes teszt fedi a kreditlevonási matematikát és CAS-hibát, paid-result hash/cache/újranyitást, Video Idea CRUD-identitást és workflow-előrelépést, proof relevanciát, API input-hibákat, napi limiteket, kliensoldali felülbírálást és prompt-template verziózást.

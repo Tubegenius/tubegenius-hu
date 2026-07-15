@@ -43,6 +43,17 @@ export interface ScoreBreakdown {
 
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
+const OBSERVED_RESULT_SATURATION = 25
+
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function ageMsFromPublishedAt(publishedAt: string, now = Date.now()): number | null {
+  const published = new Date(publishedAt).getTime()
+  if (!Number.isFinite(published) || published > now + HOUR_MS) return null
+  return Math.max(0, now - published)
+}
 
 // ════════════════════════════════════════════════════════════
 // 1. SEARCH RELEVANCE — mennyire releváns a videó a kulcsszóhoz
@@ -80,8 +91,8 @@ function fuzzyMatch(word: string, text: string): boolean {
 }
 
 export function calcSearchRelevance(video: YouTubeVideoStats, keyword: string): number {
-  const titleLower = video.title.toLowerCase()
-  const keywordWords = keyword.toLowerCase().split(/\s+/).filter(w => w.length > 2)
+  const titleLower = normalizeSearchText(video.title)
+  const keywordWords = normalizeSearchText(keyword).split(/\s+/).filter(w => w.length > 2)
 
   if (keywordWords.length === 0) return 50
 
@@ -92,8 +103,8 @@ export function calcSearchRelevance(video: YouTubeVideoStats, keyword: string): 
   const titleMatchRatio = matchCount / keywordWords.length
 
   // Recency relevance — friss videók kapnak kis bónuszt a relevanciához
-  const ageInDays = (Date.now() - new Date(video.publishedAt).getTime()) / DAY_MS
-  const recencyBonus = ageInDays < 30 ? 10 : 0
+  const ageMs = ageMsFromPublishedAt(video.publishedAt)
+  const recencyBonus = ageMs !== null && ageMs < 30 * DAY_MS ? 10 : 0
 
   const score = titleMatchRatio * 90 + recencyBonus
   return Math.round(Math.max(0, Math.min(100, score)))
@@ -116,15 +127,20 @@ export function calcAvgSearchRelevance(videos: YouTubeVideoStats[], keyword: str
 // 2. TREND VELOCITY — views/hour, friss videók nézettségi sebessége
 // ════════════════════════════════════════════════════════════
 export function calcVideoVelocity(video: YouTubeVideoStats): number {
-  const hoursSincePublish = Math.max(1, (Date.now() - new Date(video.publishedAt).getTime()) / HOUR_MS)
-  return video.viewCount / hoursSincePublish
+  const ageMs = ageMsFromPublishedAt(video.publishedAt)
+  if (ageMs === null) return 0
+  const hoursSincePublish = Math.max(1, ageMs / HOUR_MS)
+  return Math.max(0, video.viewCount) / hoursSincePublish
 }
 
 export function calcTrendVelocity(videos: YouTubeVideoStats[]): number {
   if (videos.length === 0) return 0
 
   // Csak a 14 napon belüli videók velocity-jét nézzük (a régi, magas-view videók ne torzítsanak)
-  const recentVideos = videos.filter(v => (Date.now() - new Date(v.publishedAt).getTime()) < 14 * DAY_MS)
+  const recentVideos = videos.filter(v => {
+    const ageMs = ageMsFromPublishedAt(v.publishedAt)
+    return ageMs !== null && ageMs < 14 * DAY_MS
+  })
   if (recentVideos.length === 0) return 15 // nincs friss videó -> alacsony velocity
 
   const avgVelocity = recentVideos.reduce((sum, v) => sum + calcVideoVelocity(v), 0) / recentVideos.length
@@ -149,8 +165,8 @@ export function calcFreshness(videos: YouTubeVideoStats[]): number {
   if (videos.length === 0) return 0
   const now = Date.now()
   const total = videos.reduce((sum, v) => {
-    const ageInDays = (now - new Date(v.publishedAt).getTime()) / DAY_MS
-    return sum + freshnessPoints(ageInDays)
+    const ageMs = ageMsFromPublishedAt(v.publishedAt, now)
+    return sum + (ageMs === null ? 0 : freshnessPoints(ageMs / DAY_MS))
   }, 0)
   return Math.round(total / videos.length)
 }
@@ -209,7 +225,11 @@ export interface UploadDensityResult {
 }
 
 export function calcUploadDensity(videos: YouTubeVideoStats[], totalResults: number): UploadDensityResult {
-  const recentCount = videos.filter(v => (Date.now() - new Date(v.publishedAt).getTime()) < 14 * DAY_MS).length
+  const recentCount = videos.filter(v => {
+    const ageMs = ageMsFromPublishedAt(v.publishedAt)
+    return ageMs !== null && ageMs < 14 * DAY_MS
+  }).length
+  const observedResultCount = Math.max(0, Math.min(OBSERVED_RESULT_SATURATION, Number(totalResults) || 0))
 
   // Kevés releváns videó = alacsony bizonyíték (nem feltétlen rossz, de kockázatos)
   if (recentCount === 0) return { score: 20, level: 'low' }
@@ -219,7 +239,7 @@ export function calcUploadDensity(videos: YouTubeVideoStats[], totalResults: num
   if (recentCount <= 6) return { score: 85, level: 'moderate' }
 
   // Sok friss videó VAGY nagy totalResults = telítettség veszély
-  if (recentCount <= 10 && totalResults < 200_000) return { score: 65, level: 'high' }
+  if (recentCount <= 10 && observedResultCount < OBSERVED_RESULT_SATURATION) return { score: 65, level: 'high' }
 
   return { score: 35, level: 'saturated' }
 }
@@ -230,7 +250,7 @@ export function calcUploadDensity(videos: YouTubeVideoStats[], totalResults: num
 export function calcCompetitionScore(videos: YouTubeVideoStats[], totalResults: number, uploadDensity: UploadDensityResult): number {
   if (videos.length === 0) return 0
 
-  const avgViews = videos.reduce((sum, v) => sum + v.viewCount, 0) / videos.length
+  const avgViews = videos.reduce((sum, v) => sum + Math.max(0, Number(v.viewCount) || 0), 0) / videos.length
   const uniqueChannels = new Set(videos.map(v => v.channelTitle)).size
   const channelDiversity = uniqueChannels / videos.length // 1 = mind különböző csatorna (alacsonyabb domináns verseny)
 
@@ -238,7 +258,10 @@ export function calcCompetitionScore(videos: YouTubeVideoStats[], totalResults: 
   let competition = (Math.log10(avgViews + 1) / Math.log10(1_000_000)) * 50 + (1 - channelDiversity) * 30
 
   // Piaci volumen hatása
-  const volumeFactor = Math.min(1, totalResults / 1_000_000)
+  // A YouTube search API itt nem globális találatszámot, hanem egy korlátozott
+  // megfigyelt mintát ad. A volumenjelet ezért ehhez a 25 elemű evidenciamintához
+  // kalibráljuk, nem elérhetetlen milliós értékhez.
+  const volumeFactor = Math.min(1, Math.max(0, Number(totalResults) || 0) / OBSERVED_RESULT_SATURATION)
   competition += volumeFactor * 20
 
   // Upload density korrekció: 'saturated' szint extra versenybüntetés
@@ -289,13 +312,16 @@ export function calcTrendMomentum(videos: YouTubeVideoStats[]): number {
 // 10. NICHE MATCH — kulcsszó-profil egyezés (változatlan logika)
 // ════════════════════════════════════════════════════════════
 export function calcNicheMatch(keyword: string, nicheText: string): number {
-  const kw = keyword.toLowerCase()
-  const niche = nicheText.toLowerCase()
+  const kw = normalizeSearchText(keyword)
+  const niche = normalizeSearchText(nicheText)
   const nicheWords = niche.split(/[,;/\s]+/).filter(w => w.length > 2)
+
+  // Niche nélkül nincs bizonyíték egyezésre vagy ellentmondásra: neutrális.
+  if (nicheWords.length === 0) return 50
 
   if (nicheWords.some(w => kw.includes(w) || w.includes(kw))) return 95
 
-  let bestScore = 40
+  let bestScore = 10
   for (const w of nicheWords) {
     if (kw.split(' ').some(part => part.length > 3 && (w.includes(part) || part.includes(w)))) {
       bestScore = Math.max(bestScore, 75)

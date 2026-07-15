@@ -146,7 +146,14 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // a Similar Videos freshnessScore-ja (lásd similar-videos/route.ts).
 function calcFreshnessScore(videos: YouTubeVideoStats[]): number {
   if (videos.length === 0) return 0
-  const avgAgeDays = videos.reduce((sum, v) => sum + Math.max(0, (Date.now() - new Date(v.publishedAt).getTime()) / DAY_MS), 0) / videos.length
+  const now = Date.now()
+  const validAges = videos.map(v => {
+    const published = new Date(v.publishedAt).getTime()
+    if (!Number.isFinite(published) || published > now + 60 * 60 * 1000) return null
+    return Math.max(0, (now - published) / DAY_MS)
+  }).filter((age): age is number => age !== null)
+  if (validAges.length === 0) return 0
+  const avgAgeDays = validAges.reduce((sum, age) => sum + age, 0) / validAges.length
   if (avgAgeDays <= 7) return 100
   if (avgAgeDays <= 30) return 85
   if (avgAgeDays <= 90) return 65

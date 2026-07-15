@@ -18,6 +18,8 @@ import {
   YouTubeApiData,
   ManualPlatformData,
   BackendScores,
+  isAuditPlatform,
+  validateManualPlatformData,
 } from '@/lib/video-audit-scoring'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
@@ -182,7 +184,17 @@ export async function POST(req: NextRequest) {
       manual_data?: ManualPlatformData
     }
 
-    if (!platform) return NextResponse.json({ error: 'Platform kötelező' }, { status: 400 })
+    if (!isAuditPlatform(platform)) return NextResponse.json({ error: 'Érvénytelen vagy hiányzó platform' }, { status: 400 })
+
+    let validatedManualData: ManualPlatformData | undefined
+    if (manual_data !== undefined) {
+      const validation = validateManualPlatformData(manual_data, platform)
+      if (!validation.ok) return NextResponse.json({ error: validation.error }, { status: 400 })
+      validatedManualData = validation.data
+    }
+    if (video_url !== undefined && (typeof video_url !== 'string' || video_url.length > 500)) {
+      return NextResponse.json({ error: 'Érvénytelen videó URL' }, { status: 400 })
+    }
 
     const isYouTube = platform === 'youtube_long' || platform === 'youtube_shorts'
     const videoIdForHash = isYouTube && video_url ? extractVideoId(video_url) : null
@@ -190,7 +202,7 @@ export async function POST(req: NextRequest) {
       platform,
       video_id: videoIdForHash || null,
       video_url: videoIdForHash ? null : (video_url || null),
-      manual_data: videoIdForHash ? null : (manual_data || null),
+      manual_data: videoIdForHash ? null : (validatedManualData || null),
     })
     const paidInputHash = buildPaidResultHash({
       userId: user.id,
@@ -233,9 +245,9 @@ export async function POST(req: NextRequest) {
       inputData = ytData
       backendScores = scoreYouTubeBackend(ytData, platform)
       hasApiData = true
-    } else if (manual_data) {
-      inputData = manual_data
-      backendScores = scoreManualBackend(manual_data)
+    } else if (validatedManualData) {
+      inputData = validatedManualData
+      backendScores = scoreManualBackend(validatedManualData)
     } else {
       return NextResponse.json({ error: 'Hiányzó videóadat' }, { status: 400 })
     }
@@ -266,7 +278,10 @@ export async function POST(req: NextRequest) {
 
     // Confidence
     const views = 'views' in inputData ? inputData.views : 0
-    const confidence = computeConfidence(platform, views, hasApiData)
+    const hasBehavioralMetrics = !hasApiData && 'completion_rate' in inputData && (
+      inputData.completion_rate !== undefined || inputData.avg_watch_time_seconds !== undefined
+    )
+    const confidence = computeConfidence(platform, views, hasApiData, hasBehavioralMetrics)
 
     const title = 'title' in inputData ? inputData.title : (inputData as ManualPlatformData).title
     const topic = 'topic' in inputData ? (inputData as ManualPlatformData).topic : title

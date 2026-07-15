@@ -124,6 +124,34 @@ export interface ManualPlatformData {
   user_notes?: string
 }
 
+const PLATFORMS: Platform[] = ['youtube_long', 'youtube_shorts', 'tiktok', 'instagram_reels', 'facebook_reels']
+
+export function isAuditPlatform(value: unknown): value is Platform {
+  return typeof value === 'string' && PLATFORMS.includes(value as Platform)
+}
+
+export function validateManualPlatformData(value: unknown, expectedPlatform: Platform): { ok: true; data: ManualPlatformData } | { ok: false; error: string } {
+  if (!value || typeof value !== 'object') return { ok: false, error: 'Hiányzó manuális videóadat' }
+  const data = value as Record<string, unknown>
+  if (data.platform !== expectedPlatform) return { ok: false, error: 'A manuális adat platformja nem egyezik a kiválasztott platformmal' }
+  for (const field of ['topic', 'title'] as const) {
+    if (typeof data[field] !== 'string' || !data[field].trim()) return { ok: false, error: `${field} megadása kötelező` }
+    if ((data[field] as string).trim().length > 300) return { ok: false, error: `${field} legfeljebb 300 karakter lehet` }
+  }
+  const nonNegative = ['duration_seconds', 'views', 'likes', 'comments', 'shares', 'saves', 'avg_watch_time_seconds', 'profile_visits', 'new_followers'] as const
+  for (const field of nonNegative) {
+    const fieldValue = data[field]
+    if (fieldValue !== undefined && (!Number.isFinite(fieldValue) || Number(fieldValue) < 0)) return { ok: false, error: `${field} csak nem negatív szám lehet` }
+  }
+  if (Number(data.duration_seconds) <= 0 || Number(data.duration_seconds) > 86400) return { ok: false, error: 'A videó hossza 1 másodperc és 24 óra között lehet' }
+  const completionRate = data.completion_rate
+  if (completionRate !== undefined && (!Number.isFinite(completionRate) || Number(completionRate) < 0 || Number(completionRate) > 1)) return { ok: false, error: 'completion_rate 0 és 1 közötti arány lehet' }
+  if (data.avg_watch_time_seconds !== undefined && Number(data.avg_watch_time_seconds) > Number(data.duration_seconds)) return { ok: false, error: 'Az átlagos nézési idő nem lehet hosszabb a videónál' }
+  if (data.hashtags !== undefined && (!Array.isArray(data.hashtags) || data.hashtags.length > 50)) return { ok: false, error: 'Legfeljebb 50 hashtag adható meg' }
+  if (data.caption !== undefined && (typeof data.caption !== 'string' || data.caption.length > 5000)) return { ok: false, error: 'A caption legfeljebb 5000 karakter lehet' }
+  return { ok: true, data: value as ManualPlatformData }
+}
+
 export interface DimensionScore {
   score: number
   interpretation: ScoreInterpretation
@@ -159,19 +187,12 @@ function clamp(val: number, min = 0, max = 100): number {
   return Math.max(min, Math.min(max, Math.round(val)))
 }
 
-function daysSince(dateStr: string): number {
-  return Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000)
-}
-
 // ── YOUTUBE BACKEND SCORING ──────────────────────────────────────────────────
 
 export function scoreYouTubeBackend(data: YouTubeApiData, platform: Platform): BackendScores {
   const { min, max } = PLATFORM_DURATION_OPTIMUM[platform]
   const engBench = PLATFORM_ENGAGEMENT_BENCHMARK[platform]
-  const days = daysSince(data.published_at)
   const engRate = data.views > 0 ? (data.likes + data.comments) / data.views : 0
-  const likeRate = data.views > 0 ? data.likes / data.views : 0
-  const viewVelocity = days > 0 ? data.views / days : data.views
 
   // 1. Hook Strength (title alapján)
   const titleWords = data.title.trim().split(/\s+/).length
@@ -194,20 +215,19 @@ export function scoreYouTubeBackend(data: YouTubeApiData, platform: Platform): B
   if (titleLen > 80) hookWeaknesses.push('Túl hosszú cím — levágódhat')
 
   // 2. Retention Potential
-  let retentionScore = 50
+  // A YouTube Data API nem ad retention/completion adatot. Itt kizárólag
+  // szerkezeti proxy (hossz) pontozható; like és leíráshossz nem retenció.
+  let retentionScore = 45
   const durationInRange = data.duration_seconds >= min && data.duration_seconds <= max
-  if (durationInRange) retentionScore += 25
+  if (durationInRange) retentionScore += 20
   else if (data.duration_seconds < min) retentionScore -= 15
   else retentionScore -= 10
-  if (likeRate > 0.05) retentionScore += 15
-  else if (likeRate > 0.03) retentionScore += 8
-  if (data.description && data.description.length > 200) retentionScore += 10
 
   const retentionSignals: string[] = []
   const retentionWeaknesses: string[] = []
   if (durationInRange) retentionSignals.push('Videó hossza platform-optimális')
   else retentionWeaknesses.push(`Videó hossza nem optimális (optimum: ${min/60}–${max/60} perc)`)
-  if (likeRate > 0.05) retentionSignals.push('Magas like arány — jó retenció jel')
+  retentionWeaknesses.push('Nincs nézőmegtartási adat — a retenció csak szerkezeti becslés')
 
   // 3. Engagement Quality
   const engRatio = engBench > 0 ? engRate / engBench : 0
@@ -222,26 +242,24 @@ export function scoreYouTubeBackend(data: YouTubeApiData, platform: Platform): B
   // 4. Platform Fit
   let pfScore = 60
   if (durationInRange) pfScore += 20
-  const uploadHour = new Date(data.published_at).getHours()
-  if (uploadHour >= 16 && uploadHour <= 20) pfScore += 15
   if (data.tags && data.tags.length >= 5) pfScore += 5
 
   const pfSignals: string[] = []
   const pfWeaknesses: string[] = []
   if (durationInRange) pfSignals.push('Videó hossza platform-kompatibilis')
-  if (uploadHour >= 16 && uploadHour <= 20) pfSignals.push('Ideális feltöltési időpont')
-  else pfWeaknesses.push('Feltöltési időpont nem optimális (ajánlott: 16–20h)')
+  pfWeaknesses.push('Közönség-időzóna nélkül a feltöltési időpont nem pontozható')
 
   // 5. Packaging Quality
   let packScore = 50
-  if (data.thumbnail_url) packScore += 20
+  // A thumbnail URL megléte nem bizonyít vizuális minőséget vagy CTR-t.
+  if (data.thumbnail_url) packScore += 5
   if (titleLen >= 40 && titleLen <= 70) packScore += 15
   if (data.description && data.description.length > 100) packScore += 10
   if (data.tags && data.tags.length >= 3) packScore += 5
 
   const packSignals: string[] = []
   const packWeaknesses: string[] = []
-  if (data.thumbnail_url) packSignals.push('Thumbnail elérhető')
+  if (data.thumbnail_url) packSignals.push('Thumbnail elérhető — minősége adatból nem mérhető')
   else packWeaknesses.push('Thumbnail nem elérhető az API-ból')
   if (data.description.length < 100) packWeaknesses.push('Rövid leírás — SEO gyenge')
 
@@ -279,19 +297,19 @@ export function scoreManualBackend(data: ManualPlatformData): BackendScores {
   let retentionScore = 50
   if (durationInRange) retentionScore += 20
   else if (data.duration_seconds < min) retentionScore -= 15
-  if (data.completion_rate) {
+  if (data.completion_rate !== undefined) {
     if (data.completion_rate > 0.5) retentionScore += 20
     else if (data.completion_rate > 0.3) retentionScore += 10
     else retentionScore -= 10
   }
-  if (data.avg_watch_time_seconds && data.duration_seconds > 0) {
+  if (data.avg_watch_time_seconds !== undefined && data.duration_seconds > 0) {
     const watchRatio = data.avg_watch_time_seconds / data.duration_seconds
     if (watchRatio > 0.5) retentionScore += 10
   }
 
   // Engagement
   let engScore = clamp(50 + (engRatio - 1) * 40)
-  if ((data.saves ?? 0) > 0) {
+  if ((data.saves ?? 0) > 0 && data.views > 0) {
     const saveRate = (data.saves ?? 0) / data.views
     if (saveRate > 0.02) engScore = clamp(engScore + 10)
   }
@@ -299,10 +317,7 @@ export function scoreManualBackend(data: ManualPlatformData): BackendScores {
   // Platform Fit
   let pfScore = 60
   if (durationInRange) pfScore += 20
-  if (data.uploaded_at) {
-    const hour = new Date(data.uploaded_at).getHours()
-    if (hour >= 16 && hour <= 21) pfScore += 15
-  }
+  // Feltöltési idő csak a célközönség időzónájával lenne értelmezhető.
   if (data.new_followers && data.new_followers > 0) pfScore += 5
 
   // Packaging
@@ -417,9 +432,9 @@ export function computeDecision(finalScores: FinalAuditScores): {
 
 // ── CONFIDENCE ───────────────────────────────────────────────────────────────
 
-export function computeConfidence(platform: Platform, views: number, hasApiData: boolean): ConfidenceLevel {
+export function computeConfidence(platform: Platform, views: number, hasApiData: boolean, hasBehavioralMetrics = false): ConfidenceLevel {
   if (!hasApiData) return views > 1000 ? 'medium' : 'low'
-  if (views > 10000) return 'high'
+  if (views > 10000 && hasBehavioralMetrics) return 'high'
   if (views > 1000) return 'medium'
   return 'low'
 }
