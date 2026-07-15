@@ -2,6 +2,7 @@
 // WillViral — Opportunity Engine v4 (Core Trust Engine)
 
 import { NextRequest, NextResponse } from 'next/server'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import { MODELS } from '@/lib/models'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
@@ -217,6 +218,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!niche) return NextResponse.json({ error: 'Niche megadása kötelező' }, { status: 400 })
+    if (topicInputTooLong(niche)) return NextResponse.json({ error: topicTooLongResponseMessage('A niche/téma') }, { status: 400 })
 
     // Strukturált search context logolása (lib/search/search-context.ts) — a niche
     // pipeline egyelőre a kompatibilis `niche` stringgel dolgozik tovább, hogy ne

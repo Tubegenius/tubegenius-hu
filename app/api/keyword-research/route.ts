@@ -9,6 +9,7 @@ import { fetchKeywordSignals, fetchSeedVideoStats, buildKeywordClusterPrompt, ty
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +17,7 @@ export async function POST(request: NextRequest) {
     if (!seed_keyword || typeof seed_keyword !== 'string' || !seed_keyword.trim()) {
       return NextResponse.json({ error: 'Kulcsszó megadása kötelező' }, { status: 400 })
     }
+    if (topicInputTooLong(seed_keyword)) return NextResponse.json({ error: topicTooLongResponseMessage('A kulcsszó') }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })

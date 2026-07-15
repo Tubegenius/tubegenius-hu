@@ -8,6 +8,7 @@ import { computeSeoHeuristics, buildSeoOptimizerPrompt, type SeoPackage } from '
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
   let score = 0
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest) {
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
+    if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })

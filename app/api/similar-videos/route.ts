@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import type { SimilarVideo } from '@/types'
 import {
   calcSearchRelevance,
@@ -441,9 +442,10 @@ export async function POST(request: NextRequest) {
   let requestLockId: string | undefined
   try {
     const { topic, region, max_results = 9, user_niche, use_profile_niche, platform, language, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
-    if (!topic) {
+    if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
+    if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
 
     // User azonosítás + niche lekérés
     const supabase = createServerSupabaseClient()

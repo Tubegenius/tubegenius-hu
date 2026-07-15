@@ -7,6 +7,7 @@ import { fetchKeywordSignals, fetchSeedVideoStats } from '@/lib/keyword-research
 import { buildContentGapPrompt, type ContentGapSuggestion } from '@/lib/content-gap'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,6 +15,7 @@ export async function POST(request: NextRequest) {
     if (!niche || typeof niche !== 'string' || !niche.trim()) {
       return NextResponse.json({ error: 'Niche/téma megadása kötelező' }, { status: 400 })
     }
+    if (topicInputTooLong(niche)) return NextResponse.json({ error: topicTooLongResponseMessage('A niche/téma') }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })

@@ -26,6 +26,7 @@ import {
   generatePackaging,
   extractPlatformChecklist,
 } from '@/lib/video-package'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,6 +37,7 @@ export async function POST(request: NextRequest) {
     } = await request.json()
 
     if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+    if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
 
     if (opportunity_context?.ready_to_produce_status === 'rejected') {
       return NextResponse.json({

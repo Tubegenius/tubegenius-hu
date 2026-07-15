@@ -23,6 +23,7 @@ import {
 } from '@/lib/video-ideas/video-idea-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
+import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 // ── Téma-relevancia szűrés ────────────────────────────────────
 // A YouTube/Serper keresés önmagában fuzzy — pl. "AI botrányok"-ra simán
@@ -232,6 +233,7 @@ export async function POST(request: NextRequest) {
   try {
     const { topic, platform, region, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
     if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
+    if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
