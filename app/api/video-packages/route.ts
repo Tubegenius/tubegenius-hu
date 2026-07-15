@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
     contentFormat: body.video_length || null,
     keywords: body.search_keyword ? [body.search_keyword] : [],
     proofSummary: body.verified_fact_block || null,
-    workflowStatus: 'ready_to_produce',
+    workflowStatus: 'validating',
     metadata: {
       source_tool: 'video_package',
       search_keyword: body.search_keyword || null,
@@ -124,18 +124,26 @@ export async function POST(request: NextRequest) {
     },
   })
 
+  if (!ideaResult.success || !ideaResult.idea?.id) {
+    await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
+    return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
+  }
   if (ideaResult.idea?.id) {
-    await linkVideoIdeaToLegacyRecord(admin, {
+    const linkResult = await linkVideoIdeaToLegacyRecord(admin, {
       table: 'video_packages',
       userId: user.id,
       recordId: data.id,
       videoIdeaId: ideaResult.idea.id,
     })
-    await markVideoIdeaReadyToProduce(admin, {
+    const readyResult = await markVideoIdeaReadyToProduce(admin, {
       userId: user.id,
       videoIdeaId: ideaResult.idea.id,
       videoPackageId: data.id,
     })
+    if (!linkResult.success || !readyResult.success) {
+      await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
+      return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
+    }
     await logVideoIdeaEvent(admin, {
       userId: user.id,
       videoIdeaId: ideaResult.idea.id,

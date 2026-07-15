@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — CRUD HIBASZEMANTIKA ÉS WORKFLOW-ATOMOSSÁG
+
+- Tracked Trends, Trend Alerts és Competitor videólista adatbázishibánál nem ad többé megtévesztő üres eredményt; a szolgáltatási hiba külön 500-as válasz.
+- Source Video Analysis csak egyező YouTube video ID/URL párral, méretkorlátos struktúrával és a user saját kapcsolt Video Package rekordjával menthető.
+- A Video Idea esemény-, legacy-link- és ready-to-produce helperek most a Supabase `{ error }` eredményét is ellenőrzik. A Video Package ötlet először `validating`, és csak a csomag kétirányú kapcsolatának sikeres mentése után lesz `ready_to_produce`; részleges workflow többé nem jelent sikert.
+
 ## 2026-07-15 — PRODUCTION DIAGNÓZIS ÉS BIZONYÍTÉK-LÁNC
 
 - A korábbi böngésző-újratöltési elakadást tiszta production lapon megismételve nem alkalmazáshiba okozta: az első Vercel hidegindítás 11,8 s alatt betöltött és `/dashboard`-ra irányított, majd Overview, Credits, Competitors és Trend Alerts 1,97–2,55 s alatt, konzolhiba nélkül működött. Kreditfogyasztó művelet nem futott.

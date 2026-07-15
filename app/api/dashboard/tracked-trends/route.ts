@@ -12,12 +12,16 @@ export async function GET() {
 
   const admin = createAdminClient()
 
-  const { data: candidates } = await admin
+  const { data: candidates, error: candidatesError } = await admin
     .from('tracked_trend_candidates')
     .select('id, candidate_topic, niche, region, confidence, trend_source_type, opportunity_score, created_at, last_checked_at, next_check_at, refresh_priority, status, youtube_video_ids, web_source_ids')
     .eq('user_id', user.id)
     .order('last_checked_at', { ascending: false, nullsFirst: false })
     .limit(20)
+  if (candidatesError) {
+    console.error('[TrackedTrends] candidate load failed:', candidatesError)
+    return NextResponse.json({ error: 'A követett trendek betöltése sikertelen.' }, { status: 500 })
+  }
 
   const list = candidates || []
   if (list.length === 0) {
@@ -25,12 +29,16 @@ export async function GET() {
   }
 
   const ids = list.map(c => c.id)
-  const { data: snapshots } = await admin
+  const { data: snapshots, error: snapshotsError } = await admin
     .from('trend_candidate_snapshots')
     .select('tracked_candidate_id, checked_at, total_views, engagement_rate, views_delta, trend_velocity, trend_status')
     .in('tracked_candidate_id', ids)
     .order('checked_at', { ascending: false })
     .limit(500)
+  if (snapshotsError) {
+    console.error('[TrackedTrends] snapshot load failed:', snapshotsError)
+    return NextResponse.json({ error: 'A trendelőzmények betöltése sikertelen.' }, { status: 500 })
+  }
 
   // Legfeljebb 10 legutóbbi snapshot candidate-enként — a delta-hoz elég 2, de
   // a sparkline-hoz (Sparkline.tsx) valódi, mért idősor kell.

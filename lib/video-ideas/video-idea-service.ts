@@ -278,14 +278,17 @@ export async function logVideoIdeaEvent(
   }
 ) {
   try {
-    await admin.from('video_idea_events').insert({
+    const { error } = await admin.from('video_idea_events').insert({
       user_id: input.userId,
       video_idea_id: input.videoIdeaId,
       event_type: input.eventType,
       source_tool: input.sourceTool || null,
       payload: input.payload || {},
     })
-  } catch {}
+    return error ? { success: false, error: error.message } : { success: true }
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : 'unknown_error' }
+  }
 }
 
 export async function addVideoIdeaProofSignal(admin: SupabaseClient, input: ProofSignalInput) {
@@ -331,11 +334,12 @@ export async function linkVideoIdeaToLegacyRecord(
   }
 ) {
   try {
-    await admin
+    const { error } = await admin
       .from(input.table)
       .update({ video_idea_id: input.videoIdeaId })
       .eq('id', input.recordId)
       .eq('user_id', input.userId)
+    if (error) return { success: false, error: error.message }
     return { success: true }
   } catch (error) {
     return {
@@ -500,7 +504,7 @@ export async function markVideoIdeaReadyToProduce(
   }
 ) {
   try {
-    await admin
+    const { error } = await admin
       .from('video_ideas')
       .update({
         video_package_id: input.videoPackageId,
@@ -509,6 +513,7 @@ export async function markVideoIdeaReadyToProduce(
       })
       .eq('id', input.videoIdeaId)
       .eq('user_id', input.userId)
+    if (error) return { success: false, error: error.message }
     return { success: true }
   } catch (error) {
     return {

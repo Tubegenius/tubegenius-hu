@@ -25,11 +25,15 @@ export async function GET() {
   const competitorIds = (competitors || []).map(c => c.id)
   let videosByCompetitor = new Map<string, unknown[]>()
   if (competitorIds.length > 0) {
-    const { data: videos } = await admin
+    const { data: videos, error: videosError } = await admin
       .from('tracked_competitor_videos')
       .select('*')
       .in('tracked_competitor_id', competitorIds)
       .order('published_at', { ascending: false })
+    if (videosError) {
+      console.error('[Competitors] video load failed:', videosError)
+      return NextResponse.json({ error: 'A versenytárs-videók betöltése sikertelen.' }, { status: 500 })
+    }
     for (const v of videos || []) {
       const list = videosByCompetitor.get(v.tracked_competitor_id) || []
       if (list.length < 10) list.push(v)

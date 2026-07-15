@@ -12,22 +12,24 @@ export async function GET() {
 
   const admin = createAdminClient()
 
-  const { data: candidates } = await admin
+  const { data: candidates, error: candidatesError } = await admin
     .from('tracked_trend_candidates')
     .select('id, candidate_topic')
     .eq('user_id', user.id)
     .limit(50)
+  if (candidatesError) return NextResponse.json({ error: 'A trendriasztások betöltése sikertelen.' }, { status: 500 })
 
   const list = candidates || []
   if (list.length === 0) return NextResponse.json({ alerts: [] })
 
   const ids = list.map(c => c.id)
-  const { data: snapshots } = await admin
+  const { data: snapshots, error: snapshotsError } = await admin
     .from('trend_candidate_snapshots')
     .select('tracked_candidate_id, checked_at, total_views, views_delta, trend_status')
     .in('tracked_candidate_id', ids)
     .order('checked_at', { ascending: false })
     .limit(500)
+  if (snapshotsError) return NextResponse.json({ error: 'A trendriasztások előzményei nem tölthetők be.' }, { status: 500 })
 
   const snapshotsByCandidate = new Map<string, typeof snapshots>()
   for (const s of snapshots || []) {
@@ -53,11 +55,12 @@ export async function GET() {
   const candidateAlerts = classifyAlerts(trackedForAlert)
   if (candidateAlerts.length === 0) return NextResponse.json({ alerts: [] })
 
-  const { data: dismissals } = await admin
+  const { data: dismissals, error: dismissalsError } = await admin
     .from('trend_alert_dismissals')
     .select('tracked_candidate_id, alert_signature')
     .eq('user_id', user.id)
     .in('tracked_candidate_id', ids)
+  if (dismissalsError) return NextResponse.json({ error: 'A riasztási állapot nem tölthető be.' }, { status: 500 })
 
   const dismissedSignatures = new Set((dismissals || []).map(d => `${d.tracked_candidate_id}:${d.alert_signature}`))
   const activeAlerts = candidateAlerts.filter(a => !dismissedSignatures.has(`${a.candidate_id}:${a.alert_signature}`))

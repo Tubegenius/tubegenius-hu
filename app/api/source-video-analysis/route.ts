@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
+import { isJsonWithinLimit } from '@/lib/api-input-validation'
 
 export async function POST(request: NextRequest) {
   const supabase = createServerSupabaseClient()
@@ -8,6 +9,17 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json()
   const admin = createAdminClient()
+  const sourceUrlMatchesId = typeof body.source_video_url === 'string' && (body.source_video_url.includes(`v=${body.source_video_id}`) || body.source_video_url.includes(`youtu.be/${body.source_video_id}`) || body.source_video_url.includes(`/shorts/${body.source_video_id}`))
+  if (typeof body.source_video_id !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(body.source_video_id) || typeof body.source_video_url !== 'string' || body.source_video_url.length > 500 || !sourceUrlMatchesId || typeof body.generated_video_package_id !== 'string' || !isJsonWithinLimit(body.extracted_structure || {}, 50_000) || !isJsonWithinLimit(body.sources || [], 30_000)) {
+    return NextResponse.json({ error: 'Hiányzó vagy hibás forrásvideó-adatok.' }, { status: 400 })
+  }
+  const { data: ownedPackage } = await admin
+    .from('video_packages')
+    .select('id')
+    .eq('id', body.generated_video_package_id)
+    .eq('user_id', user.id)
+    .single()
+  if (!ownedPackage) return NextResponse.json({ error: 'A kapcsolt videócsomag nem található.' }, { status: 404 })
 
   const { data, error } = await admin
     .from('source_video_analysis')
