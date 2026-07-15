@@ -10,13 +10,13 @@ Jelölések: **igazolt** = kód + adatforrás + teszt áttekintve; **részleges*
 | View Prediction | Opportunity/Viral Score | Konkrét várható view számot megfelelő csatorna-baseline nélkül nem szabad állítani | eltérő előny / hiányzó predikció |
 | Keyword Research: becsült YouTube volume, competition, overall score, trend | Keyword Research | YouTube találati minta + Google/Serper jel nem azonos a vidIQ becsült havi YouTube search volume adatával | részleges |
 | Keywords For You / Top Search Terms | Niche Expansion + YouTube Analytics | Dinamikus niche seed van; csatornára szabott top search-term és rank-history még nincs igazolva | részleges |
-| Competitors: growth idősor, napi views, VPH, top videók | Competitor Tracker + outlier | Top videó/outlier megvan; 7/14/28 napos növekedési idősor és VPH nincs teljesen | hiány/részleges |
+| Competitors: growth idősor, napi views, VPH, top videók | Competitor Tracker + outlier | Valódi snapshot-idősor, mért videó-VPH, 7/14/28 napos csatornanövekedés és top/outlier videók megvannak. VPH csak legalább két mérésből jelenik meg; automatikus napi mintavétel még nincs. | részleges, mérési alap igazolt |
 | Trend Alerts: keyword/category/competitor monitor, gyakoriság | Tracked Trends + Trend Alerts | Snapshot és emelkedésriasztás megvan; állítható gyakoriság és competitor-VPH trigger nincs | részleges |
 | Optimize: tag, leírás, kategória, preview, progress | SEO Optimizer | Tag/leírás/checklist megvan; preview, kategória-ajánlás és időbeli progress nincs | részleges |
 | Channel Audit | Channel Audit + Video Audit | Saját audit és következő videó ajánlás megvan; a scorecard dimenziók tételes összevetése folyamatban | részleges |
 | AI Coach | Creator OS modulok + Memory | Nem általános chatcoach, hanem bizonyítékhoz és workflow-hoz kötött döntési rendszer | eltérő előny |
 | Thumbnail Maker / testing | Thumbnail Studio | Koncepció-intelligence van, képalkotás és valódi A/B thumbnail testing nincs | hiány/részleges |
-| Most Viewed / Outliers | Similar Videos + Competitor outlier | Valós evidence és szerveroldali provenance megvan; VPH/időablak összevetés szükséges | részleges |
+| Most Viewed / Outliers | Similar Videos + Competitor outlier | Valós evidence, szerveroldali provenance és snapshotból számolt VPH megvan; a kézi frissítés helyett ütemezett mintavétel még szükséges. | részleges |
 
 ## Kötelező értékelési kérdések
 

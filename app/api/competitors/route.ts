@@ -4,6 +4,7 @@ import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { calculateViewsPerHour, calculateWindowGrowth, type PerformancePoint } from '@/lib/competitor-performance'
 
 // GET — figyelt versenytársak listája, a legutóbbi (mentett) videóikkal együtt.
 export async function GET() {
@@ -24,6 +25,8 @@ export async function GET() {
 
   const competitorIds = (competitors || []).map(c => c.id)
   let videosByCompetitor = new Map<string, unknown[]>()
+  const snapshotsByCompetitor = new Map<string, PerformancePoint[]>()
+  const snapshotsByVideo = new Map<string, PerformancePoint[]>()
   if (competitorIds.length > 0) {
     const { data: videos, error: videosError } = await admin
       .from('tracked_competitor_videos')
@@ -39,10 +42,49 @@ export async function GET() {
       if (list.length < 10) list.push(v)
       videosByCompetitor.set(v.tracked_competitor_id, list)
     }
+
+    const since = new Date(Date.now() - 29 * 86_400_000).toISOString()
+    const { data: snapshots, error: snapshotsError } = await admin
+      .from('competitor_performance_snapshots')
+      .select('tracked_competitor_id,video_id,view_count,subscriber_count,channel_total_views,checked_at')
+      .eq('user_id', userId)
+      .in('tracked_competitor_id', competitorIds)
+      .gte('checked_at', since)
+      .order('checked_at', { ascending: true })
+    if (snapshotsError) {
+      console.error('[Competitors] snapshot load failed:', snapshotsError)
+      return NextResponse.json({ error: 'A versenytárs-teljesítmény betöltése sikertelen.' }, { status: 500 })
+    }
+    for (const point of snapshots || []) {
+      const normalized: PerformancePoint = {
+        checked_at: point.checked_at,
+        view_count: Number(point.view_count),
+        subscriber_count: point.subscriber_count == null ? null : Number(point.subscriber_count),
+        channel_total_views: point.channel_total_views == null ? null : Number(point.channel_total_views),
+      }
+      if (point.video_id) {
+        const key = `${point.tracked_competitor_id}:${point.video_id}`
+        snapshotsByVideo.set(key, [...(snapshotsByVideo.get(key) || []), normalized])
+      } else {
+        snapshotsByCompetitor.set(point.tracked_competitor_id, [...(snapshotsByCompetitor.get(point.tracked_competitor_id) || []), normalized])
+      }
+    }
   }
 
   return NextResponse.json({
-    competitors: (competitors || []).map(c => ({ ...c, videos: videosByCompetitor.get(c.id) || [] })),
+    competitors: (competitors || []).map(c => {
+      const channelPoints = snapshotsByCompetitor.get(c.id) || []
+      return {
+        ...c,
+        growth_7d: calculateWindowGrowth(channelPoints, 7),
+        growth_14d: calculateWindowGrowth(channelPoints, 14),
+        growth_28d: calculateWindowGrowth(channelPoints, 28),
+        videos: (videosByCompetitor.get(c.id) || []).map((video: any) => ({
+          ...video,
+          views_per_hour: calculateViewsPerHour(snapshotsByVideo.get(`${c.id}:${video.video_id}`) || []),
+        })),
+      }
+    }),
   })
 }
 
@@ -142,6 +184,17 @@ export async function POST(request: NextRequest) {
         const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_videos_save_failed' })
         return NextResponse.json({ error: refund.success ? 'A videók mentése sikertelen volt, a kreditet visszaadtuk.' : 'A videók mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
       }
+    }
+
+    const checkedAt = new Date().toISOString()
+    const { error: snapshotError } = await admin.from('competitor_performance_snapshots').insert([
+      { tracked_competitor_id: competitor.id, user_id: userId, video_id: null, view_count: 0, subscriber_count: channel.subscriberCount, channel_total_views: channel.totalViewCount, channel_video_count: channel.videoCount, checked_at: checkedAt },
+      ...videos.map(v => ({ tracked_competitor_id: competitor.id, user_id: userId, video_id: v.videoId, view_count: v.viewCount, checked_at: checkedAt })),
+    ])
+    if (snapshotError) {
+      await admin.from('tracked_competitors').delete().eq('id', competitor.id).eq('user_id', userId)
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_snapshot_save_failed' })
+      return NextResponse.json({ error: refund.success ? 'A teljesítmény-előzmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'A teljesítmény-előzmény mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
 
     return NextResponse.json({

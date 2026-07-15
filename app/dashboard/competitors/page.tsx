@@ -20,7 +20,10 @@ interface CompetitorVideo {
   outlierRatio?: number
   is_outlier?: boolean
   isOutlier?: boolean
+  views_per_hour?: number | null
 }
+
+interface GrowthWindow { subscriber_delta: number | null; view_delta: number | null }
 
 interface Competitor {
   id: string
@@ -31,6 +34,9 @@ interface Competitor {
   baseline_avg_views: number
   last_checked_at: string
   videos: CompetitorVideo[]
+  growth_7d: GrowthWindow
+  growth_14d: GrowthWindow
+  growth_28d: GrowthWindow
 }
 
 function formatNumber(n: number): string {
@@ -252,6 +258,9 @@ export default function CompetitorsPage() {
                   <p className="text-xs" style={{ color: '#94A3B8' }}>
                     {formatNumber(c.baseline_subscriber_count)} feliratkozó · átlag {formatNumber(c.baseline_avg_views)} megtekintés
                   </p>
+                  <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+                    Növekedés: 7 nap {c.growth_7d?.view_delta == null ? '—' : `+${formatNumber(c.growth_7d.view_delta)} megtekintés`} · 14 nap {c.growth_14d?.view_delta == null ? '—' : `+${formatNumber(c.growth_14d.view_delta)}`} · 28 nap {c.growth_28d?.view_delta == null ? '—' : `+${formatNumber(c.growth_28d.view_delta)}`}
+                  </p>
                 </div>
               </div>
               <div className="flex gap-2 flex-shrink-0">
@@ -278,6 +287,7 @@ export default function CompetitorsPage() {
                       <p className="text-sm truncate" style={{ color: '#F8FAFC' }}>{v.title}</p>
                       <p className="text-xs" style={{ color: '#94A3B8' }}>
                         {formatNumber(v.view_count ?? v.viewCount ?? 0)} megtekintés
+                        <span className="ml-2">VPH: {v.views_per_hour == null ? 'nincs elég előzmény' : formatNumber(v.views_per_hour)}</span>
                         {isOutlier && (
                           <span className="ml-2 font-semibold" style={{ color: '#F59E0B' }}>🔥 {ratio}x a csatorna átlagánál</span>
                         )}

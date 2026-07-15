@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — VIDIQ COMPETITOR MÉRÉSI ALAP + STUDIO PROVENANCE
+
+- A Competitor Tracker már valódi idősoros snapshotokat tárol. Videó-VPH kizárólag legalább két mérés megtekintéskülönbségéből és eltelt idejéből számolódik; az első mérésnél nem jelenít meg hamis becslést. Csatornaszinten 7/14/28 napos feliratkozó- és megtekintésnövekedés készül.
+- A 032-es production migráció létrehozta a tenant-védett snapshot táblát, indexeket és RLS policykat. A sémafüggő alkalmazáskód csak ezután kerülhet deployra.
+- Title Studio és Thumbnail Studio választás csak a bejelentkezett user saját, megfelelő tool-típusú fizetett eredményéből menthető; fabrikált klienscím vagy koncepció 403-at kap.
+- Ellenőrzés: TypeScript ✅; 12 tesztfájl, 45/45 teszt ✅. A competitor vidIQ benchmark státusza valódi mérési alapra javult; automatikus napi mintavétel továbbra is nyitott.
+
 ## 2026-07-15 — VIDIQ FUNKCIONÁLIS BENCHMARK ELINDÍTVA
 
 - A vidIQ-összevetés külön kötelező 11. lezárási kritérium lett. Létrejött a `VIDIQ_FUNCTIONAL_BENCHMARK.md` funkciópár-, adatforrás-, hiány- és differenciálási mátrixszal.

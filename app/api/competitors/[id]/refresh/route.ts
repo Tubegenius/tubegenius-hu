@@ -83,6 +83,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       }
     }
 
+    const checkedAt = new Date().toISOString()
+    const { error: snapshotError } = await admin.from('competitor_performance_snapshots').insert([
+      { tracked_competitor_id: competitor.id, user_id: userId, video_id: null, view_count: 0, subscriber_count: channel.subscriberCount, channel_total_views: channel.totalViewCount, channel_video_count: channel.videoCount, checked_at: checkedAt },
+      ...videos.map(v => ({ tracked_competitor_id: competitor.id, user_id: userId, video_id: v.videoId, view_count: v.viewCount, checked_at: checkedAt })),
+    ])
+    if (snapshotError) {
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_snapshot_save_failed' })
+      return NextResponse.json({ error: refund.success ? 'A teljesítmény-előzmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'A teljesítmény-előzmény mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
+    }
+
     return NextResponse.json({ videos, _credits_remaining: charge.new_balance })
     } finally {
       await releaseRequestLock(lock.lockId)

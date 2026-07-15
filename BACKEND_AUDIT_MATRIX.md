@@ -13,13 +13,13 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Video Package | `/api/video-package` | fact block + opportunity evidence | paid result + lock | Video Idea kapcsolat | cache-flow alap | részleges |
 | Keyword Research | `/api/keyword-research` | valós YouTube/Google jel + újrakalibrált score | paid result + lock | user cache | score edge case | részleges |
 | Content Gap | `/api/content-gap` | két valós forráshalmaz összevetése | paid result + lock | user cache | prompt/cache alap | részleges |
-| Title Studio | `/api/title-studio` | backend heurisztika + AI értékelés | paid result + lock | címmentés tenanttal | prompt/cache alap | részleges |
-| Thumbnail Studio | `/api/thumbnail-studio` | koncepcióértékelés | paid result + lock | tenant mentés | függőben | függőben |
+| Title Studio | `/api/title-studio` | backend heurisztika + AI értékelés | paid result + lock | csak saját fizetett eredményből származó cím menthető | prompt/cache alap | részleges |
+| Thumbnail Studio | `/api/thumbnail-studio` | koncepcióértékelés | paid result + lock | csak saját fizetett eredményből származó koncepció menthető | kimenet/provenance alap | részleges |
 | SEO Optimizer | `/api/seo-optimizer` | determinisztikus SEO-score + AI | paid result + lock | tenant mentés | függőben | függőben |
 | Script Extractor | `/api/script-extract` | transcript-forrás + strukturálás | paid result + lock | user cache | függőben | függőben |
 | Auto Transcript | `/api/transcript` | OpenAI transcript + időbélyeg | paid result + lock | user cache | formatter/cache alap | részleges |
 | Channel Audit | `/api/channel-audit` | csatorna snapshot + ajánlás | paid result + lock | aktív csatorna tenanttal | függőben | függőben |
-| Competitor Tracker | `/api/competitors` | csatornafeloldás + jelmentés | kredit + lock | tenant CRUD | CRUD alap | részleges |
+| Competitor Tracker | `/api/competitors` | csatornafeloldás + snapshotból mért VPH és 7/14/28 napos növekedés | kredit + lock | tenant CRUD + saját snapshotok | CRUD/VPH/growth alap | részleges |
 | Trend tracking/alerts | `/api/dashboard/tracked-trends`, `/api/trend-alerts` | frissesség és trendjel | deep refresh kredit | tenant CRUD + cron | függőben | függőben |
 | Niche discovery | `/api/youtube/discover-niche` | csatornaalapú jelöltlista | cache + refresh kredit | aktív csatorna tenanttal | függőben | függőben |
 | Creator Memory | `/api/memory` | döntés utáni tanulási minta | nem fizetős | tenant CRUD + validált state/score/text + workflow sync | workflow/input alap | lezárt |
