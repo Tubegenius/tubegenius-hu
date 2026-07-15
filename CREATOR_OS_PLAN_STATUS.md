@@ -4,6 +4,7 @@
 
 - A Competitor Tracker már valódi idősoros snapshotokat tárol. Videó-VPH kizárólag legalább két mérés megtekintéskülönbségéből és eltelt idejéből számolódik; az első mérésnél nem jelenít meg hamis becslést. Csatornaszinten 7/14/28 napos feliratkozó- és megtekintésnövekedés készül.
 - A 032-es production migráció létrehozta a tenant-védett snapshot táblát, indexeket és RLS policykat. A sémafüggő alkalmazáskód csak ezután kerülhet deployra.
+- A meglévő, CRON_SECRET-tel védett napi háttérfolyamat legfeljebb 20 esedékes versenytársat is megmér, 20 órás minimumintervallummal és user-kredit nélkül. Csatornánkénti hiba izolált; `last_checked_at` csak a videó- és snapshotmentés után frissül, ezért részleges hiba újrapróbálható.
 - Title Studio és Thumbnail Studio választás csak a bejelentkezett user saját, megfelelő tool-típusú fizetett eredményéből menthető; fabrikált klienscím vagy koncepció 403-at kap.
 - Ellenőrzés: TypeScript ✅; 12 tesztfájl, 45/45 teszt ✅. A competitor vidIQ benchmark státusza valódi mérési alapra javult; automatikus napi mintavétel továbbra is nyitott.
 

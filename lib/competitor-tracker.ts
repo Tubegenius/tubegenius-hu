@@ -126,6 +126,68 @@ export async function fetchChannelRecentVideos(uploadsPlaylistId: string, maxRes
   })
 }
 
+export function isCompetitorSnapshotDue(lastCheckedAt: string | null, now = Date.now(), intervalHours = 20): boolean {
+  if (!lastCheckedAt) return true
+  const checked = new Date(lastCheckedAt).getTime()
+  return !Number.isFinite(checked) || checked <= now - intervalHours * 3_600_000
+}
+
+// Napi, kreditmentes háttérmérés. Nem keres új csatornákat: csak a már figyelt
+// channel ID-ket és upload playlistjeiket frissíti, így a YouTube-kvóta tervezhető.
+export async function refreshTrackedCompetitorSnapshots(limit = 20) {
+  const admin = createAdminClient()
+  const cutoff = new Date(Date.now() - 20 * 3_600_000).toISOString()
+  const { data: competitors, error } = await admin
+    .from('tracked_competitors')
+    .select('id,user_id,channel_id,last_checked_at')
+    .or(`last_checked_at.is.null,last_checked_at.lte.${cutoff}`)
+    .order('last_checked_at', { ascending: true, nullsFirst: true })
+    .limit(Math.max(1, Math.min(limit, 50)))
+  if (error) throw error
+
+  const result = { processed: 0, updated: 0, failed: 0 }
+  for (const competitor of competitors || []) {
+    result.processed++
+    try {
+      const channel = await resolveChannel(competitor.channel_id)
+      if (!channel?.uploadsPlaylistId) throw new Error('Missing uploads playlist')
+      const videos = await fetchChannelRecentVideos(channel.uploadsPlaylistId, 10)
+      const avgViews = videos.length ? Math.round(videos.reduce((sum, video) => sum + video.viewCount, 0) / videos.length) : 0
+      const checkedAt = new Date().toISOString()
+      if (videos.length) {
+        const { error: videosError } = await admin.from('tracked_competitor_videos').upsert(videos.map(video => ({
+          tracked_competitor_id: competitor.id, user_id: competitor.user_id, video_id: video.videoId,
+          title: video.title, thumbnail_url: video.thumbnailUrl, view_count: video.viewCount,
+          like_count: video.likeCount, comment_count: video.commentCount, published_at: video.publishedAt,
+          outlier_ratio: video.outlierRatio, is_outlier: video.isOutlier,
+        })), { onConflict: 'tracked_competitor_id,video_id' })
+        if (videosError) throw videosError
+      }
+
+      const { error: snapshotError } = await admin.from('competitor_performance_snapshots').insert([
+        { tracked_competitor_id: competitor.id, user_id: competitor.user_id, video_id: null, view_count: 0, subscriber_count: channel.subscriberCount, channel_total_views: channel.totalViewCount, channel_video_count: channel.videoCount, checked_at: checkedAt },
+        ...videos.map(video => ({ tracked_competitor_id: competitor.id, user_id: competitor.user_id, video_id: video.videoId, view_count: video.viewCount, checked_at: checkedAt })),
+      ])
+      if (snapshotError) throw snapshotError
+
+      // last_checked_at kerül utoljára mentésre: ha bármely előző írás hibázik,
+      // a következő cron újrapróbálhatja a csatornát.
+      const { error: updateError } = await admin.from('tracked_competitors').update({
+        baseline_avg_views: avgViews,
+        baseline_video_count: channel.videoCount,
+        baseline_subscriber_count: channel.subscriberCount,
+        last_checked_at: checkedAt,
+      }).eq('id', competitor.id).eq('user_id', competitor.user_id)
+      if (updateError) throw updateError
+      result.updated++
+    } catch (refreshError) {
+      result.failed++
+      console.error('[competitor-snapshots] refresh failed:', competitor.id, refreshError)
+    }
+  }
+  return result
+}
+
 // A kiugró (outlier) versenytárs-videó Video Idea proof signal-kent mentese —
 // a mar bevalt mintat koveti (viral-score/similar-videos ugyanigy csinalja).
 export async function saveOutlierAsProofSignal(input: {
