@@ -5,7 +5,7 @@ import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { checkThumbnailText, buildThumbnailStudioPrompt, type ThumbnailConcept } from '@/lib/thumbnail-studio'
+import { checkThumbnailText, isValidThumbnailConcept, buildThumbnailStudioPrompt, type ThumbnailConcept } from '@/lib/thumbnail-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
       })
 
       const rawConcepts = extractJson<ThumbnailConcept[]>(aiCall.text)
+      if (!Array.isArray(rawConcepts) || rawConcepts.length !== 3 || !rawConcepts.every(isValidThumbnailConcept)) throw new Error('Invalid thumbnail concepts returned by AI provider')
       const concepts = rawConcepts.map(c => ({
         ...c,
         visual_description: polishHungarianText(c.visual_description || ''),

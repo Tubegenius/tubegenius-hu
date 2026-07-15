@@ -49,6 +49,18 @@ export interface SeoPackage {
   end_screen_cta: string
 }
 
+export function computeSeoScore(h: SeoHeuristics): number {
+  return Math.round((h.title_length_flag === 'ok' ? 25 : 10) + (h.description_first_line_has_keyword ? 25 : 10) + Math.max(0, Math.min(25, h.keyword_coverage_in_title / 4)) + (h.tag_count_flag === 'ok' ? 25 : 10))
+}
+
+export function isValidSeoPackage(value: unknown): value is SeoPackage {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  const text = (key: string, max: number) => typeof v[key] === 'string' && (v[key] as string).length <= max
+  const strings = (key: string, count: number, max: number) => Array.isArray(v[key]) && (v[key] as unknown[]).length <= count && (v[key] as unknown[]).every(x => typeof x === 'string' && x.length <= max)
+  return text('seo_title', 120) && text('description', 10000) && strings('tags', 20, 100) && strings('hashtags', 10, 100) && Array.isArray(v.chapters) && v.chapters.length <= 20 && v.chapters.every(c => !!c && typeof c === 'object' && typeof (c as Record<string, unknown>).timestamp === 'string' && typeof (c as Record<string, unknown>).label === 'string') && text('playlist_suggestion', 500) && text('pinned_comment', 1000) && text('end_screen_cta', 500)
+}
+
 export function buildSeoOptimizerPrompt(input: { topic: string; existingTitle?: string; niche: string; useNiche: boolean; platform: string }): string {
   return `Egy magyar tartalomgyártónak kell egy teljes SEO/feltöltési csomagot írnod ehhez a videóhoz.
 

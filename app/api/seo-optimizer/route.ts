@@ -5,20 +5,11 @@ import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { computeSeoHeuristics, buildSeoOptimizerPrompt, type SeoPackage } from '@/lib/seo-optimizer'
+import { computeSeoHeuristics, computeSeoScore, isValidSeoPackage, buildSeoOptimizerPrompt, type SeoPackage } from '@/lib/seo-optimizer'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
-
-function computeSeoScore(h: ReturnType<typeof computeSeoHeuristics>): number {
-  let score = 0
-  score += h.title_length_flag === 'ok' ? 25 : 10
-  score += h.description_first_line_has_keyword ? 25 : 10
-  score += h.keyword_coverage_in_title
-  score += h.tag_count_flag === 'ok' ? 25 : 10
-  return Math.round(Math.min(100, score))
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -74,6 +65,7 @@ export async function POST(request: NextRequest) {
       })
 
       const seoPackage = extractJson<SeoPackage>(aiCall.text)
+      if (!isValidSeoPackage(seoPackage)) throw new Error('Invalid SEO package returned by AI provider')
       const heuristics = computeSeoHeuristics({
         title: seoPackage.seo_title || existing_title || topic,
         description: seoPackage.description || '',

@@ -33,6 +33,13 @@ export interface ThumbnailConcept {
   clutter_risk: 'low' | 'medium' | 'high'
 }
 
+export function isValidThumbnailConcept(value: unknown): value is ThumbnailConcept {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Record<string, unknown>
+  const text = (key: string, max: number) => typeof v[key] === 'string' && (v[key] as string).length <= max
+  return text('concept_label', 120) && text('visual_description', 2000) && text('thumbnail_text', 200) && text('composition_note', 1000) && text('emotion_or_conflict', 1000) && typeof v.contrast_attention_score === 'number' && Number.isFinite(v.contrast_attention_score) && v.contrast_attention_score >= 0 && v.contrast_attention_score <= 100 && ['low', 'medium', 'high'].includes(String(v.clutter_risk))
+}
+
 export function buildThumbnailStudioPrompt(input: { topic: string; niche: string; useNiche: boolean; platform: string }): string {
   return `Egy magyar tartalomgyártónak thumbnail (borítókép) koncepciókat kell javasolnod ehhez a témához — MAGÁT A KÉPET nem generáljuk, csak a koncepciót írjuk le.
 
