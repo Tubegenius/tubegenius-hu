@@ -2,7 +2,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { MODELS } from '@/lib/models'
-import { chargeFeature, hasEnoughCredits, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { chargeFeature, checkPaidFeatureAccess, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
@@ -212,8 +213,9 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const enoughCredits = await hasEnoughCredits(user.id, 'video_audit')
-    if (!enoughCredits) {
+    const access = await checkPaidFeatureAccess(user.id, 'video_audit', req.headers.get('x-daily-soft-limit-override') === 'true')
+    if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+    if (!access.allowed) {
       return NextResponse.json({ error: 'Nincs elég kredited. Ehhez ' + CREDIT_COSTS.video_audit + ' kredit szükséges.' }, { status: 402 })
     }
 

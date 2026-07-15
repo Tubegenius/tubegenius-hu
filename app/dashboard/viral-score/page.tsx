@@ -1,6 +1,7 @@
 ﻿'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { fetchWithDailySoftLimit } from '@/lib/client/fetch-with-daily-soft-limit'
 import { useSearchParams } from 'next/navigation'
 import type { ViralScoreResult, VideoCardData } from '@/types'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
@@ -206,7 +207,7 @@ export default function ViralScorePage() {
     setResult(null)
 
     try {
-      const res = await fetch('/api/viral-score', {
+      const res = await fetchWithDailySoftLimit('/api/viral-score', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic: t, platform: 'youtube', region: 'HU', force_refresh: forceRefresh, paidResultId: paidResultId || undefined }),

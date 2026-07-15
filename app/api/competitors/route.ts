@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserId, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
@@ -59,8 +60,9 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-    const enoughCredits = await hasEnoughCredits(userId, 'competitor_add')
-    if (!enoughCredits) {
+    const access = await checkPaidFeatureAccess(userId, 'competitor_add', request.headers.get('x-daily-soft-limit-override') === 'true')
+    if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+    if (!access.allowed) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.competitor_add} kredit szükséges.` }, { status: 402 })
     }
 

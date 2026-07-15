@@ -4,7 +4,8 @@ import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { calcEngagementRate, calcTrendVelocity, calcViewOutlierScore, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import { calculateNicheFit } from '@/lib/niche-fit'
 import type { SimilarVideo } from '@/types'
-import { getUserId, logUsage, chargeFeature, hasEnoughCredits } from '@/lib/credits'
+import { getUserId, logUsage, chargeFeature, checkPaidFeatureAccess } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import type { ViralScoreResult, ViralScoreConfidence } from '@/types'
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import { fetchSerperNews, computeSerperFreshness, getSerperHealthStatus, type SerperResult } from '@/lib/trend-radar'
@@ -327,8 +328,9 @@ export async function POST(request: NextRequest) {
     // ─── KRITIKUS SZABÁLY: szerver oldali kredit-ellenőrzés a drága munka
     // (YouTube + Serper + Claude hívások) előtt — a kliens oldali ellenőrzés
     // (page.tsx) csak UX, önmagában megkerülhető, sosem elég a tényleges védelemhez.
-    const enoughCredits = await hasEnoughCredits(userId, 'viral_score')
-    if (!enoughCredits) {
+    const access = await checkPaidFeatureAccess(userId, 'viral_score', request.headers.get('x-daily-soft-limit-override') === 'true')
+    if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+    if (!access.allowed) {
       return NextResponse.json({ error: 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
     }
 

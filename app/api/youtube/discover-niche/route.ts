@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserId, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { discoverChannelNiches } from '@/lib/channel-niche-discovery'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
@@ -57,8 +58,9 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const enoughCredits = await hasEnoughCredits(userId, 'niche_discovery_refresh')
-      if (!enoughCredits) {
+      const access = await checkPaidFeatureAccess(userId, 'niche_discovery_refresh', request.headers.get('x-daily-soft-limit-override') === 'true')
+      if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+      if (!access.allowed) {
         return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.niche_discovery_refresh} kredit szükséges.` }, { status: 402 })
       }
 

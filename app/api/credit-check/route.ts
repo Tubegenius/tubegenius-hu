@@ -8,13 +8,13 @@ export async function POST(request: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    const { feature } = await request.json() as { feature: ProtectedFeature }
+    const { feature, override_soft_limit } = await request.json() as { feature: ProtectedFeature; override_soft_limit?: boolean }
     if (!feature) return NextResponse.json({ error: 'Feature megadása kötelező' }, { status: 400 })
     if (!['similar_videos', 'opportunity_engine'].includes(feature)) {
       return NextResponse.json({ error: 'Érvénytelen feature' }, { status: 400 })
     }
 
-    const result = await checkUsagePermission(user.id, feature)
+    const result = await checkUsagePermission(user.id, feature, override_soft_limit === true)
     return NextResponse.json(result)
   } catch (error) {
     console.error('Credit check error:', error)

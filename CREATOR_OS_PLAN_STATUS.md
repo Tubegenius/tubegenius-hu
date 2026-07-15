@@ -1,5 +1,13 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-15 — REGRESSZIÓS TESZTEK + NAPI SOFT LIMIT + PROMPT VERZIÓZÁS
+
+- Bevezetve a Vitest regressziós alapcsomag és GitHub Actions quality workflow (`npm test` + TypeScript). 20 determinisztikus, kreditmentes teszt fedi a kreditlevonási matematikát és CAS-hibát, paid-result hash/cache/újranyitást, Video Idea CRUD-identitást és workflow-előrelépést, proof relevanciát, API input-hibákat, napi limiteket, kliensoldali felülbírálást és prompt-template verziózást.
+- A Starter/Creator/Pro hirdetett 10/30/100 kredites napi soft limitje backendoldalon kikényszerített. Budapest szerinti napot és tényleges `ai_usage_logs.credits_charged` összeget számol; minden közvetlen fizetős route, valamint a Similar Videos/Opportunity Engine védett kvótarendszere ugyanazt a központi kaput használja. Limit felett 429 + strukturált válasz érkezik, a dashboard kifejezett felhasználói megerősítés után egyszer, override fejléccel ismétel — ezért valódi soft, nem hard limit.
+- Új verziózott prompt-template registry: stabil template ID, szemantikus verzió, locale, ütközés- és üres-prompt védelem. Első migrált promptok: Title Studio, Keyword Research és Content Gap; az ID/verzió a provider telemetrybe és a `paid_results` rekordba is bekerül.
+- Production deploy utóellenőrzés: a legutóbbi Vercel production deploy `Ready`, a login 200, és az új security headerek élnek.
+- Ellenőrzés: `npm test` ✅; `npx tsc --noEmit` ✅; `npm run build` ✅ (77/77 oldal, dummy build-time envvel; külső szolgáltatás nem lett meghívva).
+
 **Cél**: ez a fájl a "VÉGLEGES FEJLESZTÉSI UTASÍTÁS CODEXNEK — WILLVIRAL CREATOR OPERATING SYSTEM" nevű mesterterv (lásd lent, teljes szöveg) végrehajtási állapotát követi, session-eken át. Új session elején OLVASD EL EZT ELŐSZÖR, utána a `CLAUDE_HANDOVER.md`-t (az általánosabb, git/deploy/migráció-fókuszú átadás).
 
 ## 2026-07-15 — PRODUCTION UTÓELLENŐRZÉS + KREDIT-RACE ROBUSZTUSSÁG

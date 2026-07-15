@@ -402,7 +402,7 @@ export async function POST(request: NextRequest) {
     // és csak elfogadás után hívhatja újra force_refresh: true-val (ami a
     // meglévő, változatlan "mindig 2 kredit" ágon fut le sikeres eredménynél).
     if (!force_refresh) {
-      const usage = await checkUsagePermission(user.id, 'opportunity_engine')
+      const usage = await checkUsagePermission(user.id, 'opportunity_engine', request.headers.get('x-daily-soft-limit-override') === 'true')
       if (!usage.canRun) {
         return NextResponse.json({
           topics: [],

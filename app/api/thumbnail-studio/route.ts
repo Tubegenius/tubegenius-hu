@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
@@ -43,8 +44,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })
       }
 
-      const enoughCredits = await hasEnoughCredits(userId, 'thumbnail_studio')
-      if (!enoughCredits) {
+      const access = await checkPaidFeatureAccess(userId, 'thumbnail_studio', request.headers.get('x-daily-soft-limit-override') === 'true')
+      if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+      if (!access.allowed) {
         return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.thumbnail_studio} kredit szükséges.` }, { status: 402 })
       }
 

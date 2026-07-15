@@ -1,4 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
+import { calculateCreditMutation, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
+import { checkDailySoftLimit } from '@/lib/daily-soft-limit'
 
 // ── Free user limitek ────────────────────────────────────────
 
@@ -21,7 +23,10 @@ export interface UsageCheckResult {
   freeRunsLeftThisWeek?: number
   requiresConfirmation: boolean
   canRun: boolean
-  reason?: 'free_limit' | 'insufficient_credits' | 'hard_limit' | 'quota_exhausted'
+  reason?: 'free_limit' | 'insufficient_credits' | 'hard_limit' | 'quota_exhausted' | 'daily_soft_limit'
+  dailyUsage?: number
+  dailyLimit?: number | null
+  requiresSoftLimitOverride?: boolean
   message?: string
 }
 
@@ -89,6 +94,7 @@ async function getWeekUsageCount(userId: string, feature: string): Promise<numbe
 export async function checkUsagePermission(
   userId: string,
   feature: ProtectedFeature,
+  overrideSoftLimit = false,
 ): Promise<UsageCheckResult> {
   const [plan, balance, todayCount, weekCount] = await Promise.all([
     getUserPlan(userId),
@@ -154,6 +160,18 @@ export async function checkUsagePermission(
 
   // Paid usereknek nincs free limit, de kredit kell
   // Free usereknek a free keret elfogyott, kredit kell
+  if (isPaid) {
+    const daily = await checkDailySoftLimit(userId, limits.creditCost, overrideSoftLimit)
+    if (!daily.allowed) {
+      return {
+        feature, cost: limits.creditCost, currency: 'credit', currentCredits: balance,
+        remainingCreditsAfterRun: balance, requiresConfirmation: true, canRun: false,
+        reason: 'daily_soft_limit', dailyUsage: daily.usedToday, dailyLimit: daily.limit,
+        requiresSoftLimitOverride: true,
+        message: `Elérted a ${daily.limit} kredites napi ajánlott keretet. Kifejezett jóváhagyással folytathatod.`,
+      }
+    }
+  }
   if (balance < limits.creditCost) {
     return {
       feature,
@@ -254,15 +272,16 @@ export async function chargeProtectedFeature(
       if (fetchError) console.error('[UsageProtection] balance read hiba:', fetchError)
       return { success: false, newBalance: currentBalance, error: 'Kredit egyenleg nem található' }
     }
-    if (currentBalance < cost) {
+    const mutation = calculateCreditMutation(currentBalance, Number(current.total_used ?? 0), cost)
+    if (!mutation.allowed) {
       return { success: false, newBalance: currentBalance, error: 'Nincs elég kredit' }
     }
 
     const { data: updated, error } = await admin
       .from('user_credits')
       .update({
-        balance: currentBalance - cost,
-        total_used: Number(current.total_used ?? 0) + cost,
+        balance: mutation.newBalance,
+        total_used: mutation.newTotalUsed,
       })
       .eq('user_id', userId)
       .eq('balance', currentBalance)
@@ -275,7 +294,7 @@ export async function chargeProtectedFeature(
       break
     }
 
-    const optimisticLockMiss = !error || error.code === 'PGRST116'
+    const optimisticLockMiss = isOptimisticCreditLockMiss(error)
     if (!optimisticLockMiss) {
       console.error('[UsageProtection] chargeProtectedFeature DB hiba:', error)
       break

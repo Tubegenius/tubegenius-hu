@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
-import { chargeFeature, hasEnoughCredits } from '@/lib/credits'
+import { chargeFeature, checkPaidFeatureAccess } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { calcSearchRelevance, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
@@ -155,8 +156,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-  const enoughCredits = await hasEnoughCredits(user.id, 'trend_deep_refresh')
-  if (!enoughCredits) return NextResponse.json({ error: 'Nincs elég kredit a mély frissítéshez.' }, { status: 402 })
+  const access = await checkPaidFeatureAccess(user.id, 'trend_deep_refresh', request.headers.get('x-daily-soft-limit-override') === 'true')
+  if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+  if (!access.allowed) return NextResponse.json({ error: 'Nincs elég kredit a mély frissítéshez.' }, { status: 402 })
 
   const row = candidate as CandidateRow
   const topic = row.candidate_topic

@@ -507,7 +507,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Backend-side usage ellenőrzés — kredit levonás CSAK ha tényleg YouTube search fut (nem cache)
-    const usageCheck = await checkUsagePermission(userId, 'similar_videos')
+    const usageCheck = await checkUsagePermission(userId, 'similar_videos', request.headers.get('x-daily-soft-limit-override') === 'true')
     if (!usageCheck.canRun) {
       return NextResponse.json({
         videos: [],

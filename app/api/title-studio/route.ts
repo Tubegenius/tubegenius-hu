@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
@@ -10,6 +10,9 @@ import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/vide
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { renderPromptTemplate } from '@/lib/prompts/template-registry'
+import { PROMPT_TEMPLATES } from '@/lib/prompts/catalog'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 
 export async function POST(request: NextRequest) {
   try {
@@ -48,18 +51,19 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const enoughCredits = await hasEnoughCredits(userId, 'title_studio')
-      if (!enoughCredits) {
+      const access = await checkPaidFeatureAccess(userId, 'title_studio', request.headers.get('x-daily-soft-limit-override') === 'true')
+      if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+      if (!access.allowed) {
         return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.title_studio} kredit szükséges.` }, { status: 402 })
       }
 
-      const prompt = buildTitleStudioPrompt({ topic, niche, useNiche, platform: platformValue, existingTitle: existing_title || undefined })
+      const renderedPrompt = renderPromptTemplate(PROMPT_TEMPLATES.titleStudio, () => buildTitleStudioPrompt({ topic, niche, useNiche, platform: platformValue, existingTitle: existing_title || undefined }))
       const aiCall = await callAIProvider({
         model: MODELS.fast,
         maxTokens: 1500,
-        messages: [{ role: 'user', content: prompt }],
-        promptTemplateId: 'title_studio_variations',
-        promptVersion: 'v1',
+        messages: [{ role: 'user', content: renderedPrompt.text }],
+        promptTemplateId: renderedPrompt.templateId,
+        promptVersion: renderedPrompt.version,
       })
 
       const rawVariations = extractJson<TitleVariation[]>(aiCall.text)

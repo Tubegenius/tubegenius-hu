@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, logUsage, hasEnoughCredits, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, logUsage, checkPaidFeatureAccess, chargeFeature, CREDIT_COSTS } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
@@ -76,8 +77,9 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const enoughCredits = await hasEnoughCredits(userId, 'script_extract')
-    if (!enoughCredits) {
+    const access = await checkPaidFeatureAccess(userId, 'script_extract', request.headers.get('x-daily-soft-limit-override') === 'true')
+    if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+    if (!access.allowed) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.script_extract} kredit szükséges.` }, { status: 402 })
     }
 

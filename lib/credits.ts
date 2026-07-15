@@ -8,6 +8,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { MODELS } from '@/lib/models'
+import { calculateCreditMutation, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
+import { checkDailySoftLimit, type DailySoftLimitDecision } from '@/lib/daily-soft-limit'
 
 export type FeatureName =
   | 'video_package_shorts'
@@ -160,15 +162,16 @@ export async function chargeFeature(
 
     const currentBalance = Number(current.balance)
     lastObservedBalance = currentBalance
-    if (currentBalance < cost) {
+    const mutation = calculateCreditMutation(currentBalance, Number(current.total_used ?? 0), cost)
+    if (!mutation.allowed) {
       return { success: false, new_balance: currentBalance, error: 'Nincs elég kredit' }
     }
 
     const { data: updated, error: updateErr } = await admin
       .from('user_credits')
       .update({
-        balance: currentBalance - cost,
-        total_used: Number(current.total_used ?? 0) + cost,
+        balance: mutation.newBalance,
+        total_used: mutation.newTotalUsed,
       })
       .eq('user_id', userId)
       .eq('balance', currentBalance)
@@ -184,7 +187,7 @@ export async function chargeFeature(
     // PGRST116 itt a compare-and-swap feltétel elvesztését jelenti: egy másik,
     // jogos kreditművelet előbb módosította az egyenleget. Friss egyenlegből
     // újraszámolunk; más adatbázishibát nem fedünk el retry-val.
-    const optimisticLockMiss = !updateErr || updateErr.code === 'PGRST116'
+    const optimisticLockMiss = isOptimisticCreditLockMiss(updateErr)
     if (!optimisticLockMiss) {
       console.error('[Credits] chargeFeature DB hiba:', updateErr)
       break
@@ -212,4 +215,18 @@ export async function chargeFeature(
   })
 
   return { success: true, new_balance: updatedBalance }
+}
+
+export async function checkPaidFeatureAccess(
+  userId: string,
+  feature: FeatureName,
+  overrideSoftLimit = false
+): Promise<{ allowed: boolean; reason?: 'insufficient_credits' | 'daily_soft_limit'; dailyLimit?: DailySoftLimitDecision }> {
+  const credits = await getCreditBalance(userId)
+  if (!credits || credits.balance < CREDIT_COSTS[feature]) {
+    return { allowed: false, reason: 'insufficient_credits' }
+  }
+  const dailyLimit = await checkDailySoftLimit(userId, CREDIT_COSTS[feature], overrideSoftLimit)
+  if (!dailyLimit.allowed) return { allowed: false, reason: 'daily_soft_limit', dailyLimit }
+  return { allowed: true, dailyLimit }
 }

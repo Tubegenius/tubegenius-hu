@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import DashboardSidebar from '@/components/dashboard/Sidebar'
 import DashboardHeader from '@/components/dashboard/Header'
 import OnboardingGuard from '@/components/dashboard/OnboardingGuard'
+import DailySoftLimitGuard from '@/components/dashboard/DailySoftLimitGuard'
 
 export default async function DashboardLayout({
   children,
@@ -28,6 +29,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-background flex">
+      <DailySoftLimitGuard />
       {/* Sidebar */}
       <DashboardSidebar profile={profile} />
 

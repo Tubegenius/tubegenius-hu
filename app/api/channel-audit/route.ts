@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, hasEnoughCredits, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS } from '@/lib/credits'
+import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { createAdminClient } from '@/lib/supabase-server'
 import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, buildNextVideosPrompt, filterRelevantAudits } from '@/lib/channel-audit'
@@ -129,8 +130,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const enoughCredits = await hasEnoughCredits(userId, 'channel_audit')
-    if (!enoughCredits) {
+    const access = await checkPaidFeatureAccess(userId, 'channel_audit', request.headers.get('x-daily-soft-limit-override') === 'true')
+    if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
+    if (!access.allowed) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.channel_audit} kredit szükséges.` }, { status: 402 })
     }
 
