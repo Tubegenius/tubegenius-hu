@@ -4,13 +4,14 @@ import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COST
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { fetchKeywordSignals, fetchSeedVideoStats } from '@/lib/keyword-research'
-import { buildContentGapPrompt, type ContentGapSuggestion } from '@/lib/content-gap'
+import { buildContentGapPrompt, validateContentGapSuggestions } from '@/lib/content-gap'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import { renderPromptTemplate } from '@/lib/prompts/template-registry'
 import { PROMPT_TEMPLATES } from '@/lib/prompts/catalog'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
+import { filterByRelevance, getConfidenceLevel } from '@/lib/opportunity-scoring'
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,6 +20,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Niche/téma megadása kötelező' }, { status: 400 })
     }
     if (topicInputTooLong(niche)) return NextResponse.json({ error: topicTooLongResponseMessage('A niche/téma') }, { status: 400 })
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    if (region != null && !['HU', 'US'].includes(region)) return NextResponse.json({ error: 'Nem támogatott régió.' }, { status: 400 })
+    const nicheValue = niche.trim()
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -26,7 +30,7 @@ export async function POST(request: NextRequest) {
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ niche, platform: platformValue, region: regionValue })
+    const normalizedInput = normalizePaidResultInput({ niche: nicheValue, platform: platformValue, region: regionValue })
     const inputHash = buildPaidResultHash({ userId, toolType: 'content_gap', normalizedInput, platform: platformValue, region: regionValue })
 
     const lock = await acquireRequestLock({ userId, toolType: 'content_gap', inputHash })
@@ -48,17 +52,17 @@ export async function POST(request: NextRequest) {
     }
 
     const [{ videos }, signals] = await Promise.all([
-      fetchSeedVideoStats(niche, regionValue),
-      fetchKeywordSignals(niche, regionValue),
+      fetchSeedVideoStats(nicheValue, regionValue),
+      fetchKeywordSignals(nicheValue, regionValue),
     ])
 
-    if (videos.length === 0 && signals.relatedSearches.length === 0 && signals.peopleAlsoAsk.length === 0) {
-      return NextResponse.json({ error: 'Nem találtunk elég valós adatot ehhez a niche-hez. Próbálj konkrétabb témát.' }, { status: 404 })
-    }
+    const relevantVideos = filterByRelevance(videos, nicheValue, 20).map(item => item.video)
+    const demandSignals = [...new Set([...signals.relatedSearches, ...signals.peopleAlsoAsk].map(signal => signal.trim()).filter(Boolean))]
+    if (demandSignals.length < 3) return NextResponse.json({ error: 'Nem találtunk legalább három valós keresési jelet ehhez a témához. Próbálj konkrétabb vagy más megfogalmazást.' }, { status: 404 })
 
     const renderedPrompt = renderPromptTemplate(PROMPT_TEMPLATES.contentGap, () => buildContentGapPrompt({
-      niche,
-      existingVideoTitles: videos.map(v => v.title),
+      niche: nicheValue,
+      existingVideoTitles: relevantVideos.map(v => v.title),
       relatedSearches: signals.relatedSearches,
       peopleAlsoAsk: signals.peopleAlsoAsk,
     }))
@@ -71,18 +75,26 @@ export async function POST(request: NextRequest) {
       promptVersion: renderedPrompt.version,
     })
 
-    const gaps = extractJson<ContentGapSuggestion[]>(aiCall.text)
+    const gaps = validateContentGapSuggestions(extractJson<unknown>(aiCall.text), demandSignals)
 
-    await logUsage(userId, 'content_gap_finder', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { niche })
+    await logUsage(userId, 'content_gap_finder', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { niche: nicheValue })
 
-    const charge = await chargeFeature(userId, 'content_gap_finder', { niche })
+    const charge = await chargeFeature(userId, 'content_gap_finder', { niche: nicheValue })
     if (!charge.success) {
       return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
     }
 
     const responsePayload = {
-      niche,
-      existing_video_count: videos.length,
+      niche: nicheValue,
+      existing_video_count: relevantVideos.length,
+      evidence: {
+        youtube_sample_size: videos.length,
+        relevant_video_count: relevantVideos.length,
+        demand_signal_count: demandSignals.length,
+        video_sample_confidence: getConfidenceLevel(relevantVideos.length),
+        demand_basis: 'google_related_searches_and_people_also_ask',
+        is_search_volume: false,
+      },
       gaps,
       _credits_remaining: charge.new_balance,
     }
@@ -92,11 +104,11 @@ export async function POST(request: NextRequest) {
       toolType: 'content_gap',
       inputHash,
       normalizedInput,
-      originalInput: niche,
+      originalInput: nicheValue,
       platform: platformValue,
       region: regionValue,
       resultJson: responsePayload,
-      summaryJson: { niche, gap_count: gaps.length },
+      summaryJson: { niche: nicheValue, gap_count: gaps.length, relevant_video_count: relevantVideos.length, demand_signal_count: demandSignals.length },
       creditCost: CREDIT_COSTS.content_gap_finder,
       freshForHours: 24,
       provider: aiCall.provider,
@@ -132,7 +144,7 @@ export async function GET(request: NextRequest) {
     if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
 
     const paid = await getPaidResultById(userId, paidResultId)
-    if (!paid) return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
+    if (!paid || paid.tool_type !== 'content_gap') return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
     return NextResponse.json({ ...(polishHungarianOutput(opened.result_json) as object), ...paidResultResponseMeta(opened) })

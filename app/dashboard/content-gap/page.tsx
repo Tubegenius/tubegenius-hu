@@ -9,6 +9,7 @@ import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 
 interface ContentGapSuggestion {
   gap_topic: string
+  demand_signal?: string
   evidence: string
   angle: string
 }
@@ -115,12 +116,18 @@ export default function ContentGapPage() {
   }
 
   async function saveGap(gap: ContentGapSuggestion) {
-    setSavedTopics(prev => new Set(prev).add(gap.gap_topic))
-    await fetch('/api/memory', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: gap.gap_topic, search_keyword: niche, state: 'saved', platform: 'youtube', source_context: 'content_gap' }),
-    })
+    try {
+      const response = await fetch('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: gap.gap_topic, search_keyword: niche, state: 'saved', platform: 'youtube', source_context: 'content_gap' }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'A mentés sikertelen.')
+      setSavedTopics(prev => new Set(prev).add(gap.gap_topic))
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'A mentés sikertelen.')
+    }
   }
 
   return (
@@ -131,7 +138,7 @@ export default function ContentGapPage() {
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🕳️ Content Gap Finder</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>Amit sokan keresnek, de a meglévő videók nem fedik le jól.</p>
+        <p className="text-sm" style={{ color: '#CBD5E1' }}>Valós keresési kérdések és a releváns YouTube-lefedettség összevetése.</p>
       </div>
 
       <div className="card mb-6">
@@ -187,6 +194,7 @@ export default function ContentGapPage() {
                     {savedTopics.has(g.gap_topic) ? '✓ Mentve' : '📌 Mentés'}
                   </button>
                 </div>
+                {g.demand_signal && <p className="text-xs mb-2" style={{ color: '#93C5FD' }}>Keresési jel: {g.demand_signal}</p>}
                 <p className="text-xs mb-2" style={{ color: '#F59E0B' }}>💡 {g.evidence}</p>
                 <p className="text-xs mb-3" style={{ color: '#CBD5E1' }}>{g.angle}</p>
                 <Link href={`/dashboard/opportunities?niche=${encodeURIComponent(g.gap_topic)}`} className="text-xs" style={{ color: '#3B82F6' }}>🧭 Validálás →</Link>
@@ -199,7 +207,7 @@ export default function ContentGapPage() {
       {!gaps && !loading && (
         <div className="card text-center py-12">
           <p className="text-3xl mb-3">🕳️</p>
-          <p style={{ color: '#CBD5E1' }}>Írj be egy niche-t, és megmutatjuk, mit keresnek sokan, de senki nem gyárt még jól.</p>
+          <p style={{ color: '#CBD5E1' }}>Írj be egy niche-t, és összevetjük a valós keresési jeleket a releváns YouTube-videók mintájával.</p>
         </div>
       )}
     </div>

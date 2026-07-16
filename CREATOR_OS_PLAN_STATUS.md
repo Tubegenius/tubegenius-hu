@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — CONTENT GAP BIZONYÍTÉK- ÉS MÓDSZERTANI HARDENING
+
+- A Content Gap Finder csak relevanciaszűrt, legfeljebb 25 találatos YouTube-mintát hasonlít össze valós Google kapcsolódó keresésekkel és People Also Ask kérdésekkel. Legalább három keresési jel nélkül nem generál fizetős rés-jelöltet.
+- Minden AI-javaslatnak változtatás nélkül meg kell neveznie egy ténylegesen visszakapott `demand_signal` értéket. Kitalált jel, ismételt téma, üres vagy túl hosszú mező még kreditlevonás előtt elutasításra kerül.
+- A kapcsolódó keresés nem keresési volumen, a videóminta nem a teljes YouTube. A prompt és a UI ezért nem állítja többé, hogy „sokan keresik” vagy „senki nem gyártja”; az eredmény explicit rés-jelölt.
+- Platform/régió és mentett eredmény típusa backend-validált. A Creator Memory mentés csak valódi API-siker után jelenik meg mentettként.
+
 ## 2026-07-16 — SCRIPT EXTRACTOR ÉS AUTO TRANSCRIPT HARDENING
 
 - A Script Extractor azonos YouTube-videót URL-formátumtól függetlenül egy fizetős bemenetként kezel. A támogatott watch/shorts/embed/live/youtu.be URL-ek biztonságosan kanonizálódnak; idegen lookalike host nem fogadható el. A mentett eredmény visszanyitása tool-type ellenőrzött.
