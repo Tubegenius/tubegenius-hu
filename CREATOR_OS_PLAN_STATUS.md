@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — THUMBNAIL STUDIO GYÁRTHATÓSÁGI ÉS PROVENANCE HARDENING
+
+- Pontosan három, nem üres, eltérő címkéjű és vizuális leírású koncepció szükséges. A thumbnail-szöveg backendoldalon is legfeljebb 24 karakter és 4 szó; a promptkérés többé nem csak figyelmeztetés, hanem kreditlevonás előtti gyárthatósági kapu.
+- A `contrast_attention_score` explicit szubjektív AI kontraszt/figyelem értékelés, nem mért figyelem, CTR vagy A/B teszteredmény. A UI nem állít többé valódi A/B tesztet: ez három koncepció összehasonlítása, kép- és tesztgenerálás nélkül.
+- A prompt a közös registryn keresztül fut, verziója `v2`; a válaszcsonkolási tartalék miatt a kimeneti keret 2000 token. Platform, régió és `force_refresh` típusa backend-validált, a téma kanonikus.
+- A koncepciómentés kulcssorrend-függő `JSON.stringify` helyett kanonikus, ékezet- és whitespace-toleráns provenance-azonosságot használ. Idegen/fabrikált koncepció nem menthető, azonos koncepció nem duplikálódik, a UI csak sikeres PATCH után jelzi mentettnek.
+
 ## 2026-07-16 — TITLE STUDIO MÓDSZERTANI ÉS ROBUSZTUSSÁGI HARDENING
 
 - A curiosity/clarity/clickability/risk értékek explicit szubjektív AI csomagolási értékelések; a clickability nem CTR- vagy kattintás-előrejelzés. A válasz és a UI ezt módszertani mezővel és egyértelmű címkével közli.

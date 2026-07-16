@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeSeoHeuristics, computeSeoScore, isValidSeoPackage } from '@/lib/seo-optimizer'
-import { isValidThumbnailConcept } from '@/lib/thumbnail-studio'
+import { isValidThumbnailConcept, thumbnailConceptIdentity, validateDistinctThumbnailConcepts } from '@/lib/thumbnail-studio'
 import { isValidTitleVariation, validateDistinctTitleVariations } from '@/lib/title-studio'
 
 describe('studio output validation', () => {
@@ -21,6 +21,12 @@ describe('studio output validation', () => {
     expect(isValidSeoPackage({ seo_title: 'x' })).toBe(false)
     expect(isValidThumbnailConcept({ contrast_attention_score: 250 })).toBe(false)
     expect(isValidThumbnailConcept({ concept_label: 'A', visual_description: 'v', thumbnail_text: 't', composition_note: 'c', emotion_or_conflict: 'e', contrast_attention_score: 70, clutter_risk: 'low' })).toBe(true)
+    const concept = (label: string, visual = label) => ({ concept_label: label, visual_description: visual, thumbnail_text: 'Rövid szöveg', composition_note: 'Bal-jobb kompozíció', emotion_or_conflict: 'Kíváncsiság', contrast_attention_score: 70, clutter_risk: 'low' as const })
+    expect(validateDistinctThumbnailConcepts([concept('A'), concept('B'), concept('C')])).toHaveLength(3)
+    expect(() => validateDistinctThumbnailConcepts([concept('A'), concept('A'), concept('C')])).toThrow()
+    expect(isValidThumbnailConcept(concept('A', ''))).toBe(false)
+    expect(isValidThumbnailConcept({ ...concept('A'), thumbnail_text: 'Ez a thumbnail szöveg biztosan túl hosszú' })).toBe(false)
+    expect(thumbnailConceptIdentity({ ...concept('A'), concept_label: ' Árvíztűrő ' })).toBe(thumbnailConceptIdentity({ ...concept('A'), concept_label: 'arvizturo' }))
     expect(isValidTitleVariation({ title: 'Egy valos magyar cim', curiosity_score: 70, clarity_score: 80, clickability_score: 75, risk_score: 20, reasoning: 'Indok' })).toBe(true)
     expect(isValidTitleVariation({ title: 'Hibas', curiosity_score: 170, clarity_score: 80, clickability_score: 75, risk_score: 20, reasoning: 'Indok' })).toBe(false)
     const title = (value: string) => ({ title: value, curiosity_score: 70, clarity_score: 80, clickability_score: 75, risk_score: 20, reasoning: 'Indok' })

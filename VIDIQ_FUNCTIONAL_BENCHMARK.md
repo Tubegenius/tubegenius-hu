@@ -15,7 +15,7 @@ Jelölések: **igazolt** = kód + adatforrás + teszt áttekintve; **részleges*
 | Optimize: tag, leírás, kategória, preview, progress | SEO Optimizer | Validált cím/leírás/tag/hashtag/fejezetvázlat/checklist és determinisztikus metaadat-készültségi score megvan. Nem rangsorpredikció; preview, kategória-ajánlás és időbeli progress nincs. | igazolt alap / részleges képesség |
 | Channel Audit | Channel Audit + Video Audit | Érvényes Videódiagnózis-score-okból készülő, állításbiztos mintázatelemzés és külön OAuth-analitika megvan. Nem állítjuk az auditpontszámról, hogy valós nézettségi teljesítmény; a vidIQ teljes scorecard- és csatornatörténeti mélysége még részleges. | igazolt eltérő módszertan / részleges képesség |
 | AI Coach | Creator OS modulok + Memory | A sajátadat-források kompatibilitása és állításbiztonsági szerződése auditált. Coach-végpont még nincs; előbb provenance-os CreatorEvidenceContext és Video Idea → YouTube outcome kapcsolat kell. | tervezett eltérő előny / még hiány |
-| Thumbnail Maker / testing | Thumbnail Studio | Koncepció-intelligence van, képalkotás és valódi A/B thumbnail testing nincs | hiány/részleges |
+| Thumbnail Maker / testing | Thumbnail Studio | Bizonyítékbiztos koncepció-intelligence és olvashatósági kapu van; képalkotás és valódi YouTube A/B thumbnail testing nincs | hiány/részleges |
 | Most Viewed / Outliers | Similar Videos + Competitor outlier | Valós evidence, szerveroldali provenance, snapshotból számolt VPH és napi háttérmérés megvan. | igazolt alapfunkció |
 
 ## Kötelező értékelési kérdések

@@ -5,12 +5,14 @@ import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { checkThumbnailText, isValidThumbnailConcept, buildThumbnailStudioPrompt, type ThumbnailConcept } from '@/lib/thumbnail-studio'
+import { checkThumbnailText, isValidThumbnailConcept, buildThumbnailStudioPrompt, sanitizeThumbnailConcept, thumbnailConceptIdentity, validateDistinctThumbnailConcepts, type ThumbnailConcept } from '@/lib/thumbnail-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { renderPromptTemplate } from '@/lib/prompts/template-registry'
+import { PROMPT_TEMPLATES } from '@/lib/prompts/catalog'
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,17 +21,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
     if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    if (region != null && !['HU', 'US'].includes(region)) return NextResponse.json({ error: 'Nem támogatott régió.' }, { status: 400 })
+    if (force_refresh != null && typeof force_refresh !== 'boolean') return NextResponse.json({ error: 'Hibás frissítési beállítás.' }, { status: 400 })
+    const topicValue = topic.trim()
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
     const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
-    const { niche, useNiche } = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+    const { niche, useNiche } = resolveCreatorNicheContext({ topic: topicValue, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ topic, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
+    const normalizedInput = normalizePaidResultInput({ topic: topicValue, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
     const inputHash = buildPaidResultHash({ userId, toolType: 'thumbnail_studio', normalizedInput, platform: platformValue, region: regionValue })
 
     const lock = await acquireRequestLock({ userId, toolType: 'thumbnail_studio', inputHash })
@@ -50,36 +56,36 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.thumbnail_studio} kredit szükséges.` }, { status: 402 })
       }
 
-      const prompt = buildThumbnailStudioPrompt({ topic, niche, useNiche, platform: platformValue })
+      const renderedPrompt = renderPromptTemplate(PROMPT_TEMPLATES.thumbnailStudioConcepts, () => buildThumbnailStudioPrompt({ topic: topicValue, niche, useNiche, platform: platformValue }))
       const aiCall = await callAIProvider({
         model: MODELS.fast,
-        maxTokens: 1500,
-        messages: [{ role: 'user', content: prompt }],
-        promptTemplateId: 'thumbnail_studio_concepts',
-        promptVersion: 'v1',
+        maxTokens: 2000,
+        messages: [{ role: 'user', content: renderedPrompt.text }],
+        promptTemplateId: renderedPrompt.templateId,
+        promptVersion: renderedPrompt.version,
       })
 
-      const rawConcepts = extractJson<ThumbnailConcept[]>(aiCall.text)
-      if (!Array.isArray(rawConcepts) || rawConcepts.length !== 3 || !rawConcepts.every(isValidThumbnailConcept)) throw new Error('Invalid thumbnail concepts returned by AI provider')
-      const concepts = rawConcepts.map(c => ({
+      const rawConcepts = validateDistinctThumbnailConcepts(extractJson<unknown>(aiCall.text))
+      const concepts = validateDistinctThumbnailConcepts(rawConcepts.map(c => ({
         ...c,
+        concept_label: polishHungarianText(c.concept_label || ''),
         visual_description: polishHungarianText(c.visual_description || ''),
         thumbnail_text: polishHungarianText(c.thumbnail_text || ''),
         composition_note: polishHungarianText(c.composition_note || ''),
         emotion_or_conflict: polishHungarianText(c.emotion_or_conflict || ''),
-        text_check: checkThumbnailText(c.thumbnail_text || ''),
-      }))
+      }))).map(c => ({ ...c, text_check: checkThumbnailText(c.thumbnail_text) }))
 
-      await logUsage(userId, 'thumbnail_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+      await logUsage(userId, 'thumbnail_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic: topicValue })
 
-      const charge = await chargeFeature(userId, 'thumbnail_studio', { topic })
+      const charge = await chargeFeature(userId, 'thumbnail_studio', { topic: topicValue })
       if (!charge.success) {
         return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
       }
 
       const responsePayload = {
-        topic,
+        topic: topicValue,
         concepts,
+        scoring_methodology: 'subjective_ai_visual_review_not_ctr_or_ab_test',
         _credits_remaining: charge.new_balance,
       }
 
@@ -88,11 +94,11 @@ export async function POST(request: NextRequest) {
         toolType: 'thumbnail_studio',
         inputHash,
         normalizedInput,
-        originalInput: topic,
+        originalInput: topicValue,
         platform: platformValue,
         region: regionValue,
         resultJson: responsePayload,
-        summaryJson: { topic, concept_count: concepts.length },
+        summaryJson: { topic: topicValue, concept_count: concepts.length, methodology: 'subjective_ai_visual_review_not_ctr_or_ab_test' },
         creditCost: CREDIT_COSTS.thumbnail_studio,
         freshForHours: 24,
         provider: aiCall.provider,
@@ -122,19 +128,22 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const { topic, concept, platform, paid_result_id } = await request.json()
-    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || !isValidThumbnailConcept(concept) || typeof paid_result_id !== 'string') return NextResponse.json({ error: 'Hiányzó vagy hibás adatok' }, { status: 400 })
+    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || !isValidThumbnailConcept(concept) || typeof paid_result_id !== 'string' || !paid_result_id.trim()) return NextResponse.json({ error: 'Hiányzó vagy hibás adatok' }, { status: 400 })
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    const topicValue = topic.trim()
+    const conceptValue = sanitizeThumbnailConcept(concept)
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const paid = await getPaidResultById(userId, paid_result_id)
     const paidPayload = paid?.result_json as { topic?: unknown; concepts?: unknown } | null
-    const paidConcepts = Array.isArray(paidPayload?.concepts) ? paidPayload.concepts : []
-    if (!paid || paid.tool_type !== 'thumbnail_studio' || paidPayload?.topic !== topic || !paidConcepts.some(c => JSON.stringify(c) === JSON.stringify(concept))) return NextResponse.json({ error: 'A koncepció nem tartozik a saját fizetett Thumbnail Studio eredményedhez.' }, { status: 403 })
+    const paidConcepts = Array.isArray(paidPayload?.concepts) ? paidPayload.concepts.filter(isValidThumbnailConcept) : []
+    if (!paid || paid.tool_type !== 'thumbnail_studio' || typeof paidPayload?.topic !== 'string' || paidPayload.topic.trim() !== topicValue || !paidConcepts.some(c => thumbnailConceptIdentity(c) === thumbnailConceptIdentity(conceptValue))) return NextResponse.json({ error: 'A koncepció nem tartozik a saját fizetett Thumbnail Studio eredményedhez.' }, { status: 403 })
 
     const admin = createAdminClient()
     const platformValue = platform || 'youtube'
-    const inputHash = buildVideoIdeaInputHash({ userId, topic, platform: platformValue })
+    const inputHash = buildVideoIdeaInputHash({ userId, topic: topicValue, platform: platformValue })
 
     const { data: existing } = await admin
       .from('video_ideas')
@@ -144,9 +153,11 @@ export async function PATCH(request: NextRequest) {
       .single()
 
     const current: unknown[] = Array.isArray(existing?.thumbnail_concepts) ? existing.thumbnail_concepts : []
-    const updated = [...current, concept]
+    const conceptIdentity = thumbnailConceptIdentity(conceptValue)
+    const alreadySaved = current.some(item => isValidThumbnailConcept(item) && thumbnailConceptIdentity(item) === conceptIdentity)
+    const updated = alreadySaved ? current : [...current, conceptValue]
 
-    const result = await ensureVideoIdea(admin, { userId, topic, platform: platformValue, inputHash })
+    const result = await ensureVideoIdea(admin, { userId, topic: topicValue, platform: platformValue, inputHash })
     if (!result.success || !result.idea) return NextResponse.json({ error: 'Mentés sikertelen.' }, { status: 500 })
 
     const { error: updateError } = await admin.from('video_ideas').update({ thumbnail_concepts: updated }).eq('id', result.idea.id).eq('user_id', userId)
@@ -169,7 +180,7 @@ export async function GET(request: NextRequest) {
     if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
 
     const paid = await getPaidResultById(userId, paidResultId)
-    if (!paid) return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
+    if (!paid || paid.tool_type !== 'thumbnail_studio') return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
     return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })

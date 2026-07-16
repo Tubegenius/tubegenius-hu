@@ -12,7 +12,7 @@ export const PROMPT_TEMPLATES = {
   opportunityExplainPool: definePromptTemplate({ id: 'opportunity_explain_pool', version: 'v1', locale: 'hu-HU', description: 'Opportunity evidence-pool explanation.' }),
   opportunityExplainSimilar: definePromptTemplate({ id: 'opportunity_explain_similar', version: 'v1', locale: 'hu-HU', description: 'Alternative angle from the same evidence.' }),
   seoOptimizerPackage: definePromptTemplate({ id: 'seo_optimizer_package', version: 'v1', locale: 'hu-HU', description: 'SEO package generation.' }),
-  thumbnailStudioConcepts: definePromptTemplate({ id: 'thumbnail_studio_concepts', version: 'v1', locale: 'hu-HU', description: 'Thumbnail concept generation.' }),
+  thumbnailStudioConcepts: definePromptTemplate({ id: 'thumbnail_studio_concepts', version: 'v2', locale: 'hu-HU', description: 'Három gyártható thumbnail-koncepció nem prediktív AI vizuális értékeléssel.' }),
   scriptExtractTranscript: definePromptTemplate({ id: 'script_extract_transcript', version: 'v1', locale: 'hu-HU', description: 'Structure analysis from transcript.' }),
   scriptExtractMetadata: definePromptTemplate({ id: 'script_extract_metadata_only', version: 'v1', locale: 'hu-HU', description: 'Estimated structure analysis from metadata.' }),
   videoAuditInterpretation: definePromptTemplate({ id: 'video_audit_interpretation', version: 'v1', locale: 'hu-HU', description: 'Qualitative video-audit interpretation.' }),

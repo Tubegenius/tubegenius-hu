@@ -115,8 +115,9 @@ export default function ThumbnailStudioPage() {
         return
       }
       setConcepts(data.concepts)
+      setTopic(data.topic || topic.trim())
       setPaidResultId(data.paid_result_id || null)
-      sessionStorage.setItem('willviral_thumbnail_studio_state', JSON.stringify({ topic, concepts: data.concepts, paidResultId: data.paid_result_id || null }))
+      sessionStorage.setItem('willviral_thumbnail_studio_state', JSON.stringify({ topic: data.topic || topic.trim(), concepts: data.concepts, paidResultId: data.paid_result_id || null }))
     } catch {
       setError('Kapcsolati hiba.')
     } finally {
@@ -125,12 +126,19 @@ export default function ThumbnailStudioPage() {
   }
 
   async function saveConcept(concept: ThumbnailConcept, index: number) {
-    setSavedConcepts(prev => new Set(prev).add(index))
-    await fetch('/api/thumbnail-studio', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, concept, platform: 'youtube', paid_result_id: paidResultId }),
-    })
+    try {
+      if (!paidResultId) throw new Error('A mentéshez hiányzik a fizetett eredmény azonosítója.')
+      const response = await fetch('/api/thumbnail-studio', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, concept, platform: 'youtube', paid_result_id: paidResultId }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'A koncepció mentése sikertelen.')
+      setSavedConcepts(prev => new Set(prev).add(index))
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'A koncepció mentése sikertelen.')
+    }
   }
 
   return (
@@ -141,7 +149,7 @@ export default function ThumbnailStudioPage() {
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🖼️ Thumbnail Studio</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>3 vizuális koncepció A/B teszthez — kompozíció, szöveg, érzelem/konfliktus javaslattal.</p>
+        <p className="text-sm" style={{ color: '#CBD5E1' }}>3 gyártható vizuális koncepció összehasonlításhoz — ez még nem képgenerálás vagy valódi YouTube A/B teszt.</p>
       </div>
 
       <div className="card mb-6 space-y-3">
@@ -152,6 +160,7 @@ export default function ThumbnailStudioPage() {
           placeholder="Miről szól a videó?"
           className="w-full px-4 py-2.5 rounded-lg text-sm"
           style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
+          maxLength={300}
         />
         <button onClick={runGenerate} disabled={loading || !topic.trim()} className="btn-primary w-full">
           {loading ? 'Generálás...' : 'Koncepciók generálása'}
@@ -208,7 +217,7 @@ export default function ThumbnailStudioPage() {
 
               <div className="flex gap-2 items-center">
                 <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#121826', color: '#CBD5E1' }}>
-                  Figyelemfelkeltés: {c.contrast_attention_score}/100
+                  AI kontraszt/figyelem: {c.contrast_attention_score}/100
                 </span>
                 <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#121826', color: CLUTTER_LABELS[c.clutter_risk]?.color }}>
                   {CLUTTER_LABELS[c.clutter_risk]?.label}
