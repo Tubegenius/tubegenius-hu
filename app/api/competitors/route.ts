@@ -4,7 +4,8 @@ import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, fetchChannelRecentVideos } from '@/lib/competitor-tracker'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
-import { calculateViewsPerHour, calculateWindowGrowth, type PerformancePoint } from '@/lib/competitor-performance'
+import { calculateLatestViewsPerHour, calculateViewSampleOutliers, calculateWindowGrowth, type PerformancePoint } from '@/lib/competitor-performance'
+import { topicInputTooLong } from '@/lib/api-input-validation'
 
 // GET — figyelt versenytársak listája, a legutóbbi (mentett) videóikkal együtt.
 export async function GET() {
@@ -81,7 +82,7 @@ export async function GET() {
         growth_28d: calculateWindowGrowth(channelPoints, 28),
         videos: (videosByCompetitor.get(c.id) || []).map((video: any) => ({
           ...video,
-          views_per_hour: calculateViewsPerHour(snapshotsByVideo.get(`${c.id}:${video.video_id}`) || []),
+          views_per_hour: calculateLatestViewsPerHour(snapshotsByVideo.get(`${c.id}:${video.video_id}`) || []),
         })),
       }
     }),
@@ -96,11 +97,15 @@ export async function POST(request: NextRequest) {
     if (!channel_input || typeof channel_input !== 'string' || !channel_input.trim()) {
       return NextResponse.json({ error: 'Csatorna URL, @handle vagy név megadása kötelező' }, { status: 400 })
     }
+    if (channel_input.trim().length > 300) return NextResponse.json({ error: 'A csatornaazonosító legfeljebb 300 karakter lehet.' }, { status: 400 })
+    if (niche != null && (typeof niche !== 'string' || topicInputTooLong(niche))) return NextResponse.json({ error: 'A niche legfeljebb 300 karakter lehet.' }, { status: 400 })
+    const channelInput = channel_input.trim()
+    const nicheValue = niche?.trim() || null
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    const lock = await acquireRequestLock({ userId, toolType: 'competitor_add', inputHash: channel_input.trim().toLowerCase() })
+    const lock = await acquireRequestLock({ userId, toolType: 'competitor_add', inputHash: channelInput.toLowerCase() })
     if (!lock.acquired) {
       return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
     }
@@ -112,7 +117,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.competitor_add} kredit szükséges.` }, { status: 402 })
     }
 
-    const channel = await resolveChannel(channel_input)
+    const channel = await resolveChannel(channelInput)
     if (!channel) {
       return NextResponse.json({ error: 'A csatorna nem található. Ellenőrizd az URL-t vagy a nevet.' }, { status: 404 })
     }
@@ -132,7 +137,7 @@ export async function POST(request: NextRequest) {
     }
 
     const videos = channel.uploadsPlaylistId ? await fetchChannelRecentVideos(channel.uploadsPlaylistId, 10) : []
-    const avgViews = videos.length > 0 ? Math.round(videos.reduce((sum, v) => sum + v.viewCount, 0) / videos.length) : 0
+    const baselineViews = calculateViewSampleOutliers(videos.map(video => video.viewCount)).baseline_median_views
 
     const charge = await chargeFeature(userId, 'competitor_add', { channel_id: channel.channelId })
     if (!charge.success) {
@@ -148,9 +153,9 @@ export async function POST(request: NextRequest) {
         channel_thumbnail: channel.thumbnail,
         channel_url: `https://youtube.com/channel/${channel.channelId}`,
         platform: 'youtube',
-        niche: niche || null,
+        niche: nicheValue,
         baseline_video_count: channel.videoCount,
-        baseline_avg_views: avgViews,
+        baseline_avg_views: baselineViews == null ? 0 : Math.round(baselineViews),
         baseline_subscriber_count: channel.subscriberCount,
         last_checked_at: new Date().toISOString(),
       })
@@ -160,6 +165,7 @@ export async function POST(request: NextRequest) {
     if (insertError) {
       console.error('[Competitors] KRITIKUS: mentés sikertelen, a user már fizetett érte:', insertError)
       const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_save_failed' })
+      if (insertError.code === '23505' && refund.success) return NextResponse.json({ error: 'Ezt a csatornát már figyeled. A kreditet visszaadtuk.' }, { status: 409 })
       return NextResponse.json({ error: refund.success ? 'A mentés sikertelen volt, a kreditet visszaadtuk.' : 'A mentés és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
 
@@ -216,14 +222,15 @@ export async function DELETE(request: NextRequest) {
   if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
   const { id } = await request.json()
-  if (!id) return NextResponse.json({ error: 'id kötelező' }, { status: 400 })
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return NextResponse.json({ error: 'Érvényes id kötelező' }, { status: 400 })
 
   const admin = createAdminClient()
-  const { error } = await admin.from('tracked_competitors').delete().eq('id', id).eq('user_id', userId)
+  const { data, error } = await admin.from('tracked_competitors').delete().eq('id', id).eq('user_id', userId).select('id').maybeSingle()
   if (error) {
     console.error('[Competitors] DELETE DB hiba:', error)
     return NextResponse.json({ error: 'A versenytárs törlése sikertelen. Próbáld újra később.' }, { status: 500 })
   }
+  if (!data) return NextResponse.json({ error: 'A figyelt versenytárs nem található.' }, { status: 404 })
 
   return NextResponse.json({ success: true })
 }

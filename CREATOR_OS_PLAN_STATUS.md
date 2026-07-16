@@ -1,5 +1,13 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — COMPETITOR TRACKER MÉRÉSI ÉS ÁLLAPOTBIZTONSÁGI HARDENING
+
+- A fő lista VPH-ja most az utolsó két snapshot közötti aktuális mért sebesség, ugyanazzal a módszerrel, mint a riasztások; nem a teljes 29 napos előzmény átlagsebessége. Negatív YouTube-korrekciónál nem gyárt hamis 0 VPH-t, hanem elégtelen/érvénytelen mérésként kezeli.
+- A 7/14/28 napos ablakok signed változást adnak: a feliratkozó- vagy nézettségcsökkenés többé nem vágódik nullára. A jövőbeli/hibás snapshot nem torzít, az eredmény a ténylegesen mért napok számát is hordozza; a UI „legfeljebb” ablakváltozásként jelöli.
+- Az outlier-bázis a saját maga által torzított számtani átlag helyett legalább három videós, robusztus recent-upload medián. A UI és a proof provenance egyértelműen közli: ez jelenlegi nyers nézettségi arány, nem életkor-normalizált teljesítmény vagy CTR.
+- A manuális fizetős refresh csak a videók és snapshot sikeres mentése után frissíti a `last_checked_at` állapotot, így részleges hiba nem blokkolja a következő újrapróbálást. Duplikált csatorna race esetén a kredit visszajár és 409 érkezik.
+- Csatornabemenet/niche/id/platform/video ID backend-validált; külső YouTube hibák explicit szolgáltatáshibák. Nem létező törlés 404. Outlier proof csak saját tárolt videóból készül, és a UI csak sikeres mentés után jelzi mentettnek.
+
 ## 2026-07-16 — THUMBNAIL STUDIO GYÁRTHATÓSÁGI ÉS PROVENANCE HARDENING
 
 - Pontosan három, nem üres, eltérő címkéjű és vizuális leírású koncepció szükséges. A thumbnail-szöveg backendoldalon is legfeljebb 24 karakter és 4 szó; a promptkérés többé nem csak figyelmeztetés, hanem kreditlevonás előtti gyárthatósági kapu.

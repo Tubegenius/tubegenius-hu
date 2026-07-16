@@ -7,6 +7,7 @@
 import { getActiveApiKey } from '@/lib/youtube-service'
 import { createAdminClient } from '@/lib/supabase-server'
 import { ensureVideoIdea, addVideoIdeaProofSignal, logVideoIdeaEvent, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
+import { calculateViewSampleOutliers } from '@/lib/competitor-performance'
 
 export interface ChannelSnapshot {
   channelId: string
@@ -49,6 +50,7 @@ function extractChannelIdOrHandle(input: string): { type: 'id' | 'handle' | 'que
 
 async function fetchChannelByParam(param: string, apiKey: string): Promise<ChannelSnapshot | null> {
   const res = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,contentDetails&${param}&key=${apiKey}`)
+  if (!res.ok) throw new Error(`YouTube channels request failed: ${res.status}`)
   const data = await res.json()
   const item = data.items?.[0]
   if (!item) return null
@@ -82,6 +84,7 @@ export async function resolveChannel(input: string): Promise<ChannelSnapshot | n
   // Fallback: search.list csatorna nevre — dragabb (100 egyseg), csak akkor
   // hasznaljuk, ha a handle/id alapu felismeres nem sikerult.
   const searchRes = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q=${encodeURIComponent(parsed.value)}&key=${apiKey}`)
+  if (!searchRes.ok) throw new Error(`YouTube channel search failed: ${searchRes.status}`)
   const searchData = await searchRes.json()
   const channelId = searchData.items?.[0]?.snippet?.channelId || searchData.items?.[0]?.id?.channelId
   if (!channelId) return null
@@ -94,12 +97,14 @@ export async function fetchChannelRecentVideos(uploadsPlaylistId: string, maxRes
   const apiKey = getActiveApiKey()
 
   const playlistRes = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${maxResults}&key=${apiKey}`)
+  if (!playlistRes.ok) throw new Error(`YouTube playlist request failed: ${playlistRes.status}`)
   const playlistData = await playlistRes.json()
   const items = (playlistData.items || []) as Array<{ snippet: { title: string; publishedAt: string; resourceId: { videoId: string }; thumbnails?: { medium?: { url: string }; default?: { url: string } } } }>
   if (items.length === 0) return []
 
   const videoIds = items.map(i => i.snippet.resourceId.videoId).filter(Boolean)
   const statsRes = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${videoIds.join(',')}&key=${apiKey}`)
+  if (!statsRes.ok) throw new Error(`YouTube video stats request failed: ${statsRes.status}`)
   const statsData = await statsRes.json()
   const statsMap = new Map<string, { viewCount?: string; likeCount?: string; commentCount?: string }>(
     (statsData.items || []).map((v: { id: string; statistics: { viewCount?: string; likeCount?: string; commentCount?: string } }) => [v.id, v.statistics])
@@ -118,12 +123,9 @@ export async function fetchChannelRecentVideos(uploadsPlaylistId: string, maxRes
     }
   })
 
-  const avgViews = rawVideos.reduce((sum, v) => sum + v.viewCount, 0) / Math.max(1, rawVideos.length)
+  const outlierResult = calculateViewSampleOutliers(rawVideos.map(video => video.viewCount))
 
-  return rawVideos.map(v => {
-    const outlierRatio = avgViews > 0 ? v.viewCount / avgViews : 0
-    return { ...v, outlierRatio: Math.round(outlierRatio * 100) / 100, isOutlier: outlierRatio >= 2.0 }
-  })
+  return rawVideos.map((video, index) => ({ ...video, outlierRatio: outlierResult.ratios[index], isOutlier: outlierResult.outliers[index] }))
 }
 
 export function isCompetitorSnapshotDue(lastCheckedAt: string | null, now = Date.now(), intervalHours = 20): boolean {
@@ -152,7 +154,7 @@ export async function refreshTrackedCompetitorSnapshots(limit = 20) {
       const channel = await resolveChannel(competitor.channel_id)
       if (!channel?.uploadsPlaylistId) throw new Error('Missing uploads playlist')
       const videos = await fetchChannelRecentVideos(channel.uploadsPlaylistId, 10)
-      const avgViews = videos.length ? Math.round(videos.reduce((sum, video) => sum + video.viewCount, 0) / videos.length) : 0
+      const baselineViews = calculateViewSampleOutliers(videos.map(video => video.viewCount)).baseline_median_views
       const checkedAt = new Date().toISOString()
       if (videos.length) {
         const { error: videosError } = await admin.from('tracked_competitor_videos').upsert(videos.map(video => ({
@@ -173,7 +175,7 @@ export async function refreshTrackedCompetitorSnapshots(limit = 20) {
       // last_checked_at kerül utoljára mentésre: ha bármely előző írás hibázik,
       // a következő cron újrapróbálhatja a csatornát.
       const { error: updateError } = await admin.from('tracked_competitors').update({
-        baseline_avg_views: avgViews,
+        baseline_avg_views: baselineViews == null ? 0 : Math.round(baselineViews),
         baseline_video_count: channel.videoCount,
         baseline_subscriber_count: channel.subscriberCount,
         last_checked_at: checkedAt,
@@ -220,8 +222,8 @@ export async function saveOutlierAsProofSignal(input: {
     publishedAt: input.video.publishedAt,
     viewCount: input.video.viewCount,
     strength: input.video.outlierRatio >= 3 ? 'strong' : 'medium',
-    reason: `${input.video.outlierRatio}x jobban teljesít a csatorna átlagánál`,
-    payload: { outlier_ratio: input.video.outlierRatio },
+    reason: `Jelenlegi nézettsége ${input.video.outlierRatio}x a legutóbbi videóminta mediánjához képest`,
+    payload: { outlier_ratio: input.video.outlierRatio, basis: 'recent_upload_view_median', age_normalized: false },
   })
   if (!proofResult.success) return { success: false }
 

@@ -23,7 +23,7 @@ interface CompetitorVideo {
   views_per_hour?: number | null
 }
 
-interface GrowthWindow { subscriber_delta: number | null; view_delta: number | null }
+interface GrowthWindow { subscriber_delta: number | null; view_delta: number | null; measured_days?: number | null }
 
 interface Competitor {
   id: string
@@ -44,6 +44,10 @@ function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
   return n.toString()
+}
+
+function formatSigned(n: number) {
+  return `${n > 0 ? '+' : ''}${formatNumber(n)}`
 }
 
 const ADD_COST = 1
@@ -140,6 +144,8 @@ export default function CompetitorsPage() {
           return
         }
         await loadCompetitors()
+      } catch {
+        setError('Kapcsolati hiba frissítés közben.')
       } finally {
         setRefreshingId(null)
       }
@@ -167,23 +173,29 @@ export default function CompetitorsPage() {
 
   async function saveOutlierSignal(video: CompetitorVideo, channelTitle: string) {
     const videoId = video.video_id || video.videoId || ''
-    setSavedVideos(prev => new Set(prev).add(videoId))
-    await fetch('/api/competitors/save-signal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        topic: video.title,
-        platform: 'youtube',
-        channel_title: channelTitle,
-        video: {
-          videoId,
-          title: video.title,
-          viewCount: video.view_count ?? video.viewCount ?? 0,
-          publishedAt: video.published_at ?? video.publishedAt,
-          outlierRatio: video.outlier_ratio ?? video.outlierRatio ?? 0,
-        },
-      }),
-    })
+    try {
+      const response = await fetch('/api/competitors/save-signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: video.title,
+          platform: 'youtube',
+          channel_title: channelTitle,
+          video: {
+            videoId,
+            title: video.title,
+            viewCount: video.view_count ?? video.viewCount ?? 0,
+            publishedAt: video.published_at ?? video.publishedAt,
+            outlierRatio: video.outlier_ratio ?? video.outlierRatio ?? 0,
+          },
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'A bizonyíték mentése sikertelen.')
+      setSavedVideos(prev => new Set(prev).add(videoId))
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'A bizonyíték mentése sikertelen.')
+    }
   }
 
   return (
@@ -199,7 +211,7 @@ export default function CompetitorsPage() {
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🎯 Versenytársfigyelő</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>Figyelt csatornák legutóbbi videói, kiugró (outlier) teljesítménnyel jelölve.</p>
+        <p className="text-sm" style={{ color: '#CBD5E1' }}>Mért aktuális VPH és a legutóbbi videóminta mediánjához viszonyított nyers nézettségi outlier-jel.</p>
       </div>
 
       <div className="card mb-6">
@@ -210,7 +222,8 @@ export default function CompetitorsPage() {
             onKeyDown={e => e.key === 'Enter' && addCompetitor()}
             placeholder="YouTube csatorna URL, @handle vagy név..."
             className="flex-1 px-4 py-2.5 rounded-lg text-sm"
-            style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
+          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
+          maxLength={300}
           />
           <button onClick={addCompetitor} disabled={adding || !channelInput.trim()} className="btn-primary px-5">
             {adding ? 'Hozzáadás...' : 'Figyelés indítása'}
@@ -256,10 +269,10 @@ export default function CompetitorsPage() {
                     {c.channel_title}
                   </a>
                   <p className="text-xs" style={{ color: '#94A3B8' }}>
-                    {formatNumber(c.baseline_subscriber_count)} feliratkozó · átlag {formatNumber(c.baseline_avg_views)} megtekintés
+                    {formatNumber(c.baseline_subscriber_count)} feliratkozó · videóminta-medián {formatNumber(c.baseline_avg_views)} megtekintés
                   </p>
                   <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
-                    Növekedés: 7 nap {c.growth_7d?.view_delta == null ? '—' : `+${formatNumber(c.growth_7d.view_delta)} megtekintés`} · 14 nap {c.growth_14d?.view_delta == null ? '—' : `+${formatNumber(c.growth_14d.view_delta)}`} · 28 nap {c.growth_28d?.view_delta == null ? '—' : `+${formatNumber(c.growth_28d.view_delta)}`}
+                    Mért változás, legfeljebb: 7 nap {c.growth_7d?.view_delta == null ? '—' : `${formatSigned(c.growth_7d.view_delta)} megtekintés`} · 14 nap {c.growth_14d?.view_delta == null ? '—' : formatSigned(c.growth_14d.view_delta)} · 28 nap {c.growth_28d?.view_delta == null ? '—' : formatSigned(c.growth_28d.view_delta)}
                   </p>
                 </div>
               </div>
@@ -289,7 +302,7 @@ export default function CompetitorsPage() {
                         {formatNumber(v.view_count ?? v.viewCount ?? 0)} megtekintés
                         <span className="ml-2">VPH: {v.views_per_hour == null ? 'nincs elég előzmény' : formatNumber(v.views_per_hour)}</span>
                         {isOutlier && (
-                          <span className="ml-2 font-semibold" style={{ color: '#F59E0B' }}>🔥 {ratio}x a csatorna átlagánál</span>
+                          <span className="ml-2 font-semibold" style={{ color: '#F59E0B' }}>🔥 {ratio}x a videóminta mediánjához képest</span>
                         )}
                       </p>
                     </div>

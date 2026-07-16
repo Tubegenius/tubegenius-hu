@@ -10,9 +10,11 @@ import { topicInputTooLong } from '@/lib/api-input-validation'
 export async function POST(request: NextRequest) {
   try {
     const { topic, platform, video } = await request.json()
-    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || typeof video?.videoId !== 'string' || video.videoId.length > 32) {
+    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || typeof video?.videoId !== 'string' || !/^[a-zA-Z0-9_-]{11}$/.test(video.videoId)) {
       return NextResponse.json({ error: 'Hiányzó adatok' }, { status: 400 })
     }
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    const topicValue = topic.trim()
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -37,8 +39,8 @@ export async function POST(request: NextRequest) {
 
     const result = await saveOutlierAsProofSignal({
       userId,
-      topic,
-      platform: platform || 'youtube',
+      topic: topicValue,
+      platform: 'youtube',
       video: {
         videoId: storedVideo.video_id,
         title: storedVideo.title,
