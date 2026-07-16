@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { alertTimeBucket, classifyAlerts, classifyTrendVelocity } from '@/lib/trend-alerts'
+import { sameEvidenceSet } from '@/lib/trend-tracking'
 
 describe('trend alert velocity methodology', () => {
   it('requires comparable measured velocities and a 25% change', () => {
@@ -22,5 +23,14 @@ describe('trend alert velocity methodology', () => {
     expect(alertTimeBucket('2026-01-05T10:00:00Z', 'weekly')).toBe('2026-W02')
     const item = { id: 'trend-1', candidate_topic: 'teszt', trend_status: 'rising' as const, views_delta: 500, total_views: 10_000, trend_velocity: 100, snapshot_count: 2, last_checked_at: '2026-01-05T10:00:00Z', alert_frequency: 'off' as const }
     expect(classifyAlerts([item])).toEqual([])
+  })
+})
+
+describe('trend evidence comparability', () => {
+  it('compares exact deduplicated evidence sets independent of order', () => {
+    expect(sameEvidenceSet(['a', 'b'], ['b', 'a'])).toBe(true)
+    expect(sameEvidenceSet(['a', 'a'], ['a'])).toBe(true)
+    expect(sameEvidenceSet(['a', 'b'], ['a', 'c'])).toBe(false)
+    expect(sameEvidenceSet(null, [])).toBe(true)
   })
 })

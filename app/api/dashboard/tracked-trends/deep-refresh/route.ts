@@ -6,7 +6,7 @@ import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { calcSearchRelevance, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
-import { refreshTrackedCandidateNow } from '@/lib/trend-tracking'
+import { refreshTrackedCandidateNow, sameEvidenceSet } from '@/lib/trend-tracking'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 export const runtime = 'nodejs'
@@ -23,6 +23,9 @@ type CandidateRow = {
   language: string | null
   youtube_video_ids: unknown
   web_source_ids: unknown
+  trend_source_type: string | null
+  confidence: string | null
+  status: string
 }
 
 const MAX_STORED_VIDEOS = 12
@@ -139,12 +142,15 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => ({}))
   const candidateId = typeof body.id === 'string' ? body.id : ''
+  if (candidateId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidateId)) {
+    return NextResponse.json({ error: 'Invalid trend identifier.' }, { status: 400 })
+  }
   if (!candidateId) return NextResponse.json({ error: 'Hiányzó trend azonosító.' }, { status: 400 })
 
   const admin = createAdminClient()
   const { data: candidate, error } = await admin
     .from('tracked_trend_candidates')
-    .select('id, user_id, candidate_topic, niche, region, language, youtube_video_ids, web_source_ids')
+    .select('id, user_id, candidate_topic, niche, region, language, youtube_video_ids, web_source_ids, trend_source_type, confidence, status')
     .eq('id', candidateId)
     .eq('user_id', user.id)
     .single()
@@ -250,9 +256,17 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await refreshTrackedCandidateNow(row.id)
+    await refreshTrackedCandidateNow(row.id, { resetBaseline: !sameEvidenceSet(existingVideoIds, videoIds) })
   } catch (error) {
     console.error('[TrendDeepRefresh] snapshot refresh failed:', error)
+    const { error: rollbackError } = await admin.from('tracked_trend_candidates').update({
+      youtube_video_ids: row.youtube_video_ids,
+      web_source_ids: row.web_source_ids,
+      trend_source_type: row.trend_source_type,
+      confidence: row.confidence,
+      status: row.status,
+    }).eq('id', row.id).eq('user_id', user.id)
+    if (rollbackError) console.error('[TrendDeepRefresh] source rollback failed:', rollbackError)
     const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'trend_snapshot_save_failed' })
     return NextResponse.json({ error: refund.success ? 'A trend snapshot mentése sikertelen volt, a kreditet visszaadtuk.' : 'A trend snapshot mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
   }

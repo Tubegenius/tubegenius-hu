@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — TREND TRACKING ÉS ALERT ADATINTEGRITÁSI HARDENING
+
+- A trendsebesség kizárólag ugyanazon, teljesen elérhető bizonyítékvideó-készlet két mérése között számolódik. A mélyfrissítés evidenciacseréje új baseline-t indít, ezért azonos darabszámú, de eltérő videók sem gyártanak hamis VPH-t vagy riasztást.
+- A Supabase olvasási és írási hibák többé nem látszanak sikeres cronfrissítésnek vagy üres bizonyítéklistának. Sikertelen candidate-állapotmentésnél az új snapshot törlődik; sikertelen mélyfrissítésnél az előző forrásállapot helyreáll, a kredit-visszatérítés megmarad.
+- A trend- és alert-azonosítók backend-validáltak, a bizonyítékvideó-lista korlátozott és YouTube-ID formátumú. A riasztási signature csak a szerver által használt 16 karakteres hash-formátumban fogadható el.
+- A módszertani állítás pontosítva: a rendszer az ismert bizonyítékvideó-pool sebességváltozását figyeli, nem a teljes YouTube keresési volumenét. 18 tesztfájl 72 tesztje, TypeScript és a 78 oldalas production build sikeres.
+
 ## 2026-07-16 — COMPETITOR TRACKER MÉRÉSI ÉS ÁLLAPOTBIZTONSÁGI HARDENING
 
 - A fő lista VPH-ja most az utolsó két snapshot közötti aktuális mért sebesség, ugyanazzal a módszerrel, mint a riasztások; nem a teljes 29 napos előzmény átlagsebessége. Negatív YouTube-korrekciónál nem gyárt hamis 0 VPH-t, hanem elégtelen/érvénytelen mérésként kezeli.

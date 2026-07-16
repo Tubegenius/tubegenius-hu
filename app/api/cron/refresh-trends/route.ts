@@ -25,14 +25,16 @@ export async function GET(request: NextRequest) {
     ])
     if (trendResult.status === 'rejected') console.error('[cron/refresh-trends] trend refresh failed:', trendResult.reason)
     if (competitorResult.status === 'rejected') console.error('[cron/refresh-trends] competitor refresh failed:', competitorResult.reason)
+    const hasRejectedJob = trendResult.status === 'rejected' || competitorResult.status === 'rejected'
     return NextResponse.json({
+      ok: !hasRejectedJob,
       trends: trendResult.status === 'fulfilled' ? trendResult.value : { processed: 0, updated: 0, failed: 1, skipped: 0 },
       competitors: competitorResult.status === 'fulfilled' ? competitorResult.value : { processed: 0, updated: 0, failed: 1 },
-    })
+    }, { status: hasRejectedJob ? 500 : 200 })
   } catch (e) {
-    // A háttérfrissítés hibája soha nem törheti el a szolgáltatást —
-    // itt csak logolunk és 200-at adunk vissza üres eredménnyel.
+    // A schedulernek valódi hibastátusz kell, különben a monitor sikeresnek
+    // tekintené a teljesen meghiúsult futást.
     console.error('[cron/refresh-trends] unexpected failure (non-blocking):', e)
-    return NextResponse.json({ processed: 0, updated: 0, failed: 1, skipped: 0 })
+    return NextResponse.json({ ok: false, processed: 0, updated: 0, failed: 1, skipped: 0 }, { status: 500 })
   }
 }

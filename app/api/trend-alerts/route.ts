@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { classifyAlerts, type AlertFrequency, type TrackedTrendForAlert } from '@/lib/trend-alerts'
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const ALERT_SIGNATURE_PATTERN = /^[0-9a-f]{16}$/
+
 // GET — aktiv (meg nem elutasitott) trend riasztasok. Nincs kredit, nincs uj
 // AI/YouTube hivas — a mar meglevo, cron/manualis frissitesekbol szarmazo
 // snapshot-adatra epul.
@@ -76,7 +79,7 @@ export async function PATCH(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
   const { candidate_id, alert_frequency } = await request.json()
-  if (typeof candidate_id !== 'string' || !['daily', 'weekly', 'off'].includes(alert_frequency)) return NextResponse.json({ error: 'Hibás riasztási beállítás.' }, { status: 400 })
+  if (typeof candidate_id !== 'string' || !UUID_PATTERN.test(candidate_id) || !['daily', 'weekly', 'off'].includes(alert_frequency)) return NextResponse.json({ error: 'Hibás riasztási beállítás.' }, { status: 400 })
   const admin = createAdminClient()
   const { data, error } = await admin.from('tracked_trend_candidates').update({ alert_frequency }).eq('id', candidate_id).eq('user_id', user.id).select('id').single()
   if (error || !data) return NextResponse.json({ error: 'A riasztási beállítás mentése sikertelen.' }, { status: 500 })
@@ -91,7 +94,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
   const { candidate_id, alert_signature } = await request.json()
-  if (!candidate_id || !alert_signature) return NextResponse.json({ error: 'Hiányzó adatok' }, { status: 400 })
+  if (typeof candidate_id !== 'string' || !UUID_PATTERN.test(candidate_id) || typeof alert_signature !== 'string' || !ALERT_SIGNATURE_PATTERN.test(alert_signature)) return NextResponse.json({ error: 'Hibás riasztási adatok' }, { status: 400 })
 
   const admin = createAdminClient()
   const { data: ownedCandidate } = await admin

@@ -80,7 +80,7 @@ export async function promoteToTrackedCandidate(input: TrackCandidateInput): Pro
     const createdAt = input.generatedAt || new Date().toISOString()
     const { next_check_at, refresh_priority } = computeSchedule(createdAt, input.opportunityScore ?? null, input.confidence ?? null)
 
-    await admin.from('tracked_trend_candidates').upsert({
+    const { error } = await admin.from('tracked_trend_candidates').upsert({
       user_id: input.userId,
       candidate_topic: input.candidateTopic,
       niche: input.niche || null,
@@ -95,6 +95,7 @@ export async function promoteToTrackedCandidate(input: TrackCandidateInput): Pro
       refresh_priority,
       status: 'active',
     }, { onConflict: 'user_id,candidate_topic', ignoreDuplicates: false })
+    if (error) throw error
   } catch (e) {
     console.warn('[trend-tracking] promoteToTrackedCandidate failed (non-blocking):', e)
   }
@@ -117,17 +118,18 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
 
   let due: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null }[] = []
   try {
-    const { data } = await admin
+    const { data, error } = await admin
       .from('tracked_trend_candidates')
       .select('id, candidate_topic, youtube_video_ids, web_source_ids, created_at, opportunity_score, confidence')
       .eq('status', 'active')
       .lte('next_check_at', new Date().toISOString())
       .order('refresh_priority', { ascending: true })
       .limit(limit)
+    if (error) throw error
     due = data || []
   } catch (e) {
-    console.warn('[trend-tracking] failed to load due candidates (non-blocking):', e)
-    return result
+    console.error('[trend-tracking] failed to load due candidates:', e)
+    throw e
   }
 
   for (const candidate of due) {
@@ -140,9 +142,10 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
       console.warn(`[trend-tracking] refresh failed for candidate ${candidate.id} (non-blocking):`, e)
       // Backoff — ne próbálkozzon azonnal újra a legközelebbi cron futáskor
       try {
-        await admin.from('tracked_trend_candidates').update({
+        const { error: backoffError } = await admin.from('tracked_trend_candidates').update({
           next_check_at: new Date(Date.now() + FAILURE_RETRY_HOURS * 60 * 60 * 1000).toISOString(),
         }).eq('id', candidate.id)
+        if (backoffError) console.error(`[trend-tracking] failed to persist backoff for ${candidate.id}:`, backoffError)
       } catch { /* best-effort */ }
     }
   }
@@ -152,7 +155,8 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
 
 async function refreshOneCandidate(
   admin: ReturnType<typeof adminClient>,
-  candidate: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null }
+  candidate: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null },
+  resetBaseline = false,
 ) {
   const videoIds = (candidate.youtube_video_ids || []).filter(Boolean)
 
@@ -172,15 +176,16 @@ async function refreshOneCandidate(
   }
 
   // Előző snapshot a delta/velocity számításhoz
-  const { data: prevSnapshots } = await admin
+  const { data: prevSnapshots, error: prevError } = await admin
     .from('trend_candidate_snapshots')
     .select('total_views, checked_at, trend_velocity, youtube_relevant_videos_count')
     .eq('tracked_candidate_id', candidate.id)
     .order('checked_at', { ascending: false })
     .limit(1)
+  if (prevError) throw prevError
 
   const prev = prevSnapshots?.[0]
-  const comparableSample = prev && Number(prev.youtube_relevant_videos_count || 0) === relevantCount && relevantCount === videoIds.length
+  const comparableSample = !resetBaseline && prev && Number(prev.youtube_relevant_videos_count || 0) === relevantCount && relevantCount === videoIds.length
   const rawViewsDelta = prev && comparableSample ? totalViews - (prev.total_views || 0) : null
   const viewsDelta = rawViewsDelta != null && rawViewsDelta >= 0 ? rawViewsDelta : null
   const hoursSincePrev = prev ? (Date.now() - new Date(prev.checked_at).getTime()) / (1000 * 60 * 60) : null
@@ -190,7 +195,7 @@ async function refreshOneCandidate(
 
   const engagementRate = totalViews > 0 ? Math.round(((totalLikes + totalComments) / totalViews) * 10000) / 100 : null
 
-  await admin.from('trend_candidate_snapshots').insert({
+  const { data: snapshot, error: snapshotError } = await admin.from('trend_candidate_snapshots').insert({
     tracked_candidate_id: candidate.id,
     avg_opportunity_score: candidate.opportunity_score,
     total_views: totalViews,
@@ -201,7 +206,8 @@ async function refreshOneCandidate(
     views_delta: viewsDelta,
     trend_velocity: trendVelocity,
     trend_status: trendStatus,
-  })
+  }).select('id').single()
+  if (snapshotError || !snapshot) throw snapshotError || new Error('Trend snapshot insert failed')
 
   const { next_check_at, refresh_priority, status } = computeSchedule(
     candidate.created_at,
@@ -209,15 +215,29 @@ async function refreshOneCandidate(
     candidate.confidence
   )
 
-  await admin.from('tracked_trend_candidates').update({
+  const { data: updated, error: updateError } = await admin.from('tracked_trend_candidates').update({
     last_checked_at: new Date().toISOString(),
     next_check_at,
     refresh_priority,
     status,
-  }).eq('id', candidate.id)
+  }).eq('id', candidate.id).select('id').single()
+  if (updateError || !updated) {
+    const { error: cleanupError } = await admin.from('trend_candidate_snapshots').delete().eq('id', snapshot.id)
+    if (cleanupError) console.error('[trend-tracking] failed to roll back orphan snapshot:', cleanupError)
+    throw updateError || new Error('Tracked candidate update failed')
+  }
 }
 
-export async function refreshTrackedCandidateNow(candidateId: string): Promise<void> {
+export function sameEvidenceSet(left: unknown, right: unknown): boolean {
+  const normalize = (value: unknown) => Array.isArray(value)
+    ? Array.from(new Set(value.filter((item): item is string => typeof item === 'string' && item.length > 0))).sort()
+    : []
+  const a = normalize(left)
+  const b = normalize(right)
+  return a.length === b.length && a.every((item, index) => item === b[index])
+}
+
+export async function refreshTrackedCandidateNow(candidateId: string, options?: { resetBaseline?: boolean }): Promise<void> {
   const admin = adminClient()
   const { data: candidate, error } = await admin
     .from('tracked_trend_candidates')
@@ -229,5 +249,5 @@ export async function refreshTrackedCandidateNow(candidateId: string): Promise<v
     throw new Error('Tracked candidate not found')
   }
 
-  await refreshOneCandidate(admin, candidate)
+  await refreshOneCandidate(admin, candidate, options?.resetBaseline === true)
 }

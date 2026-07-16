@@ -12,16 +12,24 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url)
   const candidateId = searchParams.get('id')
+  if (candidateId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidateId)) {
+    return NextResponse.json({ error: 'Invalid trend identifier.' }, { status: 400 })
+  }
   if (!candidateId) return NextResponse.json({ error: 'id megadása kötelező' }, { status: 400 })
 
   const admin = createAdminClient()
 
-  const { data: candidate } = await admin
+  const { data: candidate, error: candidateError } = await admin
     .from('tracked_trend_candidates')
     .select('id, candidate_topic, youtube_video_ids, web_source_ids')
     .eq('id', candidateId)
     .eq('user_id', user.id)
     .single()
+
+  if (candidateError) {
+    if (candidateError.code === 'PGRST116') return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ error: 'Failed to load trend evidence.' }, { status: 500 })
+  }
 
   if (!candidate) return NextResponse.json({ error: 'Nem található' }, { status: 404 })
 
@@ -50,15 +58,18 @@ export async function GET(request: NextRequest) {
     })
     .filter((item): item is { title: string; url: string; snippet: string; source: string; date: string } => !!item)
 
-  const videoIds: string[] = (candidate.youtube_video_ids || []).filter(Boolean)
+  const videoIds: string[] = Array.isArray(candidate.youtube_video_ids)
+    ? candidate.youtube_video_ids.filter((id: unknown): id is string => typeof id === 'string' && /^[\w-]{11}$/.test(id)).slice(0, 50)
+    : []
   if (videoIds.length === 0) {
     return NextResponse.json({ videos: [], web_sources, candidate_topic: candidate.candidate_topic })
   }
 
-  const [{ data: videoRows }, { data: snapshotRows }] = await Promise.all([
+  const [{ data: videoRows, error: videosError }, { data: snapshotRows, error: snapshotsError }] = await Promise.all([
     admin.from('youtube_videos').select('video_id, title, channel_id, channel_title, published_at').in('video_id', videoIds),
     admin.from('youtube_video_snapshots').select('video_id, view_count, like_count, comment_count, checked_at').in('video_id', videoIds).order('checked_at', { ascending: false }),
   ])
+  if (videosError || snapshotsError) return NextResponse.json({ error: 'Failed to load trend video evidence.' }, { status: 500 })
 
   const latestSnapshotByVideo = new Map<string, { view_count: number; like_count: number; comment_count: number; checked_at: string }>()
   for (const s of snapshotRows || []) {
