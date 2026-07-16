@@ -10,7 +10,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { plan } = await req.json() as { plan: string }
+    const body = await req.json().catch(() => null) as { plan?: unknown } | null
+    const plan = typeof body?.plan === 'string' ? body.plan : ''
     if (!plan || !(plan in PLANS)) {
       return NextResponse.json({ error: 'Invalid plan' }, { status: 400 })
     }
@@ -19,11 +20,12 @@ export async function POST(req: NextRequest) {
     const admin = createAdminClient()
 
     // Get or create stripe customer
-    const { data: creditRow } = await admin
+    const { data: creditRow, error: creditReadError } = await admin
       .from('user_credits')
       .select('stripe_customer_id, stripe_subscription_id, subscription_status')
       .eq('user_id', user.id)
       .single()
+    if (creditReadError && creditReadError.code !== 'PGRST116') throw creditReadError
 
     if (creditRow?.stripe_subscription_id
       && ['active', 'trialing', 'past_due'].includes(creditRow.subscription_status || '')) {
@@ -39,12 +41,16 @@ export async function POST(req: NextRequest) {
       })
       stripeCustomerId = customer.id
 
-      await admin
+      const { error: customerSaveError } = await admin
         .from('user_credits')
         .upsert({
           user_id: user.id,
           stripe_customer_id: stripeCustomerId,
         }, { onConflict: 'user_id' })
+      if (customerSaveError) {
+        try { await stripe.customers.del(stripeCustomerId) } catch (cleanupError) { console.error('Stripe customer cleanup failed:', cleanupError) }
+        throw customerSaveError
+      }
     }
 
     const session = await stripe.checkout.sessions.create({

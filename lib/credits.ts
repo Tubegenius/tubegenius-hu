@@ -124,7 +124,7 @@ export async function logUsage(
   const admin = adminClient()
   const estimatedCostUsd = estimateCost(model, inputTokens, outputTokens)
 
-  await admin.from('ai_usage_logs').insert({
+  const { error: usageLogError } = await admin.from('ai_usage_logs').insert({
     user_id: userId,
     feature_name: feature,
     model,
@@ -134,6 +134,7 @@ export async function logUsage(
     credits_charged: 0, // a tényleges levonás külön történik
     metadata,
   })
+  if (usageLogError) console.error('[Credits] usage telemetry log failed:', usageLogError)
 }
 
 // ─── Kredit levonás egyszer, a feature teljes díja ───
@@ -203,7 +204,7 @@ export async function chargeFeature(
     }
   }
 
-  await admin.from('ai_usage_logs').insert({
+  const { error: chargeLogError } = await admin.from('ai_usage_logs').insert({
     user_id: userId,
     feature_name: feature,
     model: 'combined',
@@ -213,6 +214,11 @@ export async function chargeFeature(
     credits_charged: cost,
     metadata: { ...metadata, type: 'charge' },
   })
+  if (chargeLogError) {
+    console.error('[Credits] charge audit log failed, refunding:', chargeLogError)
+    const refund = await refundCreditsAfterPersistenceFailure(userId, feature, cost, { ...metadata, reason: 'charge_audit_log_failed' })
+    return { success: false, new_balance: refund.new_balance, error: refund.success ? 'A kreditművelet naplózása sikertelen volt, a kreditet visszaadtuk.' : 'A kreditművelet helyreállítása sikertelen.' }
+  }
 
   return { success: true, new_balance: updatedBalance }
 }
@@ -232,11 +238,12 @@ export async function refundCreditsAfterPersistenceFailure(
     const { data: updated, error } = await admin.from('user_credits').update({ balance: refund.newBalance, total_used: refund.newTotalUsed })
       .eq('user_id', userId).eq('balance', currentBalance).select('balance').single()
     if (updated) {
-      await admin.from('ai_usage_logs').insert({
+      const { error: refundLogError } = await admin.from('ai_usage_logs').insert({
         user_id: userId, feature_name: feature, model: 'system_refund', input_tokens: 0,
         output_tokens: 0, estimated_cost_usd: 0, credits_charged: -cost,
         metadata: { ...metadata, type: 'persistence_failure_refund' },
       })
+      if (refundLogError) console.error('[Credits] refund audit log failed:', refundLogError)
       return { success: true, new_balance: Number(updated.balance) }
     }
     if (!isOptimisticCreditLockMiss(error)) return { success: false }

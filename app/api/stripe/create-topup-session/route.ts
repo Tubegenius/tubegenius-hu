@@ -10,7 +10,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { package: pkg } = await req.json() as { package: string }
+    const body = await req.json().catch(() => null) as { package?: unknown } | null
+    const pkg = typeof body?.package === 'string' ? body.package : ''
     if (!pkg || !(pkg in TOPUPS)) {
       return NextResponse.json({ error: 'Invalid package' }, { status: 400 })
     }
@@ -18,15 +19,17 @@ export async function POST(req: NextRequest) {
     const topupConfig = TOPUPS[pkg as TopupKey]
     const admin = createAdminClient()
 
-    const { data: creditRow } = await admin
+    const { data: creditRow, error: creditReadError } = await admin
       .from('user_credits')
       .select('stripe_customer_id, subscription_status')
       .eq('user_id', user.id)
       .single()
+    if (creditReadError && creditReadError.code !== 'PGRST116') throw creditReadError
 
     if (!creditRow || !['active', 'trialing'].includes(creditRow.subscription_status)) {
       return NextResponse.json({ error: 'Active subscription required for top-ups' }, { status: 403 })
     }
+    if (!creditRow.stripe_customer_id) return NextResponse.json({ error: 'A Stripe ügyfélazonosító hiányzik.' }, { status: 409 })
 
     const session = await stripe.checkout.sessions.create({
       customer: creditRow.stripe_customer_id,

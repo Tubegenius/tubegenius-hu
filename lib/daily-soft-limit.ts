@@ -51,7 +51,7 @@ export async function checkDailySoftLimit(
   override = false
 ): Promise<DailySoftLimitDecision> {
   const admin = adminClient()
-  const [{ data: credits }, { data: recentCharges }] = await Promise.all([
+  const [{ data: credits, error: creditsError }, { data: recentCharges, error: chargesError }] = await Promise.all([
     admin.from('user_credits').select('plan').eq('user_id', userId).single(),
     admin.from('ai_usage_logs')
       .select('credits_charged,created_at')
@@ -61,13 +61,15 @@ export async function checkDailySoftLimit(
       .neq('credits_charged', 0)
       .gte('created_at', new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString()),
   ])
+  if (creditsError || !credits) throw creditsError || new Error('Credit plan not found')
+  if (chargesError) throw chargesError
   const today = budapestDateKey(new Date())
   const usedToday = Math.max(0, (recentCharges || []).reduce((sum, row) => {
     return budapestDateKey(new Date(row.created_at)) === today
       ? sum + Number(row.credits_charged || 0)
       : sum
   }, 0))
-  return evaluateDailySoftLimit({ plan: credits?.plan || 'free', usedToday, cost, override })
+  return evaluateDailySoftLimit({ plan: credits.plan || 'free', usedToday, cost, override })
 }
 
 export function dailySoftLimitError(decision: DailySoftLimitDecision) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { stripe, PLANS, TOPUPS, PlanKey, TopupKey } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase-server'
 import Stripe from 'stripe'
+import { canClaimFailedWebhook, isSettledTopupCheckout } from '@/lib/stripe-event-policy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,11 +50,11 @@ export async function POST(req: NextRequest) {
     if (claimError.code === '23505') {
       const { data: previous } = await admin.from('stripe_webhook_events')
         .select('status').eq('event_id', event.id).single()
-      if (previous?.status === 'failed') {
-        const { error: retryError } = await admin.from('stripe_webhook_events')
+      if (canClaimFailedWebhook(previous?.status || null)) {
+        const { data: retryClaim, error: retryError } = await admin.from('stripe_webhook_events')
           .update({ status: 'processing', error_message: null, processed_at: null })
-          .eq('event_id', event.id).eq('status', 'failed')
-        if (retryError) return NextResponse.json({ error: 'Retry claim failed' }, { status: 500 })
+          .eq('event_id', event.id).eq('status', 'failed').select('event_id').single()
+        if (retryError || !retryClaim) return NextResponse.json({ error: 'Retry claim failed' }, { status: 500 })
       } else {
         return NextResponse.json({ received: true, duplicate: true })
       }
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
           // egyenesen a terv kezdo kreditjere allitjuk (nem increment,
           // hiszen ez egy uj/kezdo allapot), es a monthly_allowance-t is
           // szinkronban tartjuk a UI szamara (korabban ez sem toltodott ki).
-          await admin.from('user_credits').upsert({
+          const { error: subscriptionSaveError } = await admin.from('user_credits').upsert({
             user_id: userId,
             plan,
             subscription_status: 'active',
@@ -88,7 +89,9 @@ export async function POST(req: NextRequest) {
             stripe_subscription_id: session.subscription as string,
             monthly_allowance: planConfig.credits,
           }, { onConflict: 'user_id' })
+          if (subscriptionSaveError) throw subscriptionSaveError
         } else if (session.mode === 'payment') {
+          if (!isSettledTopupCheckout(session.mode, session.payment_status)) throw new Error('Top-up checkout is not paid')
           const pkg = session.metadata?.package as TopupKey
           const topupConfig = TOPUPS[pkg]
           if (!topupConfig) break
@@ -105,12 +108,7 @@ export async function POST(req: NextRequest) {
           })
           if (rpcError) throw rpcError
 
-          await admin.from('ai_usage_logs').insert({
-            user_id: userId,
-            action: 'topup_purchase',
-            credits_used: -topupConfig.credits,
-            metadata: { package: pkg, stripe_event_id: event.id, new_balance: newBalance },
-          })
+          if (newBalance == null) throw new Error('Top-up credit mutation returned no balance')
         }
         break
       }
@@ -121,11 +119,12 @@ export async function POST(req: NextRequest) {
         if (!invoiceSubscription) break
 
         // Find user by subscription ID
-        const { data: userRow } = await admin
+        const { data: userRow, error: userLookupError } = await admin
           .from('user_credits')
           .select('user_id, plan')
           .eq('stripe_subscription_id', invoiceSubscription as string)
           .single()
+        if (userLookupError && userLookupError.code !== 'PGRST116') throw userLookupError
 
         let resolvedUserId = userRow?.user_id as string | undefined
         let resolvedPlan = userRow?.plan as PlanKey | undefined
@@ -151,24 +150,19 @@ export async function POST(req: NextRequest) {
         })
         if (rpcError) throw rpcError
 
-        // Log
-        await admin.from('ai_usage_logs').insert({
-          user_id: resolvedUserId,
-          action: 'subscription_renewal',
-          credits_used: -planConfig.credits,
-          metadata: { plan: resolvedPlan, new_balance: newBalance, stripe_event_id: event.id },
-        })
+        if (newBalance == null) throw new Error('Subscription credit mutation returned no balance')
         break
       }
 
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription
-        const { data: userRow } = await admin
+        const { data: userRow, error: userLookupError } = await admin
           .from('user_credits')
           .select('user_id')
           .eq('stripe_subscription_id', subscription.id)
           .single()
 
+        if (userLookupError && userLookupError.code !== 'PGRST116') throw userLookupError
         if (!userRow) break
 
         // Check if plan changed via price lookup
@@ -180,27 +174,30 @@ export async function POST(req: NextRequest) {
           // UI ("X / keret") azonnal a helyes szamot mutassa — a balance-t itt
           // nem bantjuk, az a kovetkezo invoice.payment_succeeded esemenynel
           // ervenyesul az uj terv szerint.
-          await admin.from('user_credits').update({
+          const { data: updatedSubscription, error: subscriptionUpdateError } = await admin.from('user_credits').update({
             plan: newPlan,
             subscription_status: subscription.status === 'active' ? 'active' : subscription.status,
             monthly_allowance: PLANS[newPlan as PlanKey].credits,
-          }).eq('user_id', userRow.user_id)
+          }).eq('user_id', userRow.user_id).select('user_id').single()
+          if (subscriptionUpdateError || !updatedSubscription) throw subscriptionUpdateError || new Error('Subscription update affected no row')
         }
         break
       }
 
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription
-        await admin.from('user_credits').update({
+        const { data: canceledSubscription, error: cancellationError } = await admin.from('user_credits').update({
           subscription_status: 'canceled',
-        }).eq('stripe_subscription_id', subscription.id)
+        }).eq('stripe_subscription_id', subscription.id).select('user_id').single()
+        if (cancellationError || !canceledSubscription) throw cancellationError || new Error('Subscription cancellation affected no row')
         break
       }
     }
 
-    await admin.from('stripe_webhook_events')
+    const { data: completedEvent, error: completionError } = await admin.from('stripe_webhook_events')
       .update({ status: 'completed', processed_at: new Date().toISOString() })
-      .eq('event_id', event.id)
+      .eq('event_id', event.id).eq('status', 'processing').select('event_id').single()
+    if (completionError || !completedEvent) throw completionError || new Error('Webhook completion status update failed')
   } catch (err: any) {
     console.error('Webhook handler error:', err)
     // Az esemeny mar "claim-elve" van (lasd fent), ezert egy Stripe-retry
@@ -209,9 +206,10 @@ export async function POST(req: NextRequest) {
     // hagyatkozunk a Stripe automatikus retry-jara. A 'failed' status +
     // error_message nyomon kovetheto es kezi kivizsgalast igenyel, ha
     // kredit-mutalo lepesnel (topup/renewal) tortent a hiba.
-    await admin.from('stripe_webhook_events')
+    const { error: failureStatusError } = await admin.from('stripe_webhook_events')
       .update({ status: 'failed', error_message: String(err?.message || err), processed_at: new Date().toISOString() })
       .eq('event_id', event.id)
+    if (failureStatusError) console.error('Webhook failure status could not be persisted:', failureStatusError)
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
 

@@ -11,11 +11,12 @@ export async function POST(req: NextRequest) {
     }
 
     const admin = createAdminClient()
-    const { data: creditRow } = await admin
+    const { data: creditRow, error: creditReadError } = await admin
       .from('user_credits')
       .select('stripe_customer_id')
       .eq('user_id', user.id)
       .single()
+    if (creditReadError && creditReadError.code !== 'PGRST116') throw creditReadError
 
     if (!creditRow?.stripe_customer_id) {
       return NextResponse.json({ error: 'No subscription found' }, { status: 404 })

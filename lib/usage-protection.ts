@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { calculateCreditMutation, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
+import { refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { checkDailySoftLimit } from '@/lib/daily-soft-limit'
 
 // ── Free user limitek ────────────────────────────────────────
@@ -234,7 +235,7 @@ export async function logFreeProductUse(
   extraMetadata: Record<string, unknown> = {},
 ) {
   const admin = adminClient()
-  await admin.from('ai_usage_logs').insert({
+  const { error: freeLogError } = await admin.from('ai_usage_logs').insert({
     user_id: userId,
     feature_name: feature,
     model: 'youtube_search',
@@ -244,6 +245,7 @@ export async function logFreeProductUse(
     credits_charged: 0,
     metadata: { type: 'free_quota_use', feature, ...extraMetadata },
   })
+  if (freeLogError) console.error('[UsageProtection] free usage log failed:', freeLogError)
 }
 
 // ── Kredit levonás (protected feature) ───────────────────────
@@ -310,7 +312,7 @@ export async function chargeProtectedFeature(
     }
   }
 
-  await admin.from('ai_usage_logs').insert({
+  const { error: chargeLogError } = await admin.from('ai_usage_logs').insert({
     user_id: userId,
     feature_name: feature,
     model: 'youtube_search',
@@ -320,6 +322,11 @@ export async function chargeProtectedFeature(
     credits_charged: cost,
     metadata: { type: 'protected_feature_charge', feature, ...extraMetadata },
   })
+  if (chargeLogError) {
+    console.error('[UsageProtection] charge audit log failed, refunding:', chargeLogError)
+    const refund = await refundCreditsAfterPersistenceFailure(userId, feature, cost, { ...extraMetadata, reason: 'protected_charge_audit_log_failed' })
+    return { success: false, newBalance: refund.new_balance ?? updatedBalance, error: refund.success ? 'A kreditművelet naplózása sikertelen volt, a kreditet visszaadtuk.' : 'A kreditművelet helyreállítása sikertelen.' }
+  }
 
   return { success: true, newBalance: updatedBalance }
 }

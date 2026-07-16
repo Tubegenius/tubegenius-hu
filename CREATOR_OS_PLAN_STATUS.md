@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — STRIPE ÉS KREDIT PÉNZÜGYI INTEGRITÁSI HARDENING
+
+- A Stripe webhook minden pénzügyi és előfizetési adatbázisműveletének eredményét ellenőrzi. Sikertelen mentés többé nem jelölhető `completed` eseménynek; a failed-event retry claim állapotfeltételes és egyetlen feldolgozóhoz kerülhet.
+- Top-up kredit kizárólag `payment` módú, `paid` állapotú checkout után jár. A hibás régi `ai_usage_logs.action/credits_used` top-up/renewal írások megszűntek; a pénzügyi jóváírás hiteles forrása az idempotens `credit_ledger`.
+- A napi soft limit profil- vagy usage-log adatbázishibánál fail-closed, nem számol csendben nulla napi használattal. Ha a CAS kreditlevonás auditlogja nem menthető, a központi és kvótás kreditkapu is automatikus refundot kísérel meg, és nem jelent sikeres levonást.
+- A checkout/portal útvonalak megkülönböztetik a hiányzó rekordot az adatbázishibától, validálják a JSON inputot, és új Stripe customer mentési hibájánál takarítást kísérelnek meg. 20 tesztfájl 77 tesztje és a TypeScript-ellenőrzés sikeres; valódi Stripe sandbox webhook E2E még szükséges a blokk teljes lezárásához.
+
 ## 2026-07-16 — NICHE DISCOVERY MÓDSZERTANI ÉS CACHE-HARDENING
 
 - A csatorna-niche cache most bizonyíthatóan az aktív YouTube channel ID-hoz tartozik. Csatornaváltáskor a régi jelöltek nem nyílnak vissza másik csatorna eredményeként; a feloldás mindig a kanonikus channel ID-val történik.
