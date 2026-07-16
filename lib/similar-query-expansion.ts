@@ -53,6 +53,7 @@ export async function generateSimilarVideoQueries(
   region: 'HU' | 'US',
   language: string,
   topicCategory?: string,
+  onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void,
 ): Promise<SimilarQueryExpansion> {
   const cacheKey = buildCacheKey(input, region, language)
   const cached = expansionCache.get(cacheKey)
@@ -99,6 +100,7 @@ KRITIKUS JSON SZABALYOK:
       promptTemplateId: 'similar_videos_query_expansion',
       promptVersion: 'v1',
     })
+    onAIUsage?.({ inputTokens: aiCall.usage.inputTokens, outputTokens: aiCall.usage.outputTokens, estimatedCost: aiCall.estimatedCost })
 
     const parsed = extractJson<SimilarQueryExpansion>(aiCall.text)
 

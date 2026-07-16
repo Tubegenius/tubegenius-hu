@@ -12,7 +12,8 @@ import { youtubeSearch, youtubeStats, getEffectiveBudget, quotaSummary, startNew
 import { generateSimilarVideoQueries } from '@/lib/similar-query-expansion'
 import { calculateNicheFit } from '@/lib/niche-fit'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
-import { refundCreditsAfterPersistenceFailure } from '@/lib/credits'
+import { logUsage, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
+import { MODELS } from '@/lib/models'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { normalizeTopic as normalizeTopicForHash, buildSearchContextHash, getCachedSearch, touchLastOpened, saveSearchResult } from '@/lib/similar-videos-cache'
@@ -183,7 +184,7 @@ function hasTranslatedMeaning(topic: string, globalTopic: string) {
   return globalTopic.toLowerCase() !== normalizedOriginal
 }
 
-async function buildQueriesWithHaiku(topicRaw: string, region: Region): Promise<{ queries: string[]; expansion: Awaited<ReturnType<typeof generateSimilarVideoQueries>> | null }> {
+async function buildQueriesWithHaiku(topicRaw: string, region: Region, onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void): Promise<{ queries: string[]; expansion: Awaited<ReturnType<typeof generateSimilarVideoQueries>> | null }> {
   const topic = normalizeTopic(topicRaw)
   const budget = getEffectiveBudget('similarVideos')
 
@@ -191,6 +192,8 @@ async function buildQueriesWithHaiku(topicRaw: string, region: Region): Promise<
     topic,
     region === 'US' ? 'US' : 'HU',
     region === 'US' ? 'en' : 'hu',
+    undefined,
+    onAIUsage,
   )
 
   const queries: string[] = []
@@ -547,7 +550,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Haiku query expansion — bármilyen magyar témát kezel
-    const { queries, expansion: haikuExpansion } = await buildQueriesWithHaiku(topic, regionCode)
+    const queryAiUsage = { inputTokens: 0, outputTokens: 0, estimatedCost: 0 }
+    const { queries, expansion: haikuExpansion } = await buildQueriesWithHaiku(topic, regionCode, usage => Object.assign(queryAiUsage, usage))
+    if (queryAiUsage.inputTokens + queryAiUsage.outputTokens > 0) {
+      await logUsage(userId, 'similar_videos', MODELS.fast, queryAiUsage.inputTokens, queryAiUsage.outputTokens, { type: 'similar_video_query_expansion' })
+    }
     if (queries.length === 0) return NextResponse.json({ videos: [], queries_used: [] })
 
     // Párhuzamos keresés — angol query-k US-ben, magyar query-k HU-ban
@@ -787,6 +794,13 @@ export async function POST(request: NextRequest) {
         summaryJson: { result_count: polishedFinalVideos.length, topic },
         creditCost: usageCheck.cost > 0 ? usageCheck.cost : 0,
         freshForHours: 6,
+        ...(queryAiUsage.estimatedCost > 0 ? {
+          provider: 'anthropic' as const,
+          model: MODELS.fast,
+          promptTemplateId: 'similar_videos_query_expansion',
+          promptVersion: 'v1',
+          estimatedCost: queryAiUsage.estimatedCost,
+        } : {}),
       })
       if (!paidSave.success) {
         console.error('[SimilarVideos] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)

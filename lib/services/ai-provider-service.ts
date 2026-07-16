@@ -12,6 +12,7 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { estimateCost } from '@/lib/credits'
+import { MODELS } from '@/lib/models'
 import '@/lib/prompts/catalog'
 import { assertPromptTemplateRegistered } from '@/lib/prompts/template-registry'
 
@@ -42,6 +43,29 @@ export interface AICallResult {
   promptVersion: string | null
 }
 
+const ALLOWED_MODELS = new Set<string>(Object.values(MODELS))
+const MAX_OUTPUT_TOKENS = 8192
+const MAX_PROMPT_CHARACTERS = 500_000
+
+export function validateAICallInput(input: AICallInput): void {
+  if (!ALLOWED_MODELS.has(input.model)) throw new Error(`Unsupported AI model: ${input.model}`)
+  if (!Number.isInteger(input.maxTokens) || input.maxTokens < 1 || input.maxTokens > MAX_OUTPUT_TOKENS) throw new Error('Invalid AI output token limit')
+  if (!Array.isArray(input.messages) || input.messages.length < 1 || input.messages.length > 20) throw new Error('Invalid AI message count')
+  const messageCharacters = input.messages.reduce((sum, message) => {
+    if (!message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string' || !message.content.trim()) throw new Error('Invalid AI message')
+    return sum + message.content.length
+  }, 0)
+  const totalCharacters = messageCharacters + (input.system?.length || 0)
+  if (totalCharacters > MAX_PROMPT_CHARACTERS) throw new Error('AI prompt is too large')
+  if (!input.promptTemplateId?.trim() || !input.promptVersion?.trim()) throw new Error('Every AI call must declare a versioned prompt template')
+}
+
+export function assertAICompletion(stopReason: string | null, text: string, inputTokens: number, outputTokens: number, maxTokens: number): void {
+  if (stopReason === 'max_tokens') throw new Error(`AI response truncated at max token limit (${maxTokens})`)
+  if (!text.trim()) throw new Error('AI provider returned an empty response')
+  if (![inputTokens, outputTokens].every(value => Number.isFinite(value) && value >= 0)) throw new Error('AI provider returned invalid usage')
+}
+
 let anthropicClient: Anthropic | null = null
 function getAnthropicClient(): Anthropic {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('Anthropic is not configured')
@@ -67,6 +91,7 @@ async function callAnthropic(input: AICallInput): Promise<AICallResult> {
 
   const inputTokens = message.usage.input_tokens
   const outputTokens = message.usage.output_tokens
+  assertAICompletion(message.stop_reason, text, inputTokens, outputTokens, input.maxTokens)
 
   return {
     text,
@@ -83,10 +108,8 @@ async function callAnthropic(input: AICallInput): Promise<AICallResult> {
 // Whisper-hivasa (fajl-alapu, nem szoveges chat completion) mas alaku API,
 // azt kulon fazisban erdemes idehozni, nem ezen az interfeszen keresztul.
 export async function callAIProvider(input: AICallInput): Promise<AICallResult> {
-  if (!input.promptTemplateId || !input.promptVersion) {
-    throw new Error('Every AI call must declare a versioned prompt template')
-  }
-  assertPromptTemplateRegistered(input.promptTemplateId, input.promptVersion)
+  validateAICallInput(input)
+  assertPromptTemplateRegistered(input.promptTemplateId!, input.promptVersion!)
   const provider = input.provider || 'anthropic'
   if (provider === 'anthropic') return callAnthropic(input)
   throw new Error(`Nem tamogatott AI provider: ${provider}`)
@@ -96,7 +119,8 @@ export async function callAIProvider(input: AICallInput): Promise<AICallResult> 
 // eltero minosegu extractJson()-valtozatok helyett. Kezeli a ```json code
 // fence-eket es mind objektum ({...}), mind tomb ([...]) alaku valaszokat.
 export function extractJson<T = unknown>(text: string): T {
-  const cleaned = text.replace(/```json|```/g, '').trim()
+  if (typeof text !== 'string' || !text.trim()) throw new Error('AI response is empty')
+  const cleaned = text.replace(/```(?:json)?/gi, '').trim()
 
   const firstBrace = cleaned.indexOf('{')
   const firstBracket = cleaned.indexOf('[')
@@ -106,7 +130,9 @@ export function extractJson<T = unknown>(text: string): T {
   const start = useBracket ? firstBracket : firstBrace
   const end = cleaned.lastIndexOf(closeChar)
 
-  const rawSlice = start !== -1 && end !== -1 && end > start ? cleaned.slice(start, end + 1) : cleaned
+  if (start === -1 || end === -1 || end <= start) throw new Error('AI response contains no JSON object or array')
+
+  const rawSlice = cleaned.slice(start, end + 1)
 
   // Claude alkalmanként a promptban tiltott sortoreseket is beszur egy-egy
   // string ertek (pl. "narration") belsejebe, ami nyers JSON.parse-t elrontana —

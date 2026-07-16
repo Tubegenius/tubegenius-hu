@@ -5,6 +5,7 @@
 
 import type { NicheCategory } from './niche-seeds'
 import { callAIProvider, extractJson } from './services/ai-provider-service'
+import { MODELS } from './models'
 
 export interface GeneratedSeedPack {
   label: string
@@ -18,6 +19,7 @@ export interface GeneratedSeeds {
   is_time_sensitive: boolean
   language_note: string
   packs: GeneratedSeedPack[]
+  ai_usage?: { inputTokens: number; outputTokens: number; estimatedCost: number }
 }
 
 export async function generateSeedsForNiche(
@@ -91,7 +93,7 @@ Lehetséges category értékek: news_current, tech_ai, science_medical, space_di
 
   try {
     const aiCall = await callAIProvider({
-      model: 'claude-haiku-4-5-20251001',
+      model: MODELS.fast,
       maxTokens: 1500,
       messages: [{ role: 'user', content: prompt }],
       promptTemplateId: 'seed_generator',
@@ -118,6 +120,11 @@ Lehetséges category értékek: news_current, tech_ai, science_medical, space_di
         is_time_sensitive: parsed.is_time_sensitive || false,
         language_note: parsed.language_note || '',
         packs,
+        ai_usage: {
+          inputTokens: aiCall.usage.inputTokens,
+          outputTokens: aiCall.usage.outputTokens,
+          estimatedCost: aiCall.estimatedCost,
+        },
       }
     }
   } catch (e) {

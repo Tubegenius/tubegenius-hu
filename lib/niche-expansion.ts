@@ -33,6 +33,7 @@ export interface NicheExpansionResult {
   freshness_window_days: number
   is_time_sensitive: boolean
   source: 'ai' | 'fallback'
+  ai_usage?: { inputTokens: number; outputTokens: number; estimatedCost: number }
 }
 
 function asciiFold(value: string): string {
@@ -135,5 +136,6 @@ export async function buildNicheExpansion(input: NicheExpansionInput): Promise<N
     freshness_window_days: generated.freshness_window_days,
     is_time_sensitive: generated.is_time_sensitive,
     source,
+    ai_usage: generated.ai_usage,
   }
 }

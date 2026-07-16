@@ -16,7 +16,7 @@ import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsFo
 import { buildNicheExpansion } from '@/lib/niche-expansion'
 import type { OpportunityTopic, OpportunitySearchMode } from '@/types'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
-import { refundCreditsAfterPersistenceFailure } from '@/lib/credits'
+import { logUsage, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import {
@@ -444,6 +444,12 @@ export async function POST(request: NextRequest) {
     })
 
     const isSpecificTopicMode = searchMode === 'specific_topic'
+    const auxiliaryAiUsage = { inputTokens: 0, outputTokens: 0, estimatedCost: 0 }
+    const collectAiUsage = (usage: typeof auxiliaryAiUsage) => {
+      auxiliaryAiUsage.inputTokens += usage.inputTokens
+      auxiliaryAiUsage.outputTokens += usage.outputTokens
+      auxiliaryAiUsage.estimatedCost += usage.estimatedCost
+    }
     const nicheExpansion = isDrilldown
       ? null
       : await buildNicheExpansion({
@@ -461,6 +467,7 @@ export async function POST(request: NextRequest) {
           // ehhez, ld. lib/trend-radar.ts megjegyzese), NEM nagy niche expanziot.
           maxValidationSeeds: isSpecificTopicMode ? 3 : 12,
         })
+    if (nicheExpansion?.ai_usage) collectAiUsage(nicheExpansion.ai_usage)
 
     const rejectedSeedTopics = nicheExpansion?.rejected_seed_topics || []
 
@@ -536,6 +543,7 @@ export async function POST(request: NextRequest) {
             mainCategory: main_category || '',
             specificFocus: specific_focus || '',
             language: language || 'hu',
+            onAIUsage: collectAiUsage,
           })
         ))
         trendCandidates = broadResults
@@ -556,6 +564,7 @@ export async function POST(request: NextRequest) {
           mainCategory: main_category || '',
           specificFocus: specific_focus || '',
           language: language || 'hu',
+          onAIUsage: collectAiUsage,
         })
       }
 
@@ -764,6 +773,15 @@ KRITIKUS JSON SZABÁLYOK:
       opportunityAiCall = aiCall
     }
 
+    const totalAiUsage = {
+      inputTokens: auxiliaryAiUsage.inputTokens + (opportunityAiCall?.usage.inputTokens || 0),
+      outputTokens: auxiliaryAiUsage.outputTokens + (opportunityAiCall?.usage.outputTokens || 0),
+      estimatedCost: auxiliaryAiUsage.estimatedCost + (opportunityAiCall?.estimatedCost || 0),
+    }
+    if (totalAiUsage.inputTokens + totalAiUsage.outputTokens > 0) {
+      await logUsage(user.id, 'opportunity_engine', MODELS.fast, totalAiUsage.inputTokens, totalAiUsage.outputTokens, { type: 'opportunity_engine_ai' })
+    }
+
     // ── 7. Apply safe output + convert to OpportunityTopic ───
     let topics = visibleCandidates
       .map((vc, i) => {
@@ -936,7 +954,7 @@ KRITIKUS JSON SZABÁLYOK:
           model: opportunityAiCall.model,
           promptTemplateId: opportunityAiCall.promptTemplateId,
           promptVersion: opportunityAiCall.promptVersion,
-          estimatedCost: opportunityAiCall.estimatedCost,
+          estimatedCost: totalAiUsage.estimatedCost,
         } : {}),
       })
       if (!paidSave.success) {

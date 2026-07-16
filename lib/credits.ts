@@ -32,6 +32,8 @@ export type FeatureName =
   | 'channel_audit'
   | 'niche_discovery_refresh'
 
+export type UsageFeatureName = FeatureName | 'opportunity_engine' | 'similar_videos'
+
 // Credit költségek funkciónként (a spec szerint)
 export const CREDIT_COSTS: Record<FeatureName, number> = {
   hashtag_caption: 0.5,
@@ -115,7 +117,7 @@ export async function hasEnoughCredits(userId: string, feature: FeatureName): Pr
 // ─── Csak USAGE LOG (nem von le kreditet) — több AI hívás logolásához egy feature-ön belül ───
 export async function logUsage(
   userId: string,
-  feature: FeatureName,
+  feature: UsageFeatureName,
   model: string,
   inputTokens: number,
   outputTokens: number,

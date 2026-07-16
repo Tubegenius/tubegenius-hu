@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — AI PROVIDER SZERZŐDÉS ÉS KÖLTSÉGMÉRÉS HARDENING
+
+- Minden AI-hívás kizárólag engedélyezett, központilag definiált modellt, regisztrált prompt ID/verziót, korlátozott üzenetszámot, promptméretet és output-token keretet használhat. Üres, hibás usage-adatú vagy tokenlimit miatt csonkolt provider-válasz fail-closed.
+- A közös JSON-feldolgozó az üres és JSON-konténer nélküli válaszokat elutasítja, a markdown fence-eket kis- és nagybetűtől függetlenül kezeli, a meglévő kontrollált javítási mechanizmust megtartja.
+- Az Opportunity Engine teljes AI-költsége tartalmazza a niche seed-generálást, a trendtopic átírásokat és a magyarázó hívást; a Similar Videos a query-expanziót is naplózza és a paid result provenance mezőibe menti. 22 tesztfájl 85 tesztje, TypeScript és a 78 oldalas production build sikeres.
+
 ## 2026-07-16 — YOUTUBE OAUTH ÉS ANALYTICS BIZTONSÁGI HARDENING
 
 - A production Google OAuth redirect/callback nem a kérésből származó hostot bízza meg, hanem a konfigurált kanonikus HTTPS alkalmazás-origint használja. A nonce továbbra is egyszer használatos, HttpOnly, rövid életű és callback-pathhoz kötött.

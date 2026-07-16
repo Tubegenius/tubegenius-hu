@@ -348,6 +348,7 @@ async function rewriteTopicWithHaiku(
   specificFocus: string,
   region: 'HU' | 'US',
   language: string,
+  onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void,
 ): Promise<HaikuRewriteResult | null> {
   const cacheKey = haikuRewriteCacheKey(originalTitle, language, region)
   const cached = haikuRewriteCache.get(cacheKey)
@@ -396,6 +397,7 @@ Válaszolj KIZÁRÓLAG valid JSON-nal, más szöveg nélkül:
       promptTemplateId: 'trend_radar_topic_rewrite',
       promptVersion: 'v1',
     })
+    onAIUsage?.({ inputTokens: aiCall.usage.inputTokens, outputTokens: aiCall.usage.outputTokens, estimatedCost: aiCall.estimatedCost })
     const parsed = extractJson<Partial<HaikuRewriteResult>>(aiCall.text)
 
     if (!parsed.searchable_topic || !parsed.display_topic) return null
@@ -438,6 +440,7 @@ async function extractTrendTopicsFromSerper(
   mainCategory = '',
   specificFocus = '',
   language = 'hu',
+  onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void,
 ): Promise<ExtractedTopic[]> {
   if (serperResults.length === 0) return []
 
@@ -552,6 +555,7 @@ async function extractTrendTopicsFromSerper(
       specificFocus,
       region,
       language,
+      onAIUsage,
     )
     if (rewritten) {
       topic.display_topic = rewritten.display_topic
@@ -847,6 +851,7 @@ export interface TrendRadarInput {
   mainCategory?: string
   specificFocus?: string
   language?: string
+  onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void
 }
 
 export async function buildTrendCandidates(input: TrendRadarInput): Promise<TrendCandidate[]> {
@@ -890,7 +895,7 @@ export async function buildTrendCandidates(input: TrendRadarInput): Promise<Tren
   for (const { seed, serperResults } of seedResults) {
     if (serperResults.length === 0) continue
 
-    const extractedTopics = await extractTrendTopicsFromSerper(serperResults, seed, region, freshnessWindowDays, mainCategory, specificFocus, language)
+    const extractedTopics = await extractTrendTopicsFromSerper(serperResults, seed, region, freshnessWindowDays, mainCategory, specificFocus, language, input.onAIUsage)
 
     for (const topic of extractedTopics.slice(0, 2)) { // max 2 topic per seed
       topicsToValidate.push({ seed, topic, serperResults })
