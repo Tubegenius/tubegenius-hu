@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserId } from '@/lib/credits'
-import { getOAuth2Client, getOAuthCallbackRedirectUri, saveYoutubeOAuthTokens, YOUTUBE_OAUTH_SCOPES, YOUTUBE_OAUTH_STATE_COOKIE } from '@/lib/youtube-analytics'
+import { getOAuth2Client, getOAuthCallbackRedirectUri, resolveOAuthOrigin, saveYoutubeOAuthTokens, YOUTUBE_OAUTH_SCOPES, YOUTUBE_OAUTH_STATE_COOKIE } from '@/lib/youtube-analytics'
 import { detectChannelConnectionType, syncChannelProfileFromOAuth } from '@/lib/channel-profile-sync'
 
 // GET — a sajat Google OAuth2 kor callbackje (ld. app/api/youtube/connect).
@@ -8,7 +8,7 @@ import { detectChannelConnectionType, syncChannelProfileFromOAuth } from '@/lib/
 // valtjuk be a kodot access/refresh tokenre, majd elmentjuk a bejelentkezett
 // WillViral userhez.
 export async function GET(request: NextRequest) {
-  const origin = request.nextUrl.origin
+  const origin = resolveOAuthOrigin(request.nextUrl.origin, process.env.NEXT_PUBLIC_APP_URL, process.env.NODE_ENV === 'production')
   const code = request.nextUrl.searchParams.get('code')
   const state = request.nextUrl.searchParams.get('state')
   const oauthError = request.nextUrl.searchParams.get('error')

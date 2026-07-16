@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserId } from '@/lib/credits'
-import { buildGoogleAuthUrl, YOUTUBE_OAUTH_STATE_COOKIE } from '@/lib/youtube-analytics'
+import { buildGoogleAuthUrl, resolveOAuthOrigin, YOUTUBE_OAUTH_STATE_COOKIE } from '@/lib/youtube-analytics'
 
 // GET — elindítja a sajat, Supabase Authtol fuggetlen Google OAuth2 kort a
 // YouTube csatorna összekapcsolásához. A state egy egyszer használatos,
@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const userId = await getUserId()
   if (!userId) return NextResponse.redirect(new URL('/auth/login', request.url))
 
-  const origin = request.nextUrl.origin
+  const origin = resolveOAuthOrigin(request.nextUrl.origin, process.env.NEXT_PUBLIC_APP_URL, process.env.NODE_ENV === 'production')
   const state = crypto.randomUUID()
   const authUrl = buildGoogleAuthUrl(origin, state)
   const response = NextResponse.redirect(authUrl)

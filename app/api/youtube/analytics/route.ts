@@ -32,11 +32,12 @@ export async function GET() {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    let { data: profile } = await admin
+    let { data: profile, error: profileError } = await admin
       .from('profiles')
       .select('youtube_channel_id, channel_name, channel_avatar_url, youtube_channel_url, youtube_handle, subscriber_count, total_view_count, video_count, channel_published_at, channel_synced_at, channel_connection_type')
       .eq('user_id', userId)
       .single()
+    if (profileError || !profile) throw profileError || new Error('Profile not found')
 
     const analytics = await fetchChannelAnalytics(userId)
 

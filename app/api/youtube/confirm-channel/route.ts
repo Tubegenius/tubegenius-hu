@@ -28,7 +28,8 @@ export async function POST(request: NextRequest) {
     }
 
     const admin = createAdminClient()
-    await admin.from('profiles').update({ channel_usage_mode, onboarding_completed: true }).eq('user_id', userId)
+    const { data: savedMode, error: modeSaveError } = await admin.from('profiles').update({ channel_usage_mode, onboarding_completed: true }).eq('user_id', userId).select('user_id').single()
+    if (modeSaveError || !savedMode) return NextResponse.json({ error: 'save_failed', message: 'A csatorna használati módjának mentése sikertelen.' }, { status: 500 })
 
     return NextResponse.json({ snapshot: result.snapshot, connection_type: result.connectionType })
   } catch (error) {

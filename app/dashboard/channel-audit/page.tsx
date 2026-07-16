@@ -329,7 +329,7 @@ export default function ChannelAuditPage() {
                 </div>
               </div>
               <div>
-                <p className="text-xs mb-2" style={{ color: '#EF4444' }}>📉 LEGGYENGÉBBEN TELJESÍTŐ VIDEÓID (valós nézettség)</p>
+                <p className="text-xs mb-2" style={{ color: '#EF4444' }}>📉 TOP 50 MINTA ALSÓ 10 VIDEÓJA (28 napos nézettség)</p>
                 <div className="space-y-1.5">
                   {channelAnalytics.weakestVideos.map(v => (
                     <a key={v.videoId} href={`https://www.youtube.com/watch?v=${v.videoId}`} target="_blank" rel="noopener noreferrer"

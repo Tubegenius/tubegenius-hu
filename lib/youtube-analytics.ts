@@ -29,6 +29,15 @@ export const YOUTUBE_OAUTH_SCOPES = [
 
 export const YOUTUBE_OAUTH_STATE_COOKIE = 'willviral_youtube_oauth_state'
 
+export function resolveOAuthOrigin(requestOrigin: string, configuredAppUrl: string | undefined, production: boolean): string {
+  const value = production ? configuredAppUrl : requestOrigin
+  if (!value) throw new Error('Canonical app URL is not configured')
+  const url = new URL(value)
+  if (production && url.protocol !== 'https:') throw new Error('Canonical app URL must use HTTPS')
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid OAuth origin protocol')
+  return url.origin
+}
+
 export function getOAuthCallbackRedirectUri(origin: string): string {
   return `${origin}/api/youtube/oauth-callback`
 }
@@ -79,14 +88,16 @@ export async function saveYoutubeOAuthTokens(params: {
 
 async function updateChannelInfo(userId: string, channelId: string, channelTitle: string | null): Promise<void> {
   const supabase = createAdminClient()
-  await supabase.from('youtube_oauth_tokens')
+  const { error } = await supabase.from('youtube_oauth_tokens')
     .update({ channel_id: channelId, channel_title: channelTitle, updated_at: new Date().toISOString() })
     .eq('user_id', userId)
+  if (error) throw error
 }
 
 export async function getYoutubeOAuthTokens(userId: string): Promise<YoutubeOAuthTokenRow | null> {
   const supabase = createAdminClient()
-  const { data } = await supabase.from('youtube_oauth_tokens').select('*').eq('user_id', userId).maybeSingle()
+  const { data, error } = await supabase.from('youtube_oauth_tokens').select('*').eq('user_id', userId).maybeSingle()
+  if (error) throw error
   return (data as YoutubeOAuthTokenRow | null) || null
 }
 
@@ -95,9 +106,15 @@ export async function deleteYoutubeOAuthTokens(userId: string): Promise<void> {
   const tokens = await getYoutubeOAuthTokens(userId)
   if (tokens?.refresh_token) {
     const oauth2Client = getOAuth2Client()
-    await oauth2Client.revokeToken(tokens.refresh_token)
+    try {
+      await oauth2Client.revokeToken(tokens.refresh_token)
+    } catch (error) {
+      // A helyi kapcsolatot Google-hiba esetén is meg kell tudni szüntetni.
+      console.warn('[YouTube OAuth] remote token revoke failed; deleting local token:', error)
+    }
   }
-  await supabase.from('youtube_oauth_tokens').delete().eq('user_id', userId)
+  const { error } = await supabase.from('youtube_oauth_tokens').delete().eq('user_id', userId)
+  if (error) throw error
 }
 
 async function getValidOAuthClient(userId: string): Promise<InstanceType<typeof google.auth.OAuth2> | null> {
@@ -209,7 +226,8 @@ export async function fetchChannelAnalytics(userId: string, days = 28): Promise<
   // A YouTube Analytics API video-dimenzios reportnal NEM tamogatja a
   // novekvo rendezest ("sort: views" -> 400 "query is not supported") —
   // csak csokkeno ("-views"). Ezert EGY lekerdezesbol (nagyobb maxResults)
-  // szamoljuk a top ES a leggyengebb videokat is, nem kulon hivassal.
+  // számoljuk a top 10-et és a TOP 50 MINTA alsó 10 elemét. Utóbbi nem a
+  // teljes csatorna abszolút leggyengébb listája, ezt a UI is így jelöli.
   const [totalsRes, videosRes] = await Promise.all([
     youtubeAnalytics.reports.query({
       ids: 'channel==MINE',

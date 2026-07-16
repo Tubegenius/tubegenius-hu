@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — YOUTUBE OAUTH ÉS ANALYTICS BIZTONSÁGI HARDENING
+
+- A production Google OAuth redirect/callback nem a kérésből származó hostot bízza meg, hanem a konfigurált kanonikus HTTPS alkalmazás-origint használja. A nonce továbbra is egyszer használatos, HttpOnly, rövid életű és callback-pathhoz kötött.
+- OAuth-token olvasás, csatornaadat-mentés, connection-state és profilfrissítés adatbázishibánál fail-closed. A kapcsolat bontása Google revoke-hiba esetén is törli a helyi tokent; helyi törlési hibát nem jelent sikernek.
+- A UI módszertani állítása javítva: a „gyenge” lista nem a teljes csatorna leggyengébb tíz videója, hanem a 28 napos, nézettség szerint lekért top-50 minta alsó tíz eleme.
+- Elkészült a `035_youtube_oauth_token_rls.sql`: explicit RLS, anon/authenticated revoke és kizárólag service-role hozzáférés. A kód 21 tesztfájl 80 tesztjével és TypeScripttel sikeres; a blokk lezárásához a 035 éles futtatása és egy élő reconnect/disconnect ellenőrzés még szükséges.
+
 ## 2026-07-16 — STRIPE ÉS KREDIT PÉNZÜGYI INTEGRITÁSI HARDENING
 
 - A Stripe webhook minden pénzügyi és előfizetési adatbázisműveletének eredményét ellenőrzi. Sikertelen mentés többé nem jelölhető `completed` eseménynek; a failed-event retry claim állapotfeltételes és egyetlen feldolgozóhoz kerülhet.

@@ -86,8 +86,8 @@ export async function syncChannelProfileFromPublic(
 
   const admin = createAdminClient()
   const fields = fieldsFromSnapshot(snapshot)
-  const { error } = await admin.from('profiles').update(fields).eq('user_id', userId)
-  if (error) return { error: 'save_failed' }
+  const { data: savedProfile, error } = await admin.from('profiles').update(fields).eq('user_id', userId).select('user_id').single()
+  if (error || !savedProfile) return { error: 'save_failed' }
 
   const connectionType = await detectChannelConnectionType(userId)
   return { snapshot, connectionType }
@@ -104,8 +104,8 @@ export async function syncChannelProfileFromOAuth(
 
   const admin = createAdminClient()
   const fields = fieldsFromOwnChannelInfo(info)
-  const { error } = await admin.from('profiles').update(fields).eq('user_id', userId)
-  if (error) return { error: 'save_failed' }
+  const { data: savedProfile, error } = await admin.from('profiles').update(fields).eq('user_id', userId).select('user_id').single()
+  if (error || !savedProfile) return { error: 'save_failed' }
 
   const connectionType = await detectChannelConnectionType(userId)
   return { info, connectionType }
@@ -118,10 +118,11 @@ export async function syncChannelProfileFromOAuth(
 // ERINTETLENUL hagyja, amig a user nem dont (app/api/youtube/resolve-mismatch).
 export async function detectChannelConnectionType(userId: string): Promise<ChannelConnectionType | null> {
   const admin = createAdminClient()
-  const [{ data: profile }, oauthTokens] = await Promise.all([
+  const [{ data: profile, error: profileError }, oauthTokens] = await Promise.all([
     admin.from('profiles').select('youtube_channel_id, active_channel_id, channel_connection_type').eq('user_id', userId).single(),
     getYoutubeOAuthTokens(userId),
   ])
+  if (profileError || !profile) throw profileError || new Error('Profile not found')
 
   const publicChannelId = profile?.youtube_channel_id || null
   const oauthChannelId = oauthTokens?.channel_id || null
@@ -143,9 +144,10 @@ export async function detectChannelConnectionType(userId: string): Promise<Chann
     activeChannelId = publicChannelId
   }
 
-  await admin.from('profiles')
+  const { data: updatedProfile, error: updateError } = await admin.from('profiles')
     .update({ channel_connection_type: connectionType, active_channel_id: activeChannelId })
-    .eq('user_id', userId)
+    .eq('user_id', userId).select('user_id').single()
+  if (updateError || !updatedProfile) throw updateError || new Error('Channel connection state update failed')
 
   return connectionType
 }
