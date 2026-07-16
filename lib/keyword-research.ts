@@ -83,6 +83,26 @@ export interface RelatedKeywordSuggestion {
   content_format_hint: string
 }
 
+export function validateRelatedKeywordSuggestions(value: unknown): RelatedKeywordSuggestion[] {
+  if (!Array.isArray(value) || value.length < 8 || value.length > 12) {
+    throw new Error('A kulcsszóklaszter elemszáma hibás.')
+  }
+  const seen = new Set<string>()
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') throw new Error('Hibás kulcsszójavaslat.')
+    const row = item as Record<string, unknown>
+    const keyword = typeof row.keyword === 'string' ? row.keyword.trim() : ''
+    const angle = typeof row.angle === 'string' ? row.angle.trim() : ''
+    const contentFormatHint = typeof row.content_format_hint === 'string' ? row.content_format_hint.trim() : ''
+    const key = keyword.toLocaleLowerCase('hu-HU')
+    if (!keyword || keyword.length > 160 || !angle || angle.length > 500 || contentFormatHint.length > 100 || seen.has(key)) {
+      throw new Error('Hiányos, túl hosszú vagy ismétlődő kulcsszójavaslat.')
+    }
+    seen.add(key)
+    return { keyword, angle, content_format_hint: contentFormatHint }
+  })
+}
+
 export function buildKeywordClusterPrompt(input: {
   seedKeyword: string
   niche: string
@@ -99,7 +119,7 @@ NICHE: ${input.niche || 'általános'}
 PLATFORM: ${input.platform}
 
 VALÓS ADATOK (ezekre támaszkodj, ne találgass számokat):
-- YouTube találatok száma erre a kulcsszóra: ${input.seedVideoCount}
+- Releváns videók száma a legfeljebb 25 elemű YouTube keresési mintában: ${input.seedVideoCount}
 - Backend-számolt verseny szint: ${input.seedCompetition}/100
 - Google kapcsolódó keresések: ${input.relatedSearches.length > 0 ? input.relatedSearches.join(', ') : 'nincs adat'}
 - "Emberek ezt is kérdezik" (Google): ${input.peopleAlsoAsk.length > 0 ? input.peopleAlsoAsk.join(' | ') : 'nincs adat'}

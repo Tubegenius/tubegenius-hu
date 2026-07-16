@@ -11,7 +11,7 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Viral Score | `/api/viral-score` | backend score, web buzz, low-data gate | paid result + legacy cache + lock | Video Idea/proof kapcsolat | dátum/score alap | részleges |
 | Video Audit | `/api/video-audit` | proxyhatárok javítva; fals retention/időpont/thumbnail jel megszüntetve | paid result + lock + soft limit | userhez kötött mentés | input/módszertan edge case | lezárt |
 | Video Package | `/api/video-package` | fact block + opportunity evidence | paid result + lock | Video Idea kapcsolat | cache-flow alap | részleges |
-| Keyword Research | `/api/keyword-research` | valós YouTube/Google jel + újrakalibrált score | paid result + lock | user cache | score edge case | részleges |
+| Keyword Research | `/api/keyword-research` | relevanciaszűrt YouTube evidenciaminta + Google jel; explicit nem havi volume; fail-closed score | paid result + lock | user cache | score/output/input edge case | lezárt |
 | Content Gap | `/api/content-gap` | két valós forráshalmaz összevetése | paid result + lock | user cache | prompt/cache alap | részleges |
 | Title Studio | `/api/title-studio` | backend heurisztika + AI értékelés | paid result + lock | csak saját fizetett eredményből származó cím menthető | prompt/cache alap | részleges |
 | Thumbnail Studio | `/api/thumbnail-studio` | koncepcióértékelés | paid result + lock | csak saját fizetett eredményből származó koncepció menthető | kimenet/provenance alap | részleges |

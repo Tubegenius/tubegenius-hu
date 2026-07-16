@@ -16,6 +16,13 @@ interface RelatedKeyword {
 
 interface KeywordResearchResult {
   seed_keyword: string
+  keyword_evidence?: {
+    sample_size: number
+    relevant_video_count: number
+    confidence: string
+    basis: 'youtube_search_sample'
+    is_monthly_search_volume: false
+  }
   seed_score: {
     total: number
     competition: number
@@ -24,6 +31,8 @@ interface KeywordResearchResult {
     freshness: number
     confidence: string
     video_count: number
+    sample_size?: number
+    evidence_basis?: 'youtube_search_sample'
   } | null
   related_keywords: RelatedKeyword[]
   people_also_ask: string[]
@@ -215,15 +224,22 @@ export default function KeywordResearchPage() {
                   <b style={{ color: '#F8FAFC' }}>{result.seed_score.content_gap}/100</b>
                 </div>
                 <div>
-                  <span style={{ color: '#94A3B8' }}>YouTube találat: </span>
-                  <b style={{ color: '#F8FAFC' }}>{result.seed_score.video_count} ({result.seed_score.confidence})</b>
+                  <span style={{ color: '#94A3B8' }}>Releváns videó a YouTube-mintában: </span>
+                  <b style={{ color: '#F8FAFC' }}>{result.seed_score.video_count}/{result.seed_score.sample_size ?? result.seed_score.video_count} ({result.seed_score.confidence})</b>
                 </div>
               </div>
+              <p className="text-xs mt-3" style={{ color: '#64748B' }}>Ez legfeljebb 25 YouTube-keresési találatból vett evidenciaminta, nem becsült havi keresési volumen.</p>
               <div className="flex gap-2 mt-4">
                 <Link href={`/dashboard/viral-score?topic=${encodeURIComponent(result.seed_keyword)}`} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
                   📈 Mélyebb validálás (Virális esély)
                 </Link>
               </div>
+            </div>
+          )}
+          {!result.seed_score && result.keyword_evidence && (
+            <div className="card">
+              <p className="text-sm font-medium" style={{ color: '#F8FAFC' }}>Nincs pontozható YouTube-evidencia</p>
+              <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>A {result.keyword_evidence.sample_size} elemű keresési mintában nem volt releváns videó. Emiatt nem mutatunk félrevezető opportunity-, verseny- vagy trendpontszámot.</p>
             </div>
           )}
 

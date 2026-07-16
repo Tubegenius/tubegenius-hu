@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — KEYWORD RESEARCH MÓDSZERTANI HARDENING
+
+- A Keyword Research többé nem nevezi a YouTube API legfeljebb 25 elemű keresési mintáját teljes találatszámnak vagy havi keresési volumennek. A válasz külön evidenciametaadatban közli a mintaméretet, a releváns videók számát, a confidence szintet és azt, hogy ez nem havi volume-becslés.
+- A pontozás relevancia tekintetében fail-closed: ha a keresési mintában nincs releváns videó, nem készül opportunity-, verseny- vagy trendpontszám irreleváns találatokból. A UI ezt külön, bizonytalanságot jelző állapotként mutatja.
+- Az AI által készített 8–12 elemű long-tail klaszter kötelező mező-, hossz-, elemszám- és duplikációvalidálást kapott még a kreditlevonás előtt. A route csak támogatott YouTube platformot, HU/US régiót és méretkorlátos niche override-ot fogad el; a kulcsszó minden downstream lépésben egységesen trimelt.
+- Ellenőrzés: TypeScript ✅; 14 tesztfájl, 53/53 teszt ✅.
+
 ## 2026-07-16 — COMPETITOR VPH-KÜSZÖBRIASZTÁS
 
 - Közvetlen competitor-videó riasztás készült: a pillanatnyi VPH kizárólag a legutóbbi két valódi snapshotból számolódik, nem teljes élettartam-átlagból. Riasztás csak véges, mért VPH esetén és a user által beállított 1–1 000 000 000 közötti küszöb felett készül.

@@ -4,8 +4,8 @@ import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COST
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { buildScoreBreakdown, getConfidenceLevel } from '@/lib/opportunity-scoring'
-import { fetchKeywordSignals, fetchSeedVideoStats, buildKeywordClusterPrompt, type RelatedKeywordSuggestion } from '@/lib/keyword-research'
+import { buildScoreBreakdown, filterByRelevance, getConfidenceLevel } from '@/lib/opportunity-scoring'
+import { fetchKeywordSignals, fetchSeedVideoStats, buildKeywordClusterPrompt, validateRelatedKeywordSuggestions } from '@/lib/keyword-research'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
@@ -21,6 +21,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Kulcsszó megadása kötelező' }, { status: 400 })
     }
     if (topicInputTooLong(seed_keyword)) return NextResponse.json({ error: topicTooLongResponseMessage('A kulcsszó') }, { status: 400 })
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    if (region != null && !['HU', 'US'].includes(region)) return NextResponse.json({ error: 'Nem támogatott régió.' }, { status: 400 })
+    if (nicheOverride != null && (typeof nicheOverride !== 'string' || topicInputTooLong(nicheOverride))) return NextResponse.json({ error: topicTooLongResponseMessage('A niche') }, { status: 400 })
+    const seedKeyword = seed_keyword.trim()
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -32,13 +36,13 @@ export async function POST(request: NextRequest) {
     // megy at a profil niche-e — korabban ez a route csak a legacy `niche`
     // oszlopot olvasta, semmilyen relevancia-szures/stats_only-gatelas nelkul.
     const niche = nicheOverride || (() => {
-      const gated = resolveCreatorNicheContext({ topic: seed_keyword, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+      const gated = resolveCreatorNicheContext({ topic: seedKeyword, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
       return gated.useNiche ? gated.niche : ''
     })()
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ seed_keyword, niche, platform: platformValue, region: regionValue })
+    const normalizedInput = normalizePaidResultInput({ seed_keyword: seedKeyword, niche, platform: platformValue, region: regionValue })
     const inputHash = buildPaidResultHash({
       userId,
       toolType: 'keyword_research',
@@ -66,21 +70,22 @@ export async function POST(request: NextRequest) {
     }
 
     const [{ videos, totalResults }, signals] = await Promise.all([
-      fetchSeedVideoStats(seed_keyword, regionValue),
-      fetchKeywordSignals(seed_keyword, regionValue),
+      fetchSeedVideoStats(seedKeyword, regionValue),
+      fetchKeywordSignals(seedKeyword, regionValue),
     ])
 
-    const breakdown = videos.length > 0 ? buildScoreBreakdown(videos, totalResults, seed_keyword, niche) : null
-    const confidence = getConfidenceLevel(videos.length)
+    const relevantVideos = filterByRelevance(videos, seedKeyword, 20).map(item => item.video)
+    const breakdown = relevantVideos.length > 0 ? buildScoreBreakdown(relevantVideos, relevantVideos.length, seedKeyword, niche) : null
+    const confidence = getConfidenceLevel(relevantVideos.length)
 
     const renderedPrompt = renderPromptTemplate(PROMPT_TEMPLATES.keywordCluster, () => buildKeywordClusterPrompt({
-      seedKeyword: seed_keyword,
+      seedKeyword,
       niche,
       platform: platformValue,
       language: regionValue === 'HU' ? 'hu' : 'en',
       relatedSearches: signals.relatedSearches,
       peopleAlsoAsk: signals.peopleAlsoAsk,
-      seedVideoCount: videos.length,
+      seedVideoCount: relevantVideos.length,
       seedCompetition: breakdown?.competition ?? 0,
     }))
 
@@ -92,22 +97,29 @@ export async function POST(request: NextRequest) {
       promptVersion: renderedPrompt.version,
     })
 
-    const relatedKeywords = extractJson<RelatedKeywordSuggestion[]>(aiCall.text)
+    const relatedKeywords = validateRelatedKeywordSuggestions(extractJson<unknown>(aiCall.text))
       .map(item => ({
         keyword: item.keyword,
         angle: polishHungarianText(item.angle || ''),
         content_format_hint: item.content_format_hint || '',
       }))
 
-    await logUsage(userId, 'keyword_research', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { seed_keyword })
+    await logUsage(userId, 'keyword_research', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { seed_keyword: seedKeyword })
 
-    const charge = await chargeFeature(userId, 'keyword_research', { seed_keyword })
+    const charge = await chargeFeature(userId, 'keyword_research', { seed_keyword: seedKeyword })
     if (!charge.success) {
       return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
     }
 
     const responsePayload = {
-      seed_keyword,
+      seed_keyword: seedKeyword,
+      keyword_evidence: {
+        sample_size: videos.length,
+        relevant_video_count: relevantVideos.length,
+        confidence,
+        basis: 'youtube_search_sample',
+        is_monthly_search_volume: false,
+      },
       seed_score: breakdown ? {
         total: breakdown.total,
         competition: breakdown.competition,
@@ -115,7 +127,9 @@ export async function POST(request: NextRequest) {
         trend_momentum: breakdown.trend_momentum,
         freshness: breakdown.freshness,
         confidence,
-        video_count: videos.length,
+        video_count: relevantVideos.length,
+        sample_size: videos.length,
+        evidence_basis: 'youtube_search_sample',
       } : null,
       related_keywords: relatedKeywords,
       people_also_ask: signals.peopleAlsoAsk,
@@ -127,11 +141,11 @@ export async function POST(request: NextRequest) {
       toolType: 'keyword_research',
       inputHash,
       normalizedInput,
-      originalInput: seed_keyword,
+      originalInput: seedKeyword,
       region: regionValue,
       platform: platformValue,
       resultJson: responsePayload,
-      summaryJson: { seed_keyword, video_count: videos.length, related_count: relatedKeywords.length },
+      summaryJson: { seed_keyword: seedKeyword, video_count: relevantVideos.length, sample_size: videos.length, related_count: relatedKeywords.length },
       creditCost: CREDIT_COSTS.keyword_research,
       freshForHours: 24,
       provider: aiCall.provider,
