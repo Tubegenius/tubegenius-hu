@@ -4,7 +4,7 @@ import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COST
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
-import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle, sanitizeHungarianTitle, isValidTitleVariation, type TitleVariation } from '@/lib/title-studio'
+import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle, sanitizeHungarianTitle, validateDistinctTitleVariations } from '@/lib/title-studio'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
@@ -21,17 +21,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
     if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
+    if (existing_title != null && (typeof existing_title !== 'string' || !existing_title.trim() || existing_title.length > 100)) return NextResponse.json({ error: 'A meglévő cím legfeljebb 100 karakter lehet.' }, { status: 400 })
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    if (region != null && !['HU', 'US'].includes(region)) return NextResponse.json({ error: 'Nem támogatott régió.' }, { status: 400 })
+    if (force_refresh != null && typeof force_refresh !== 'boolean') return NextResponse.json({ error: 'Hibás frissítési beállítás.' }, { status: 400 })
+    const topicValue = topic.trim()
+    const existingTitle = existing_title?.trim() || undefined
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
     const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
-    const { niche, useNiche } = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
+    const { niche, useNiche } = resolveCreatorNicheContext({ topic: topicValue, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
 
-    const normalizedInput = normalizePaidResultInput({ topic, existing_title, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
+    const normalizedInput = normalizePaidResultInput({ topic: topicValue, existing_title: existingTitle, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
     const inputHash = buildPaidResultHash({ userId, toolType: 'title_studio', normalizedInput, platform: platformValue, region: regionValue })
 
     // Beta Hardening Test (2026-07-11): ket egyideju azonos keres (pl. ket
@@ -57,18 +63,17 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.title_studio} kredit szükséges.` }, { status: 402 })
       }
 
-      const renderedPrompt = renderPromptTemplate(PROMPT_TEMPLATES.titleStudio, () => buildTitleStudioPrompt({ topic, niche, useNiche, platform: platformValue, existingTitle: existing_title || undefined }))
+      const renderedPrompt = renderPromptTemplate(PROMPT_TEMPLATES.titleStudio, () => buildTitleStudioPrompt({ topic: topicValue, niche, useNiche, platform: platformValue, existingTitle }))
       const aiCall = await callAIProvider({
         model: MODELS.fast,
-        maxTokens: 1500,
+        maxTokens: 2200,
         messages: [{ role: 'user', content: renderedPrompt.text }],
         promptTemplateId: renderedPrompt.templateId,
         promptVersion: renderedPrompt.version,
       })
 
-      const rawVariations = extractJson<TitleVariation[]>(aiCall.text)
-      if (!Array.isArray(rawVariations) || rawVariations.length !== 5 || !rawVariations.every(isValidTitleVariation)) throw new Error('Invalid title variations returned by AI provider')
-      const variations = rawVariations.map(v => {
+      const rawVariations = validateDistinctTitleVariations(extractJson<unknown>(aiCall.text))
+      const variations = validateDistinctTitleVariations(rawVariations.map(v => {
         const polishedTitle = polishHungarianText(v.title || '')
         const { ok } = validateHungarianTitle(polishedTitle)
         const finalTitle = ok ? polishedTitle : sanitizeHungarianTitle(polishedTitle)
@@ -79,18 +84,19 @@ export async function POST(request: NextRequest) {
           reasoning: polishHungarianText(v.reasoning || ''),
           heuristics: computeTitleHeuristics(finalTitle),
         }
-      })
+      }))
 
-      await logUsage(userId, 'title_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+      await logUsage(userId, 'title_studio', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic: topicValue })
 
-      const charge = await chargeFeature(userId, 'title_studio', { topic })
+      const charge = await chargeFeature(userId, 'title_studio', { topic: topicValue })
       if (!charge.success) {
         return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
       }
 
       const responsePayload = {
-        topic,
+        topic: topicValue,
         variations,
+        scoring_methodology: 'subjective_ai_packaging_review_not_ctr_prediction',
         _credits_remaining: charge.new_balance,
       }
 
@@ -99,11 +105,11 @@ export async function POST(request: NextRequest) {
         toolType: 'title_studio',
         inputHash,
         normalizedInput,
-        originalInput: topic,
+        originalInput: topicValue,
         platform: platformValue,
         region: regionValue,
         resultJson: responsePayload,
-        summaryJson: { topic, variation_count: variations.length },
+        summaryJson: { topic: topicValue, variation_count: variations.length, methodology: 'subjective_ai_packaging_review_not_ctr_prediction' },
         creditCost: CREDIT_COSTS.title_studio,
         freshForHours: 24,
         provider: aiCall.provider,
@@ -133,7 +139,10 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const { topic, title, platform, paid_result_id } = await request.json()
-    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || typeof title !== 'string' || !title.trim() || title.length > 200 || typeof paid_result_id !== 'string') return NextResponse.json({ error: 'Hiányzó vagy hibás adatok' }, { status: 400 })
+    if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || typeof title !== 'string' || !title.trim() || title.length > 100 || typeof paid_result_id !== 'string' || !paid_result_id.trim()) return NextResponse.json({ error: 'Hiányzó vagy hibás adatok' }, { status: 400 })
+    if (platform != null && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    const topicValue = topic.trim()
+    const titleValue = title.trim()
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -141,11 +150,11 @@ export async function PATCH(request: NextRequest) {
     const paid = await getPaidResultById(userId, paid_result_id)
     const paidPayload = paid?.result_json as { topic?: unknown; variations?: unknown } | null
     const paidVariations = Array.isArray(paidPayload?.variations) ? paidPayload.variations as Array<{ title?: unknown }> : []
-    if (!paid || paid.tool_type !== 'title_studio' || paidPayload?.topic !== topic || !paidVariations.some(v => v?.title === title)) return NextResponse.json({ error: 'A cím nem tartozik a saját fizetett Title Studio eredményedhez.' }, { status: 403 })
+    if (!paid || paid.tool_type !== 'title_studio' || typeof paidPayload?.topic !== 'string' || paidPayload.topic.trim() !== topicValue || !paidVariations.some(v => v?.title === titleValue)) return NextResponse.json({ error: 'A cím nem tartozik a saját fizetett Title Studio eredményedhez.' }, { status: 403 })
 
     const admin = createAdminClient()
     const platformValue = platform || 'youtube'
-    const inputHash = buildVideoIdeaInputHash({ userId, topic, platform: platformValue })
+    const inputHash = buildVideoIdeaInputHash({ userId, topic: topicValue, platform: platformValue })
 
     const { data: existing } = await admin
       .from('video_ideas')
@@ -155,11 +164,11 @@ export async function PATCH(request: NextRequest) {
       .single()
 
     const currentTitleIdeas: string[] = Array.isArray(existing?.title_ideas) ? existing.title_ideas : []
-    const updatedTitleIdeas = currentTitleIdeas.includes(title) ? currentTitleIdeas : [...currentTitleIdeas, title]
+    const updatedTitleIdeas = currentTitleIdeas.includes(titleValue) ? currentTitleIdeas : [...currentTitleIdeas, titleValue]
 
     const result = await ensureVideoIdea(admin, {
       userId,
-      topic,
+      topic: topicValue,
       platform: platformValue,
       inputHash,
     })
@@ -185,7 +194,7 @@ export async function GET(request: NextRequest) {
     if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
 
     const paid = await getPaidResultById(userId, paidResultId)
-    if (!paid) return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
+    if (!paid || paid.tool_type !== 'title_studio') return NextResponse.json({ error: 'Az eredmény nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
     return NextResponse.json({ ...(opened.result_json as object), ...paidResultResponseMeta(opened) })

@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — TITLE STUDIO MÓDSZERTANI ÉS ROBUSZTUSSÁGI HARDENING
+
+- A curiosity/clarity/clickability/risk értékek explicit szubjektív AI csomagolási értékelések; a clickability nem CTR- vagy kattintás-előrejelzés. A válasz és a UI ezt módszertani mezővel és egyértelmű címkével közli.
+- Pontosan öt, egyedi, nem üres, indoklással ellátott és YouTube-kompatibilis, legfeljebb 100 karakteres cím kerülhet kreditlevonásig. A nyelvi tisztítás után a teljes csomag újra validálódik, így tisztításból eredő üres vagy duplikált cím sem juthat ki.
+- A korábban dokumentált 1500 tokenes AI-válaszcsonkolási kockázat miatt a kimeneti keret 2200 tokenre nőtt. A prompt-template `v2.0`, és egyértelműen tiltja a CTR-predikcióként értelmezhető pontozást.
+- A meglévő cím 100 karakterre korlátozott; platform, régió és `force_refresh` típusa backend-validált. A GET tool-type ellenőrzött, a kiválasztott cím csak a user saját fizetett eredményéből menthető, és a UI csak sikeres PATCH után jelzi mentettnek.
+
 ## 2026-07-16 — CONTENT GAP BIZONYÍTÉK- ÉS MÓDSZERTANI HARDENING
 
 - A Content Gap Finder csak relevanciaszűrt, legfeljebb 25 találatos YouTube-mintát hasonlít össze valós Google kapcsolódó keresésekkel és People Also Ask kérdésekkel. Legalább három keresési jel nélkül nem generál fizetős rés-jelöltet.

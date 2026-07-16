@@ -48,7 +48,21 @@ export function isValidTitleVariation(value: unknown): value is TitleVariation {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
   const score = (key: string) => typeof v[key] === 'number' && Number.isFinite(v[key]) && (v[key] as number) >= 0 && (v[key] as number) <= 100
-  return typeof v.title === 'string' && v.title.trim().length > 0 && v.title.length <= 200 && typeof v.reasoning === 'string' && v.reasoning.length <= 2000 && score('curiosity_score') && score('clarity_score') && score('clickability_score') && score('risk_score')
+  return typeof v.title === 'string' && v.title.trim().length > 0 && v.title.length <= 100
+    && typeof v.reasoning === 'string' && v.reasoning.trim().length > 0 && v.reasoning.length <= 1000
+    && score('curiosity_score') && score('clarity_score') && score('clickability_score') && score('risk_score')
+}
+
+export function validateDistinctTitleVariations(value: unknown): TitleVariation[] {
+  if (!Array.isArray(value) || value.length !== 5 || !value.every(isValidTitleVariation)) throw new Error('Pontosan öt teljes címvariáció szükséges.')
+  const seen = new Set<string>()
+  return value.map(item => {
+    const title = item.title.trim().replace(/\s+/g, ' ')
+    const key = title.toLocaleLowerCase('hu-HU').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    if (seen.has(key)) throw new Error('A címvariációk nem lehetnek azonosak.')
+    seen.add(key)
+    return { ...item, title, reasoning: item.reasoning.trim() }
+  })
 }
 
 // ── Magyar nyelvi guard ──────────────────────────────────────
@@ -127,13 +141,14 @@ FELADAT:
 Minden címhez adj 0-100 közötti ÉRTÉKELÉST (a saját megítélésed alapján, NE állítsd hogy ez mért adat):
 - curiosity_score: mennyire kelt kíváncsiságot
 - clarity_score: mennyire világos, mit kap a néző
-- clickability_score: mennyire valószínű, hogy rákattintanak
+- clickability_score: szubjektív AI-értékelés a cím csomagolási vonzerejéről; ez NEM CTR- vagy kattintás-előrejelzés
 - risk_score: mennyire "clickbait-es"/túlígérő (magasabb = kockázatosabb, mert nem tartja be az ígéretét)
 
 És egy rövid, 1 mondatos magyar indoklást (reasoning).
 
 KRITIKUS SZABÁLYOK:
 - NE használj túlzó, be nem tartható ígéreteket.
+- Egyik cím se legyen 100 karakternél hosszabb.
 - A címek legyenek TÉNYLEGESEN különbözőek egymástól, ne csak szinonimák.
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
 - ${STAY_ON_TOPIC_RULE}

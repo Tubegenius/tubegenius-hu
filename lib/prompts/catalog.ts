@@ -1,7 +1,7 @@
 import { definePromptTemplate } from './template-registry'
 
 export const PROMPT_TEMPLATES = {
-  titleStudio: definePromptTemplate({ id: 'title-studio.generate', version: 'v1.0', locale: 'hu-HU', description: 'Öt eltérő magyar címváltozat és AI-értékelés.' }),
+  titleStudio: definePromptTemplate({ id: 'title-studio.generate', version: 'v2.0', locale: 'hu-HU', description: 'Öt eltérő magyar címváltozat és nem prediktív AI csomagolási értékelés.' }),
   keywordCluster: definePromptTemplate({ id: 'keyword-research.cluster', version: 'v1.0', locale: 'hu-HU', description: 'Long-tail kulcsszóklaszter valós keresési jelekből.' }),
   contentGap: definePromptTemplate({ id: 'content-gap.discover', version: 'v2.0', locale: 'hu-HU', description: 'Tartalmi rések konkrét YouTube- és Google-jelek bizonyítékkötött összevetésével.' }),
   channelNicheDiscovery: definePromptTemplate({ id: 'channel_niche_discovery', version: 'v1', locale: 'hu-HU', description: 'Channel niche discovery.' }),

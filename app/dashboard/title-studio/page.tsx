@@ -131,9 +131,10 @@ export default function TitleStudioPage() {
         return
       }
       setVariations(data.variations)
+      setTopic(data.topic || topic.trim())
       setPaidResultId(data.paid_result_id || null)
       sessionStorage.setItem('willviral_title_studio_state', JSON.stringify({
-        topic, existingTitle, variations: data.variations, paidResultId: data.paid_result_id || null,
+        topic: data.topic || topic.trim(), existingTitle, variations: data.variations, paidResultId: data.paid_result_id || null,
       }))
     } catch {
       setError('Kapcsolati hiba.')
@@ -143,12 +144,19 @@ export default function TitleStudioPage() {
   }
 
   async function saveTitle(title: string) {
-    setSavedTitles(prev => new Set(prev).add(title))
-    await fetch('/api/title-studio', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, title, platform: 'youtube', paid_result_id: paidResultId }),
-    })
+    try {
+      if (!paidResultId) throw new Error('A mentéshez hiányzik a fizetett eredmény azonosítója.')
+      const response = await fetch('/api/title-studio', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, title, platform: 'youtube', paid_result_id: paidResultId }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'A cím mentése sikertelen.')
+      setSavedTitles(prev => new Set(prev).add(title))
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'A cím mentése sikertelen.')
+    }
   }
 
   return (
@@ -159,7 +167,7 @@ export default function TitleStudioPage() {
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>✏️ Title Studio</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>5 címvariáció, AI-értékeléssel — kíváncsiság, világosság, kattinthatóság, clickbait-kockázat.</p>
+        <p className="text-sm" style={{ color: '#CBD5E1' }}>5 címvariáció szubjektív AI csomagolási értékeléssel — ez nem mért CTR vagy kattintás-előrejelzés.</p>
       </div>
 
       <div className="card mb-6 space-y-3">
@@ -169,6 +177,7 @@ export default function TitleStudioPage() {
           placeholder="Miről szól a videó?"
           className="w-full px-4 py-2.5 rounded-lg text-sm"
           style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
+          maxLength={300}
         />
         <input
           value={existingTitle}
@@ -176,6 +185,7 @@ export default function TitleStudioPage() {
           placeholder="Van már egy cím-ötleted? (opcionális)"
           className="w-full px-4 py-2.5 rounded-lg text-sm"
           style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
+          maxLength={100}
         />
         <button onClick={runGenerate} disabled={loading || !topic.trim()} className="btn-primary w-full">
           {loading ? 'Generálás...' : 'Címvariációk generálása'}
@@ -220,7 +230,7 @@ export default function TitleStudioPage() {
               <div className="space-y-1.5 mb-3">
                 <ScoreBar label="Kíváncsiság" value={v.curiosity_score} />
                 <ScoreBar label="Világosság" value={v.clarity_score} />
-                <ScoreBar label="Kattinthatóság" value={v.clickability_score} />
+                <ScoreBar label="AI-vonzerő" value={v.clickability_score} />
                 <ScoreBar label="Clickbait-kockázat" value={v.risk_score} />
               </div>
 
