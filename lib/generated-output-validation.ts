@@ -12,5 +12,13 @@ export interface ScriptAnalysis {
 export function isValidScriptAnalysis(value: unknown): value is ScriptAnalysis {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  return typeof v.hook === 'string' && v.hook.length <= 3000 && typeof v.success_factors === 'string' && v.success_factors.length <= 5000 && Array.isArray(v.key_points) && v.key_points.length <= 30 && v.key_points.every(x => typeof x === 'string' && x.length <= 2000) && Array.isArray(v.structure) && v.structure.length <= 100 && v.structure.every(x => !!x && typeof x === 'object' && ['timestamp', 'label', 'content', 'type'].every(k => typeof (x as Record<string, unknown>)[k] === 'string'))
+  const nonEmpty = (x: unknown, max: number) => typeof x === 'string' && x.trim().length > 0 && x.length <= max
+  return nonEmpty(v.hook, 3000) && nonEmpty(v.success_factors, 5000)
+    && Array.isArray(v.key_points) && v.key_points.length > 0 && v.key_points.length <= 30 && v.key_points.every(x => nonEmpty(x, 2000))
+    && Array.isArray(v.structure) && v.structure.length > 0 && v.structure.length <= 30 && v.structure.every(x => {
+      if (!x || typeof x !== 'object') return false
+      const section = x as Record<string, unknown>
+      return nonEmpty(section.timestamp, 30) && nonEmpty(section.label, 300) && nonEmpty(section.content, 3000)
+        && typeof section.type === 'string' && ['hook', 'intro', 'main', 'cta', 'outro'].includes(section.type)
+    })
 }

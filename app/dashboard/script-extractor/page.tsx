@@ -21,6 +21,9 @@ interface ExtractResult {
   transcript_available?: boolean
   transcript_source?: 'transcript' | 'metadata'
   raw_transcript?: string | null
+  analysis_basis?: 'transcript_full' | 'transcript_partial' | 'metadata_only'
+  confidence?: 'high' | 'medium' | 'low'
+  transcript_partial?: boolean
   from_paid_result?: boolean
   paid_result_id?: string | null
   _credits_remaining?: number
@@ -229,7 +232,9 @@ export default function ScriptExtractorPage() {
             </div>
             <div className="mt-3 text-xs flex items-center gap-1.5" style={{ color: result.transcript_available ? '#22C55E' : '#F59E0B' }}>
               <span>{result.transcript_available ? '✓' : 'ℹ️'}</span>
-              <span>{result.transcript_available ? 'Transcript elérhető — pontos struktúraelemzés készült.' : 'Transcript nem elérhető — az elemzés cím, leírás, statisztika és forrásellenőrzés alapján készült.'}</span>
+              <span>{result.transcript_available
+                ? (result.transcript_partial ? 'Transcript elérhető — az elemzés a feldolgozott transcript-részleten alapul.' : 'Transcript elérhető — transcript-alapú struktúraelemzés készült.')
+                : 'Transcript nem elérhető — az elemzés cím és leírás alapján készült, ezért becslés.'}</span>
             </div>
             <div className="flex gap-4 mt-4 pt-4 border-t border-border flex-wrap">
               {[
@@ -266,7 +271,7 @@ export default function ScriptExtractorPage() {
           {result.transcript_available && result.raw_transcript && (
             <div className="card">
               <div className="flex items-center justify-between mb-2">
-                <p className="section-label">📝 Teljes narráció</p>
+                <p className="section-label">📝 Elérhető narráció</p>
                 <CopyButton text={result.raw_transcript} label="📋 Másolás" />
               </div>
               <p className="text-text-secondary text-sm leading-relaxed whitespace-pre-wrap">{result.raw_transcript}</p>

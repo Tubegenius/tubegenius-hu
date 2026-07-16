@@ -1,5 +1,13 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — SCRIPT EXTRACTOR ÉS AUTO TRANSCRIPT HARDENING
+
+- A Script Extractor azonos YouTube-videót URL-formátumtól függetlenül egy fizetős bemenetként kezel. A támogatott watch/shorts/embed/live/youtu.be URL-ek biztonságosan kanonizálódnak; idegen lookalike host nem fogadható el. A mentett eredmény visszanyitása tool-type ellenőrzött.
+- A transcript szegmensek eredeti YouTube-időkódja bekerül az elemzési promptba. A válasz explicit `transcript_full`, `transcript_partial` vagy `metadata_only` bizonyítékalapot és confidence szintet hordoz; a UI nem állít többé teljes/pontos elemzést részletből.
+- Az Auto Transcript csak támogatott médiafájlt, nyelvet és korlátozott címet fogad. Azonos fájltartalom átnevezve sem terhelhető újra: a cache-azonosság a tartalom digestjén, nyelven és modellen alapul.
+- Az SRT/VTT formatter kiszűri a nem véges, negatív és nulla hosszú cue-kat, időrendbe rakja a szegmenseket, és helyesen viszi át az 1000 ms-ra kerekedést a következő másodpercbe. Ismeretlen időtartamnál nem talál ki időbélyeget; az üres időzített export letiltott.
+- Az AI/transcription eredmény provider- és model-telemetriával mentődik. A szigorított Script Extractor output-kapu üres és ismeretlen típusú struktúrát nem enged kreditlevonásig.
+
 ## 2026-07-16 — SEO OPTIMIZER MÓDSZERTANI HARDENING
 
 - A korábbi „SEO score” most helyesen `deterministic_metadata_readiness_v1` feltöltési metaadat-score-ként jelenik meg. Nem keresési helyezés- vagy nézettség-előrejelzés; a négy 25 pontos, determinisztikus dimenzió hibánál 0 pontot ad, így használhatatlan csomag nem indul automatikus 40/100-ról.

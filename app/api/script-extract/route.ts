@@ -9,17 +9,7 @@ import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidR
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { getActiveApiKey } from '@/lib/youtube-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
-
-function extractVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-  ]
-  for (const p of patterns) {
-    const m = url.match(p)
-    if (m) return m[1]
-  }
-  return null
-}
+import { extractYouTubeVideoId } from '@/lib/youtube-url'
 
 function parseDuration(iso: string): string {
   const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/)
@@ -32,32 +22,41 @@ function parseDuration(iso: string): string {
   return `${totalMin}-${totalMin + 1} perc`
 }
 
-async function tryTranscriptExtraction(videoId: string): Promise<{ available: boolean; text: string | null }> {
+type SourceTranscript = { available: boolean; text: string | null; timedText: string | null }
+
+function compactTimestamp(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  return `${minutes}:${String(totalSeconds % 60).padStart(2, '0')}`
+}
+
+async function tryTranscriptExtraction(videoId: string): Promise<SourceTranscript> {
   try {
     const { YoutubeTranscript } = await import('youtube-transcript')
     const segments = await YoutubeTranscript.fetchTranscript(videoId)
     if (segments && segments.length > 0) {
       const text = segments.map(s => s.text).join(' ')
-      return { available: true, text }
+      const timedText = segments.map(s => `[${compactTimestamp(s.offset)}] ${s.text}`).join('\n')
+      return { available: true, text, timedText }
     }
-    return { available: false, text: null }
+    return { available: false, text: null, timedText: null }
   } catch {
-    return { available: false, text: null }
+    return { available: false, text: null, timedText: null }
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json()
-    if (!url) return NextResponse.json({ error: 'URL megadása kötelező' }, { status: 400 })
+    if (typeof url !== 'string' || !url.trim() || url.length > 500) return NextResponse.json({ error: 'Érvényes YouTube URL megadása kötelező' }, { status: 400 })
 
-    const videoId = extractVideoId(url)
+    const videoId = extractYouTubeVideoId(url)
     if (!videoId) return NextResponse.json({ error: 'Érvénytelen YouTube URL' }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    const normalizedInput = normalizePaidResultInput({ videoId, url })
+    const normalizedInput = normalizePaidResultInput({ videoId })
     const inputHash = buildPaidResultHash({
       userId,
       toolType: 'script_extract',
@@ -89,6 +88,10 @@ export async function POST(request: NextRequest) {
     const YOUTUBE_API_KEY = getActiveApiKey()
     const videoUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics,contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`
     const videoRes = await fetchExternal('YouTube', videoUrl)
+    if (!videoRes.ok) {
+      console.error('[ScriptExtract] YouTube metadata request failed:', videoRes.status)
+      return NextResponse.json({ error: 'A YouTube adatai átmenetileg nem érhetők el.' }, { status: 502 })
+    }
     const videoData = await videoRes.json()
 
     if (!videoData.items || videoData.items.length === 0) {
@@ -107,7 +110,7 @@ export async function POST(request: NextRequest) {
     let prompt: string
 
     if (transcriptResult.available && transcriptResult.text) {
-      const truncatedTranscript = transcriptResult.text.slice(0, 6000)
+      const transcriptForAnalysis = (transcriptResult.timedText || transcriptResult.text).slice(0, 6000)
 
       prompt = `Egy YouTube video VALOS feliratszoveget (transcript) kapod. Elemezd a strukturajat MAGYARUL.
 
@@ -116,16 +119,16 @@ CSATORNA: ${snippet.channelTitle}
 HOSSZ: ${duration}
 
 TRANSCRIPT (a video tenyleges elhangzott szovege, lehet angol):
-${truncatedTranscript}
+${transcriptForAnalysis}
 
 FELADAT:
 A VALOS transcript alapjan elemezd MAGYARUL:
 - Hook (az elso mondatok, hogyan ragadja meg a figyelmet)
-- Narracios struktura szakaszokra bontva, timestamp beclessel
+- Narracios struktura szakaszokra bontva; csak a megadott transcript idokodjait hasznald
 - Kulcspontok
 - Miert mukodhetett ez a video (sikerfaktorok)
 
-NE talalj ki semmit, amit nem talalsz a transcriptben. Ez VALOS elemzes, nem becsles.
+NE talalj ki semmit, amit nem talalsz a megadott transcript-reszletben. Ha a reszlet nem fedi le a teljes videot, ne kovetkeztess a hianyzo reszre.
 
 KRITIKUS JSON SZABALYOK:
 - Mindig PARAFRAZALD magyarul a tartalmat, NE irj bele szo szerinti angol idezeteket idezojelekkel.
@@ -187,6 +190,9 @@ Valaszolj KIZAROLAG valid JSON-ban:
     }
 
     const wordCount = transcriptResult.text ? transcriptResult.text.split(/\s+/).length : 0
+    const transcriptCharsTotal = transcriptResult.text?.length || 0
+    const transcriptCharsAnalyzed = Math.min((transcriptResult.timedText || transcriptResult.text || '').length, 6000)
+    const transcriptPartial = transcriptResult.available && transcriptCharsAnalyzed < (transcriptResult.timedText || transcriptResult.text || '').length
 
     const responsePayload = {
       video_id: videoId,
@@ -206,6 +212,11 @@ Valaszolj KIZAROLAG valid JSON-ban:
       metadata_only: !transcriptResult.available,
       transcript_available: transcriptResult.available,
       transcript_source: transcriptResult.available ? 'transcript' : 'metadata',
+      analysis_basis: transcriptResult.available ? (transcriptPartial ? 'transcript_partial' : 'transcript_full') : 'metadata_only',
+      confidence: transcriptResult.available ? (transcriptPartial ? 'medium' : 'high') : 'low',
+      transcript_chars_total: transcriptCharsTotal,
+      transcript_chars_analyzed: transcriptCharsAnalyzed,
+      transcript_partial: transcriptPartial,
       raw_transcript: transcriptResult.available && transcriptResult.text ? transcriptResult.text.slice(0, 12000) : null,
       _credits_remaining: charge.new_balance,
     }
@@ -255,7 +266,7 @@ export async function GET(request: NextRequest) {
     if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })
 
     const paid = await getPaidResultById(userId, paidResultId)
-    if (!paid) return NextResponse.json({ error: 'A kinyert script nem található' }, { status: 404 })
+    if (!paid || paid.tool_type !== 'script_extract') return NextResponse.json({ error: 'A kinyert script nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
     return NextResponse.json({

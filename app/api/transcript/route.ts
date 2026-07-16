@@ -13,18 +13,13 @@ import {
   savePaidResult,
 } from '@/lib/paid-results/paid-results-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { buildSrt, buildVtt, normalizeTranscriptSegments } from '@/lib/transcript-format'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024
 const TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1'
-
-type TranscriptSegment = {
-  start: number
-  end: number
-  text: string
-}
 
 type OpenAITranscriptionResponse = {
   text?: string
@@ -45,48 +40,12 @@ function sanitizeFileName(value: string): string {
   return value.replace(/[^\p{L}\p{N}._ -]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'feltoltott-hang'
 }
 
-function secondsToTimestamp(seconds: number, separator: ',' | '.') {
-  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0)
-  const hours = Math.floor(safe / 3600)
-  const minutes = Math.floor((safe % 3600) / 60)
-  const secs = Math.floor(safe % 60)
-  const millis = Math.round((safe - Math.floor(safe)) * 1000)
-  return [
-    String(hours).padStart(2, '0'),
-    String(minutes).padStart(2, '0'),
-    String(secs).padStart(2, '0'),
-  ].join(':') + separator + String(millis).padStart(3, '0')
-}
+const ALLOWED_LANGUAGES = new Set(['auto', 'hu', 'en'])
+const ALLOWED_EXTENSIONS = new Set(['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm', 'mov', 'aac', 'ogg', 'oga', 'flac'])
 
-function buildSrt(segments: TranscriptSegment[]) {
-  return segments.map((segment, index) => [
-    String(index + 1),
-    `${secondsToTimestamp(segment.start, ',')} --> ${secondsToTimestamp(segment.end, ',')}`,
-    segment.text.trim(),
-  ].join('\n')).join('\n\n')
-}
-
-function buildVtt(segments: TranscriptSegment[]) {
-  return 'WEBVTT\n\n' + segments.map(segment => [
-    `${secondsToTimestamp(segment.start, '.')} --> ${secondsToTimestamp(segment.end, '.')}`,
-    segment.text.trim(),
-  ].join('\n')).join('\n\n')
-}
-
-function normalizeSegments(data: OpenAITranscriptionResponse): TranscriptSegment[] {
-  const segments = (data.segments || [])
-    .map(segment => ({
-      start: Number(segment.start ?? 0),
-      end: Number(segment.end ?? segment.start ?? 0),
-      text: String(segment.text || '').trim(),
-    }))
-    .filter(segment => segment.text)
-
-  if (segments.length > 0) return segments
-
-  const text = String(data.text || '').trim()
-  if (!text) return []
-  return [{ start: 0, end: Number(data.duration || 0), text }]
+function isSupportedMediaFile(file: File) {
+  const extension = file.name.split('.').pop()?.toLowerCase() || ''
+  return file.type.startsWith('audio/') || file.type.startsWith('video/') || ALLOWED_EXTENSIONS.has(extension)
 }
 
 export async function POST(request: NextRequest) {
@@ -104,6 +63,9 @@ export async function POST(request: NextRequest) {
     const language = asString(formData.get('language')) || 'hu'
     const title = asString(formData.get('title'))
 
+    if (!ALLOWED_LANGUAGES.has(language)) return NextResponse.json({ error: 'Nem támogatott transcript nyelv.' }, { status: 400 })
+    if (title && title.length > 200) return NextResponse.json({ error: 'A cím legfeljebb 200 karakter lehet.' }, { status: 400 })
+
     if (!(fileEntry instanceof File)) {
       return NextResponse.json({ error: 'Tölts fel egy hang- vagy videófájlt.' }, { status: 400 })
     }
@@ -113,6 +75,7 @@ export async function POST(request: NextRequest) {
     if (fileEntry.size > MAX_FILE_SIZE) {
       return NextResponse.json({ error: 'A fájl túl nagy. Az első verzió legfeljebb 25 MB-os hanganyagot fogad.' }, { status: 413 })
     }
+    if (!isSupportedMediaFile(fileEntry)) return NextResponse.json({ error: 'Nem támogatott fájltípus. Tölts fel hang- vagy videófájlt.' }, { status: 415 })
 
     const fileBuffer = Buffer.from(await fileEntry.arrayBuffer())
     const fileDigest = crypto.createHash('sha256').update(fileBuffer).digest('hex')
@@ -120,8 +83,6 @@ export async function POST(request: NextRequest) {
     const originalInput = title || safeFileName
     const normalizedInput = normalizePaidResultInput({
       fileDigest,
-      fileName: safeFileName,
-      fileSize: fileEntry.size,
       language,
       model: TRANSCRIPTION_MODEL,
     })
@@ -174,7 +135,7 @@ export async function POST(request: NextRequest) {
 
     const transcription = await transcriptionRes.json() as OpenAITranscriptionResponse
     const text = String(transcription.text || '').trim()
-    const segments = normalizeSegments(transcription)
+    const segments = normalizeTranscriptSegments(transcription.segments, text, transcription.duration)
     if (!text && segments.length === 0) {
       return NextResponse.json({ error: 'Nem sikerült értelmezhető szöveget kinyerni a hangból.' }, { status: 422 })
     }
@@ -199,6 +160,7 @@ export async function POST(request: NextRequest) {
       duration_seconds: transcription.duration ?? (segments.length ? segments[segments.length - 1].end : null),
       text: finalText,
       segments,
+      timed_exports_available: segments.length > 0,
       word_count: finalText.split(/\s+/).filter(Boolean).length,
       exports: {
         txt: finalText,
@@ -225,6 +187,8 @@ export async function POST(request: NextRequest) {
       },
       creditCost: CREDIT_COSTS.transcript_extract,
       freshForHours: 24 * 30,
+      provider: 'openai',
+      model: TRANSCRIPTION_MODEL,
     })
     if (!paidSave.success) {
       console.error('[Transcript] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)

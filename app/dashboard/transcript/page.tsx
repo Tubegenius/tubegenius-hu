@@ -21,6 +21,7 @@ type TranscriptResult = {
   duration_seconds: number | null
   text: string
   segments: TranscriptSegment[]
+  timed_exports_available?: boolean
   word_count: number
   exports: {
     txt: string
@@ -247,6 +248,7 @@ export default function TranscriptPage() {
                   placeholder="pl. Mai TikTok narráció"
                   className="input w-full"
                   disabled={loading}
+                  maxLength={200}
                 />
               </div>
 
@@ -353,11 +355,11 @@ export default function TranscriptPage() {
                     <i className="ti ti-download mr-1.5" />
                     TXT
                   </button>
-                  <button type="button" onClick={() => downloadText(`${baseName}.srt`, result.exports.srt)} className="btn-secondary text-sm">
+                  <button type="button" onClick={() => downloadText(`${baseName}.srt`, result.exports.srt)} disabled={!result.exports.srt} className="btn-secondary text-sm disabled:opacity-40 disabled:cursor-not-allowed" title={!result.exports.srt ? 'Nem érkezett megbízható időbélyeg.' : undefined}>
                     <i className="ti ti-download mr-1.5" />
                     SRT
                   </button>
-                  <button type="button" onClick={() => downloadText(`${baseName}.vtt`, result.exports.vtt, 'text/vtt;charset=utf-8')} className="btn-secondary text-sm">
+                  <button type="button" onClick={() => downloadText(`${baseName}.vtt`, result.exports.vtt, 'text/vtt;charset=utf-8')} disabled={!result.exports.vtt} className="btn-secondary text-sm disabled:opacity-40 disabled:cursor-not-allowed" title={!result.exports.vtt ? 'Nem érkezett megbízható időbélyeg.' : undefined}>
                     <i className="ti ti-download mr-1.5" />
                     VTT
                   </button>

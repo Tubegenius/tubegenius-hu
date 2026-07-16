@@ -12,5 +12,7 @@ describe('generated workflow output validation', () => {
   it('validates script analysis before charging', () => {
     expect(isValidScriptAnalysis({ hook: 'Hook', structure: [{ timestamp: '0:00', label: 'Nyitas', content: 'Szoveg', type: 'hook' }], key_points: ['Pont'], success_factors: 'Ok' })).toBe(true)
     expect(isValidScriptAnalysis({ hook: 'Hook', structure: 'invalid', key_points: [], success_factors: 'Ok' })).toBe(false)
+    expect(isValidScriptAnalysis({ hook: '', structure: [{ timestamp: '0:00', label: 'Nyitas', content: 'Szoveg', type: 'hook' }], key_points: ['Pont'], success_factors: 'Ok' })).toBe(false)
+    expect(isValidScriptAnalysis({ hook: 'Hook', structure: [{ timestamp: '0:00', label: 'Nyitas', content: 'Szoveg', type: 'unknown' }], key_points: ['Pont'], success_factors: 'Ok' })).toBe(false)
   })
 })

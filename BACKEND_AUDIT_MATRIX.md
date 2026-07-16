@@ -1,6 +1,6 @@
 # WillViral backend auditmátrix
 
-Utolsó frissítés: 2026-07-15. A frontend vizuális/UX audit nincs ebben a mátrixban.
+Utolsó frissítés: 2026-07-16. A frontend vizuális/UX audit nincs ebben a mátrixban.
 
 Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = kritikus út ellenőrizve, teljes hibamátrix még hátra van; **függőben** = következő auditblokk.
 
@@ -16,8 +16,8 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Title Studio | `/api/title-studio` | backend heurisztika + AI értékelés | paid result + lock | csak saját fizetett eredményből származó cím menthető | prompt/cache alap | részleges |
 | Thumbnail Studio | `/api/thumbnail-studio` | koncepcióértékelés | paid result + lock | csak saját fizetett eredményből származó koncepció menthető | kimenet/provenance alap | részleges |
 | SEO Optimizer | `/api/seo-optimizer` | determinisztikus metaadat-készültségi score + validált AI csomag; nincs rangsorpredikció | paid result + lock | tenant mentés | score/input/output edge case | lezárt |
-| Script Extractor | `/api/script-extract` | transcript-forrás + strukturálás | paid result + lock | user cache | függőben | függőben |
-| Auto Transcript | `/api/transcript` | OpenAI transcript + időbélyeg | paid result + lock | user cache | formatter/cache alap | részleges |
+| Script Extractor | `/api/script-extract` | időzített transcript-részlet vagy explicit metadata-becslés; analysis basis/confidence | kanonikus video ID hash + paid result + lock | tool-type ellenőrzött user cache | URL/output/forrás edge case | lezárt |
+| Auto Transcript | `/api/transcript` | OpenAI transcript + validált, rendezett időbélyeg; nincs kitalált cue | tartalom-digest hash + paid result + lock | fájl/nyelv/cím + tool-type validáció | formatter/input/cache edge case | lezárt |
 | Channel Audit | `/api/channel-audit` | validált audit-score + elkülönített OAuth-analitika + niche-releváns ajánlás | paid result + lock | aktív csatorna tenanttal | score/input/output/error edge case | lezárt |
 | Competitor Tracker | `/api/competitors` | csatornafeloldás + snapshotból mért VPH és 7/14/28 napos növekedés | kredit + lock | tenant CRUD + saját snapshotok | CRUD/VPH/growth alap | részleges |
 | Trend tracking/alerts | `/api/dashboard/tracked-trends`, `/api/trend-alerts` | frissesség és trendjel | deep refresh kredit | tenant CRUD + cron | függőben | függőben |
