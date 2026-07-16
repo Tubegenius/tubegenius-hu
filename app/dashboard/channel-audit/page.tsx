@@ -50,7 +50,7 @@ interface ChannelAuditData {
   weakest_dimension?: { key: string; label: string; value: number }
   top_strong?: AuditSummary[]
   top_weak?: AuditSummary[]
-  publish_rhythm?: Array<{ month: string; count: number }>
+  workflow_completion_rhythm?: Array<{ month: string; count: number }>
 }
 
 const DIMENSION_LABELS: Record<keyof DimensionAverages, string> = {
@@ -402,7 +402,7 @@ export default function ChannelAuditPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="card">
-              <p className="text-xs mb-3" style={{ color: '#22C55E' }}>LEGERŐSEBB TÉMÁK</p>
+              <p className="text-xs mb-3" style={{ color: '#22C55E' }}>LEGMAGASABB AUDITPONTSZÁMÚ TÉMÁK</p>
               <div className="space-y-2">
                 {(data.top_strong || []).map(a => (
                   <Link key={a.id} href={`/dashboard/video-audit?id=${a.id}`} className="block text-xs hover:underline" style={{ color: '#F8FAFC' }}>
@@ -412,7 +412,7 @@ export default function ChannelAuditPage() {
               </div>
             </div>
             <div className="card">
-              <p className="text-xs mb-3" style={{ color: '#EF4444' }}>LEGGYENGÉBB TÉMÁK</p>
+              <p className="text-xs mb-3" style={{ color: '#EF4444' }}>LEGALACSONYABB AUDITPONTSZÁMÚ TÉMÁK</p>
               <div className="space-y-2">
                 {(data.top_weak || []).map(a => (
                   <Link key={a.id} href={`/dashboard/video-audit?id=${a.id}`} className="block text-xs hover:underline" style={{ color: '#F8FAFC' }}>
@@ -423,11 +423,12 @@ export default function ChannelAuditPage() {
             </div>
           </div>
 
-          {(data.publish_rhythm?.length || 0) > 0 && (
+          {(data.workflow_completion_rhythm?.length || 0) > 0 && (
             <div className="card">
-              <p className="text-xs mb-3" style={{ color: '#94A3B8' }}>PUBLIKÁLÁSI RITMUS</p>
+              <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>WILLVIRALBAN PUBLIKÁLTNAK JELÖLT ÖTLETEK</p>
+              <p className="text-xs mb-3" style={{ color: '#64748B' }}>Workflow-aktivitás az állapotváltás hónapja alapján; nem YouTube publikálási gyakoriság.</p>
               <div className="flex items-end gap-2" style={{ height: 80 }}>
-                {data.publish_rhythm!.map(r => (
+                {data.workflow_completion_rhythm!.map(r => (
                   <div key={r.month} className="flex-1 flex flex-col items-center justify-end gap-1">
                     <div className="w-full rounded-t" style={{ height: `${Math.min(100, r.count * 20)}%`, background: '#3B82F6', minHeight: 4 }} />
                     <span className="text-xs" style={{ color: '#94A3B8' }}>{r.month.slice(5)}</span>

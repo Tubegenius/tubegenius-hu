@@ -35,7 +35,7 @@ export function filterRelevantAudits<T extends { video_title: string; topic?: st
   // Ha a szures mindent kiszurne (pl. a niche tul specifikus vagy a cimek
   // szokatlanok), inkabb a szuretlen listat adjuk vissza — jobb tul sokat
   // mutatni, mint egy teljesen ures "legerosebb temak" szekciot.
-  return relevant.length > 0 ? relevant : audits
+  return relevant
 }
 
 export interface DimensionAverages {
@@ -54,17 +54,28 @@ export interface AuditSummaryItem {
   created_at: string
 }
 
+const DIMENSION_KEYS: (keyof DimensionAverages)[] = ['hook_strength', 'retention_potential', 'engagement_quality', 'platform_fit', 'packaging_quality']
+
+export function hasValidDimensionScores(audit: { final_scores: Record<string, unknown> | null }): boolean {
+  if (!audit.final_scores) return false
+  return DIMENSION_KEYS.every(key => {
+    const value = Number(audit.final_scores?.[key])
+    return Number.isFinite(value) && value >= 0 && value <= 100
+  })
+}
+
 export function computeDimensionAverages(audits: Array<{ final_scores: Record<string, unknown> | null }>): DimensionAverages | null {
   if (audits.length === 0) return null
-  const keys: (keyof DimensionAverages)[] = ['hook_strength', 'retention_potential', 'engagement_quality', 'platform_fit', 'packaging_quality']
+  const keys = DIMENSION_KEYS
   const sums: DimensionAverages = { hook_strength: 0, retention_potential: 0, engagement_quality: 0, platform_fit: 0, packaging_quality: 0 }
   let count = 0
 
   for (const audit of audits) {
-    if (!audit.final_scores) continue
+    if (!hasValidDimensionScores(audit)) continue
+    const scores = audit.final_scores as Record<string, unknown>
     count++
     for (const key of keys) {
-      const value = Number(audit.final_scores[key] ?? 0)
+      const value = Number(scores[key])
       sums[key] += value
     }
   }
@@ -73,6 +84,11 @@ export function computeDimensionAverages(audits: Array<{ final_scores: Record<st
   const averages = {} as DimensionAverages
   for (const key of keys) averages[key] = Math.round(sums[key] / count)
   return averages
+}
+
+export function hasValidOverallScore(audit: { overall_score: unknown }): boolean {
+  const score = Number(audit.overall_score)
+  return Number.isFinite(score) && score >= 0 && score <= 100
 }
 
 export function findWeakestDimension(averages: DimensionAverages): { key: string; label: string; value: number } {
@@ -110,18 +126,19 @@ export function buildNextVideosPrompt(input: {
 
 NICHE: ${input.niche || 'általános'}
 LEGGYENGÉBB TERÜLET AZ EDDIGI VIDEÓKBAN: ${input.weakestDimension}
-LEGERŐSEBBEN TELJESÍTŐ KORÁBBI TÉMÁK: ${input.strongTopics.join(', ') || 'nincs adat'}
-LEGGYENGÉBBEN TELJESÍTŐ KORÁBBI TÉMÁK: ${input.weakTopics.join(', ') || 'nincs adat'}
+LEGMAGASABB VIDEÓDIAGNÓZIS-PONTSZÁMÚ KORÁBBI TÉMÁK: ${input.strongTopics.join(', ') || 'nincs adat'}
+LEGALACSONYABB VIDEÓDIAGNÓZIS-PONTSZÁMÚ KORÁBBI TÉMÁK: ${input.weakTopics.join(', ') || 'nincs adat'}
 
 FELADAT:
 Javasolj 10 konkrét videótémát, amik:
-1. Építenek a jól teljesítő témák mintázatára (de NE ismételd meg szó szerint).
-2. Tudatosan kerülik a gyenge témák hibáit.
+1. Építenek a magas auditpontszámú témák mintázatára (de NE állítsd, hogy ezek valós nézettség alapján teljesítettek jól).
+2. Tudatosan kerülik az alacsony auditpontszámú témák diagnosztizált hibáit.
 3. Kifejezetten segítenek a leggyengébb területen (${input.weakestDimension}) javítani.
 
 Minden javaslathoz adj egy rövid, 1 mondatos magyar indoklást, hogy MIÉRT ezt javaslod (hivatkozz a fenti mintázatokra).
 
 KRITIKUS SZABÁLYOK:
+- Ezek Videódiagnózis-értékelések, nem YouTube teljesítménymérések; ne nevezz nézettségi sikernek vagy bukásnak semmit.
 - SOHA ne használj idézőjelet a JSON string értékek BELSEJÉBEN.
 
 Válaszolj KIZÁRÓLAG valid JSON tömbben:

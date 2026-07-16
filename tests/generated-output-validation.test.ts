@@ -3,7 +3,9 @@ import { isValidNextVideoSuggestions, isValidScriptAnalysis } from '@/lib/genera
 
 describe('generated workflow output validation', () => {
   it('accepts bounded channel suggestions and rejects malformed arrays', () => {
-    expect(isValidNextVideoSuggestions([{ topic: 'Teszt', reasoning: 'Valos indok' }])).toBe(true)
+    const valid = Array.from({ length: 10 }, (_, i) => ({ topic: `Teszt ${i}`, reasoning: 'Valos indok' }))
+    expect(isValidNextVideoSuggestions(valid)).toBe(true)
+    expect(isValidNextVideoSuggestions(valid.slice(0, 9))).toBe(false)
     expect(isValidNextVideoSuggestions([])).toBe(false)
     expect(isValidNextVideoSuggestions([{ topic: '', reasoning: 'x' }])).toBe(false)
   })

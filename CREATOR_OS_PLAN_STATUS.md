@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — CHANNEL AUDIT ÁLLÍTÁSBIZTONSÁG ÉS ADATMINŐSÉG
+
+- A Channel Audit csak teljes, véges 0–100 közötti dimenzió- és overall score rekordokat használ; hiányzó mező többé nem számít automatikus nullának. A forráslekérdezések hibája nem jelenhet meg megtévesztő üres auditként.
+- A niche-szűrés fail-closed: teljes egyezéshiánynál off-niche auditok nem kerülnek vissza a legerősebb/leggyengébb témák és a következő videók AI-bemenetébe. Fizetős javaslathoz legalább három érvényes, niche-releváns audit szükséges.
+- A kézi Videódiagnózis score nem nevezhető valós YouTube-teljesítménynek. A UI és a prompt ezért magas/alacsony auditpontszámú témákat jelöl; a valódi csatornaanalitika külön blokk marad. Az `updated_at` alapú diagram most workflow-aktivitásként van címkézve, nem publikálási ritmusként.
+- A „következő 10 videó” AI-kimenet pontosan 10, nem üres és méretkorlátos javaslatot követel meg a kreditlevonás előtt.
+
 ## 2026-07-16 — KEYWORD RESEARCH MÓDSZERTANI HARDENING
 
 - A Keyword Research többé nem nevezi a YouTube API legfeljebb 25 elemű keresési mintáját teljes találatszámnak vagy havi keresési volumennek. A válasz külön evidenciametaadatban közli a mintaméretet, a releváns videók számát, a confidence szintet és azt, hogy ez nem havi volume-becslés.

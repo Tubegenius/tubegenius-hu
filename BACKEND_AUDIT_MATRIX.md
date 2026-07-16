@@ -18,7 +18,7 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | SEO Optimizer | `/api/seo-optimizer` | determinisztikus SEO-score + AI | paid result + lock | tenant mentés | függőben | függőben |
 | Script Extractor | `/api/script-extract` | transcript-forrás + strukturálás | paid result + lock | user cache | függőben | függőben |
 | Auto Transcript | `/api/transcript` | OpenAI transcript + időbélyeg | paid result + lock | user cache | formatter/cache alap | részleges |
-| Channel Audit | `/api/channel-audit` | csatorna snapshot + ajánlás | paid result + lock | aktív csatorna tenanttal | függőben | függőben |
+| Channel Audit | `/api/channel-audit` | validált audit-score + elkülönített OAuth-analitika + niche-releváns ajánlás | paid result + lock | aktív csatorna tenanttal | score/input/output/error edge case | lezárt |
 | Competitor Tracker | `/api/competitors` | csatornafeloldás + snapshotból mért VPH és 7/14/28 napos növekedés | kredit + lock | tenant CRUD + saját snapshotok | CRUD/VPH/growth alap | részleges |
 | Trend tracking/alerts | `/api/dashboard/tracked-trends`, `/api/trend-alerts` | frissesség és trendjel | deep refresh kredit | tenant CRUD + cron | függőben | függőben |
 | Niche discovery | `/api/youtube/discover-niche` | csatornaalapú jelöltlista | cache + refresh kredit | aktív csatorna tenanttal | függőben | függőben |

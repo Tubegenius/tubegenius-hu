@@ -1,6 +1,6 @@
 export interface NextVideoSuggestion { topic: string; reasoning: string }
 export function isValidNextVideoSuggestions(value: unknown): value is NextVideoSuggestion[] {
-  return Array.isArray(value) && value.length >= 1 && value.length <= 10 && value.every(item => !!item && typeof item === 'object' && typeof item.topic === 'string' && item.topic.trim().length > 0 && item.topic.length <= 300 && typeof item.reasoning === 'string' && item.reasoning.length <= 2000)
+  return Array.isArray(value) && value.length === 10 && value.every(item => !!item && typeof item === 'object' && typeof item.topic === 'string' && item.topic.trim().length > 0 && item.topic.length <= 300 && typeof item.reasoning === 'string' && item.reasoning.trim().length > 0 && item.reasoning.length <= 2000)
 }
 
 export interface ScriptAnalysis {
