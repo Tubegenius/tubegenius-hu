@@ -21,7 +21,7 @@ export async function GET() {
   const since = new Date(Date.now() - 8 * 86_400_000).toISOString()
   const [{ data: videos, error: videosError }, { data: snapshots, error: snapshotsError }, { data: dismissals, error: dismissalsError }] = await Promise.all([
     admin.from('tracked_competitor_videos').select('tracked_competitor_id,video_id,title').eq('user_id', user.id).in('tracked_competitor_id', ids),
-    admin.from('competitor_performance_snapshots').select('tracked_competitor_id,video_id,view_count,checked_at').eq('user_id', user.id).in('tracked_competitor_id', ids).not('video_id', 'is', null).gte('checked_at', since).order('checked_at', { ascending: true }).limit(2000),
+    admin.from('competitor_performance_snapshots').select('tracked_competitor_id,video_id,view_count,checked_at').eq('user_id', user.id).in('tracked_competitor_id', ids).not('video_id', 'is', null).gte('checked_at', since).order('checked_at', { ascending: false }).limit(2000),
     admin.from('competitor_alert_dismissals').select('tracked_competitor_id,video_id,alert_signature').eq('user_id', user.id).in('tracked_competitor_id', ids),
   ])
   if (videosError || snapshotsError || dismissalsError) return NextResponse.json({ error: 'A competitor-riasztások előzményei nem tölthetők be.' }, { status: 500 })
@@ -29,6 +29,9 @@ export async function GET() {
   for (const snapshot of snapshots || []) {
     const key = `${snapshot.tracked_competitor_id}:${snapshot.video_id}`
     points.set(key, [...(points.get(key) || []), { checked_at: snapshot.checked_at, view_count: Number(snapshot.view_count) }])
+  }
+  for (const videoPoints of points.values()) {
+    videoPoints.sort((a, b) => new Date(a.checked_at).getTime() - new Date(b.checked_at).getTime())
   }
   const byId = new Map(competitors.map(c => [c.id, c]))
   const candidates = (videos || []).map(video => {
