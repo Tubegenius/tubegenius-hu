@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — COMPETITOR VPH-KÜSZÖBRIASZTÁS
+
+- Közvetlen competitor-videó riasztás készült: a pillanatnyi VPH kizárólag a legutóbbi két valódi snapshotból számolódik, nem teljes élettartam-átlagból. Riasztás csak véges, mért VPH esetén és a user által beállított 1–1 000 000 000 közötti küszöb felett készül.
+- Versenytársanként napi/heti/kikapcsolt gyakoriság és VPH-küszöb menthető tenant-szűrten. Az elutasítás külön, RLS-védett táblába kerül, és csak a user saját competitor-videójára írható.
+- A 034-es production migráció létrehozta a beállításmezőket és a competitor alert dismissal táblát/policykat. Ellenőrzés: TypeScript ✅; 13 tesztfájl, 50/50 teszt ✅.
+
 ## 2026-07-15 — TREND ALERT VPH-MÓDSZERTAN ÉS GYAKORISÁG
 
 - Megszűnt a kumulatív YouTube-össznézettség negatív deltájából képzett hamis „gyengülő trend”. A státusz most az előző és aktuális, tényleges időintervallumból számolt megtekintés/óra legalább 25%-os gyorsulásából vagy lassulásából készül.

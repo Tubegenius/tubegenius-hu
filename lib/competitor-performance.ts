@@ -10,6 +10,11 @@ export function calculateViewsPerHour(points: PerformancePoint[]): number | null
   return Math.max(0, Math.round(((last.view_count - first.view_count) / hours) * 100) / 100)
 }
 
+export function calculateLatestViewsPerHour(points: PerformancePoint[]): number | null {
+  const valid = points.filter(p => Number.isFinite(p.view_count) && Number.isFinite(new Date(p.checked_at).getTime())).sort((a, b) => new Date(a.checked_at).getTime() - new Date(b.checked_at).getTime())
+  return calculateViewsPerHour(valid.slice(-2))
+}
+
 export function calculateWindowGrowth(points: PerformancePoint[], days: number, now = Date.now()) {
   const valid = points.filter(p => Number.isFinite(new Date(p.checked_at).getTime())).sort((a, b) => new Date(a.checked_at).getTime() - new Date(b.checked_at).getTime())
   const inWindow = valid.filter(p => new Date(p.checked_at).getTime() >= now - days * 86_400_000)

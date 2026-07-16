@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { calculateViewsPerHour, calculateWindowGrowth } from '@/lib/competitor-performance'
+import { calculateLatestViewsPerHour, calculateViewsPerHour, calculateWindowGrowth } from '@/lib/competitor-performance'
+import { classifyCompetitorVphAlerts } from '@/lib/competitor-alerts'
 import { isCompetitorSnapshotDue } from '@/lib/competitor-tracker'
 
 describe('competitor performance snapshots', () => {
@@ -17,5 +18,13 @@ describe('competitor performance snapshots', () => {
     expect(isCompetitorSnapshotDue('invalid', now)).toBe(true)
     expect(isCompetitorSnapshotDue('2026-01-01T03:00:00Z', now)).toBe(true)
     expect(isCompetitorSnapshotDue('2026-01-01T12:00:00Z', now)).toBe(false)
+  })
+  it('uses the latest two snapshots for current VPH alerts', () => {
+    const points = [{ checked_at: '2026-01-01T00:00:00Z', view_count: 0 }, { checked_at: '2026-01-01T01:00:00Z', view_count: 100 }, { checked_at: '2026-01-01T02:00:00Z', view_count: 300 }]
+    expect(calculateLatestViewsPerHour(points)).toBe(200)
+    const base = { competitor_id: 'c1', channel_title: 'Csatorna', video_id: 'v1', video_title: 'Videó', views_per_hour: 200, threshold: 100, alert_frequency: 'daily' as const, checked_at: '2026-01-01T02:00:00Z' }
+    expect(classifyCompetitorVphAlerts([base])).toHaveLength(1)
+    expect(classifyCompetitorVphAlerts([{ ...base, views_per_hour: 99 }])).toEqual([])
+    expect(classifyCompetitorVphAlerts([{ ...base, alert_frequency: 'off' }])).toEqual([])
   })
 })
