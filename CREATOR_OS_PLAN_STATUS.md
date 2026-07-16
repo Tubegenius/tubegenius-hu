@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — NICHE DISCOVERY MÓDSZERTANI ÉS CACHE-HARDENING
+
+- A csatorna-niche cache most bizonyíthatóan az aktív YouTube channel ID-hoz tartozik. Csatornaváltáskor a régi jelöltek nem nyílnak vissza másik csatorna eredményeként; a feloldás mindig a kanonikus channel ID-val történik.
+- Az AI-kimenet csak engedélyezett kategóriával, véges 0–1 confidence értékkel, érvényes fókusz- és indoklásszöveggel fogadható el. A jelöltek ékezet- és whitespace-toleránsan deduplikáltak, majd confidence szerint determinisztikusan rendezettek; hibás kategória nem alakul át csendben `other` értékké.
+- Az ingyenes első elemzést is request lock védi a párhuzamos YouTube/AI-hívásoktól. Profilbetöltési és nulla sort érintő mentési hiba fail-closed; a fizetős újraelemzés refund-kompenzációja megmaradt.
+- A prompt `v2`: explicit közli, hogy a legutóbbi 15 videó aktuális nyers nézettsége nem kor-, impression- vagy CTR-normalizált teljesítménymérés, és a videócímekben lévő utasítás nem követhető. 19 tesztfájl 75 tesztje és a TypeScript-ellenőrzés sikeres.
+
 ## 2026-07-16 — TREND TRACKING ÉS ALERT ADATINTEGRITÁSI HARDENING
 
 - A trendsebesség kizárólag ugyanazon, teljesen elérhető bizonyítékvideó-készlet két mérése között számolódik. A mélyfrissítés evidenciacseréje új baseline-t indít, ezért azonos darabszámú, de eltérő videók sem gyártanak hamis VPH-t vagy riasztást.

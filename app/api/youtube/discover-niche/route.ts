@@ -15,40 +15,54 @@ import type { NicheCandidate } from '@/types'
 export async function POST(request: NextRequest) {
   try {
     const { force_refresh } = await request.json().catch(() => ({}))
+    if (force_refresh !== undefined && typeof force_refresh !== 'boolean') {
+      return NextResponse.json({ error: 'Hibás frissítési beállítás.' }, { status: 400 })
+    }
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profile } = await admin
+    const { data: profile, error: profileError } = await admin
       .from('profiles')
       .select('active_channel_id, youtube_channel_id, youtube_channel_url, detected_niche_candidates, niche_confidence')
       .eq('user_id', userId)
       .single()
+    if (profileError || !profile) {
+      console.error('[YouTube discover-niche] profile load failed:', profileError)
+      return NextResponse.json({ error: 'A profil betöltése sikertelen.' }, { status: 500 })
+    }
 
     const channelId = profile?.active_channel_id || profile?.youtube_channel_id
-    const channelInput = profile?.youtube_channel_url || channelId
+    const channelInput = channelId
     if (!channelId || !channelInput) {
       return NextResponse.json({ error: 'no_channel', message: 'Előbb kösd össze vagy add meg a YouTube csatornádat.' }, { status: 400 })
     }
 
     const existingCandidates = profile?.detected_niche_candidates as NicheCandidate[] | null
-    if (!force_refresh && existingCandidates && existingCandidates.length > 0) {
+    const cacheMatchesActiveChannel = existingCandidates?.every(candidate => candidate.source_channel_id === channelId) === true
+    if (!force_refresh && existingCandidates && existingCandidates.length > 0 && cacheMatchesActiveChannel) {
       return NextResponse.json({ candidates: existingCandidates, niche_confidence: profile?.niche_confidence ?? null, cached: true })
     }
 
-    // Igazi elso futas (nincs meg cache-elt eredmeny) — ingyenes, nincs lock/kredit.
+    // Igazi első futás: ingyenes, de lock védi a párhuzamos YouTube/AI-hívástól.
     if (!force_refresh) {
-      const result = await discoverChannelNiches({ channelInput })
-      if ('error' in result) {
-        return NextResponse.json({ error: result.error, message: 'Nem sikerült a csatorna videói alapján niche-t javasolni.' }, { status: 422 })
+      const initialLock = await acquireRequestLock({ userId, toolType: 'niche_discovery_initial', inputHash: channelId })
+      if (!initialLock.acquired) return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
+      try {
+        const result = await discoverChannelNiches({ channelInput })
+        if ('error' in result) {
+          return NextResponse.json({ error: result.error, message: 'Nem sikerült a csatorna videói alapján niche-t javasolni.' }, { status: 422 })
+        }
+        const { data: savedProfile, error: saveError } = await admin.from('profiles').update({
+          detected_niche_candidates: result.candidates,
+          niche_confidence: result.candidates[0].confidence,
+        }).eq('user_id', userId).select('user_id').single()
+        if (saveError || !savedProfile) return NextResponse.json({ error: 'A niche-javaslatok mentése sikertelen.' }, { status: 500 })
+        return NextResponse.json({ candidates: result.candidates, niche_confidence: result.candidates[0].confidence, cached: false, charged: false })
+      } finally {
+        await releaseRequestLock(initialLock.lockId)
       }
-      const { error: saveError } = await admin.from('profiles').update({
-        detected_niche_candidates: result.candidates,
-        niche_confidence: result.candidates[0]?.confidence ?? null,
-      }).eq('user_id', userId)
-      if (saveError) return NextResponse.json({ error: 'A niche-javaslatok mentése sikertelen.' }, { status: 500 })
-      return NextResponse.json({ candidates: result.candidates, niche_confidence: result.candidates[0]?.confidence ?? null, cached: false, charged: false })
     }
 
     // Explicit "Újraelemzés" — 1 kredit, dupla-levonás elleni lock (Beta
@@ -75,18 +89,18 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
       }
 
-      const { error: saveError } = await admin.from('profiles').update({
+      const { data: savedProfile, error: saveError } = await admin.from('profiles').update({
         detected_niche_candidates: result.candidates,
-        niche_confidence: result.candidates[0]?.confidence ?? null,
-      }).eq('user_id', userId)
-      if (saveError) {
+        niche_confidence: result.candidates[0].confidence,
+      }).eq('user_id', userId).select('user_id').single()
+      if (saveError || !savedProfile) {
         const refund = await refundCreditsAfterPersistenceFailure(userId, 'niche_discovery_refresh', CREDIT_COSTS.niche_discovery_refresh, { reason: 'profile_save_failed' })
         return NextResponse.json({ error: refund.success ? 'A mentés sikertelen volt, a kreditet visszaadtuk.' : 'A mentés és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
       }
 
       return NextResponse.json({
         candidates: result.candidates,
-        niche_confidence: result.candidates[0]?.confidence ?? null,
+        niche_confidence: result.candidates[0].confidence,
         cached: false,
         charged: true,
         _credits_remaining: charge.new_balance,

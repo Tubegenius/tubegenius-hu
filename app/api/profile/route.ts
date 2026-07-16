@@ -66,12 +66,14 @@ export async function POST(request: NextRequest) {
     if (effectiveMode === 'primary_profile') {
       const { data: currentProfile } = await supabase
         .from('profiles')
-        .select('channel_usage_mode, youtube_channel_id, youtube_channel_url, detected_niche_candidates')
+        .select('channel_usage_mode, youtube_channel_id, active_channel_id, detected_niche_candidates')
         .eq('user_id', user.id)
         .single()
 
-      const channelInput = currentProfile?.youtube_channel_url || currentProfile?.youtube_channel_id
-      const alreadyDerived = Array.isArray(currentProfile?.detected_niche_candidates) && currentProfile.detected_niche_candidates.length > 0
+      const channelInput = currentProfile?.active_channel_id || currentProfile?.youtube_channel_id
+      const alreadyDerived = Array.isArray(currentProfile?.detected_niche_candidates)
+        && currentProfile.detected_niche_candidates.length > 0
+        && currentProfile.detected_niche_candidates.every((candidate: NicheCandidate) => candidate.source_channel_id === channelInput)
 
       if (channelInput && !alreadyDerived) {
         try {

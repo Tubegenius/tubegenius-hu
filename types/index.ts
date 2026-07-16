@@ -57,6 +57,7 @@ export interface NicheCandidate {
   specific_focus: string
   confidence: number
   rationale: string
+  source_channel_id?: string
 }
 
 export interface CreatorProfile {
