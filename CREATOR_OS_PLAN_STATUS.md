@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — SEO OPTIMIZER MÓDSZERTANI HARDENING
+
+- A korábbi „SEO score” most helyesen `deterministic_metadata_readiness_v1` feltöltési metaadat-score-ként jelenik meg. Nem keresési helyezés- vagy nézettség-előrejelzés; a négy 25 pontos, determinisztikus dimenzió hibánál 0 pontot ad, így használhatatlan csomag nem indul automatikus 40/100-ról.
+- A kulcsszóillesztés ékezetfüggetlen és deduplikált. A user kulcsszavai bekerülnek az AI promptba; legfeljebb 20×100 karakter, a cím/platform/régió backend-validált.
+- Valós videóhossz nélkül az AI nem találhat ki fejezet-időbélyegeket. 4–6 fejezetvázlat készül üres timestamp mezővel, a UI egyértelműen kéri a kész videó szerinti időzítést.
+- A SEO-csomag AI-kimenete nem üres cím/leírás/CTA mezőket, 5–15 taget, 3–5 hashtaget és 4–6 időzítés nélküli fejezetvázlatot követel meg még a kreditlevonás előtt.
+
 ## 2026-07-16 — CREATOR MEMORY ÉS AI COACH SAJÁTADAT-KAPU
 
 - Creator Memory proof/event enrichment explicit tenant-szűrést és fail-closed hibakezelést kapott. A központi Video Idea a memória upsert előtt készül el, a kapcsolat ugyanabban a memóriaírásban rögzül; workflow- vagy eseményszinkron hibája többé nem jelent sikert.

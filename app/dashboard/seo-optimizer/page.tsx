@@ -21,6 +21,7 @@ interface SeoResult {
   topic: string
   seo_package: SeoPackage
   seo_score: number
+  score_disclaimer?: string
   checklist: Array<{ label: string; done: boolean }>
   from_paid_result?: boolean
   cache_status?: 'fresh' | 'stale_saved'
@@ -234,9 +235,10 @@ export default function SeoOptimizerPage() {
           )}
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs" style={{ color: '#94A3B8' }}>SEO SCORE</p>
+              <p className="text-xs" style={{ color: '#94A3B8' }}>FELTÖLTÉSI METAADAT-SCORE</p>
               <span className="text-2xl font-bold" style={{ color: result.seo_score >= 70 ? '#22C55E' : result.seo_score >= 40 ? '#F59E0B' : '#EF4444' }}>{result.seo_score}/100</span>
             </div>
+            <p className="text-xs mb-3" style={{ color: '#64748B' }}>{result.score_disclaimer || 'Heurisztikus ellenőrzőpont, nem keresési helyezés- vagy nézettség-előrejelzés.'}</p>
             <div className="space-y-1.5">
               {result.checklist.map((item, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
@@ -255,9 +257,10 @@ export default function SeoOptimizerPage() {
           </div>
 
           <div className="card">
-            <p className="text-xs mb-2" style={{ color: '#94A3B8' }}>FEJEZETEK</p>
+            <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>FEJEZETVÁZLAT</p>
+            <p className="text-xs mb-2" style={{ color: '#64748B' }}>Az időbélyegeket a készre vágott videó alapján kell hozzáadni.</p>
             {(result.seo_package.chapters || []).map((c, i) => (
-              <p key={i} className="text-sm mb-1" style={{ color: '#F8FAFC' }}><b>{c.timestamp}</b> — {c.label}</p>
+              <p key={i} className="text-sm mb-1" style={{ color: '#F8FAFC' }}>{c.label}</p>
             ))}
           </div>
 

@@ -22,17 +22,19 @@ export function computeSeoHeuristics(input: {
   keywords: string[]
   tags: string[]
 }): SeoHeuristics {
-  const titleLower = input.title.toLowerCase()
-  const keywordsPresent = input.keywords.filter(k => titleLower.includes(k.toLowerCase())).length
+  const normalize = (value: string) => value.toLocaleLowerCase('hu-HU').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
+  const titleLower = normalize(input.title)
+  const validKeywords = Array.from(new Set(input.keywords.map(normalize).filter(Boolean)))
+  const keywordsPresent = validKeywords.filter(k => titleLower.includes(k)).length
   const firstLine = (input.description.split('\n')[0] || '').trim()
-  const firstLineLower = firstLine.toLowerCase()
+  const firstLineLower = normalize(firstLine)
 
   return {
     title_length: input.title.length,
     title_length_flag: input.title.length > 70 ? 'too_long' : input.title.length < 15 ? 'too_short' : 'ok',
     description_first_line_length: firstLine.length,
-    description_first_line_has_keyword: input.keywords.some(k => firstLineLower.includes(k.toLowerCase())),
-    keyword_coverage_in_title: input.keywords.length > 0 ? Math.round((keywordsPresent / input.keywords.length) * 100) : 0,
+    description_first_line_has_keyword: validKeywords.some(k => firstLineLower.includes(k)),
+    keyword_coverage_in_title: validKeywords.length > 0 ? Math.round((keywordsPresent / validKeywords.length) * 100) : 0,
     tag_count: input.tags.length,
     tag_count_flag: input.tags.length < 5 ? 'too_few' : input.tags.length > 15 ? 'too_many' : 'ok',
   }
@@ -50,22 +52,23 @@ export interface SeoPackage {
 }
 
 export function computeSeoScore(h: SeoHeuristics): number {
-  return Math.round((h.title_length_flag === 'ok' ? 25 : 10) + (h.description_first_line_has_keyword ? 25 : 10) + Math.max(0, Math.min(25, h.keyword_coverage_in_title / 4)) + (h.tag_count_flag === 'ok' ? 25 : 10))
+  return Math.round((h.title_length_flag === 'ok' ? 25 : 0) + (h.description_first_line_has_keyword ? 25 : 0) + Math.max(0, Math.min(25, h.keyword_coverage_in_title / 4)) + (h.tag_count_flag === 'ok' ? 25 : 0))
 }
 
 export function isValidSeoPackage(value: unknown): value is SeoPackage {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  const text = (key: string, max: number) => typeof v[key] === 'string' && (v[key] as string).length <= max
-  const strings = (key: string, count: number, max: number) => Array.isArray(v[key]) && (v[key] as unknown[]).length <= count && (v[key] as unknown[]).every(x => typeof x === 'string' && x.length <= max)
-  return text('seo_title', 120) && text('description', 10000) && strings('tags', 20, 100) && strings('hashtags', 10, 100) && Array.isArray(v.chapters) && v.chapters.length <= 20 && v.chapters.every(c => !!c && typeof c === 'object' && typeof (c as Record<string, unknown>).timestamp === 'string' && typeof (c as Record<string, unknown>).label === 'string') && text('playlist_suggestion', 500) && text('pinned_comment', 1000) && text('end_screen_cta', 500)
+  const text = (key: string, max: number) => typeof v[key] === 'string' && (v[key] as string).trim().length > 0 && (v[key] as string).length <= max
+  const strings = (key: string, min: number, maxCount: number, maxLength: number) => Array.isArray(v[key]) && (v[key] as unknown[]).length >= min && (v[key] as unknown[]).length <= maxCount && (v[key] as unknown[]).every(x => typeof x === 'string' && x.trim().length > 0 && x.length <= maxLength)
+  return text('seo_title', 120) && text('description', 10000) && strings('tags', 5, 15, 100) && strings('hashtags', 3, 5, 100) && Array.isArray(v.chapters) && v.chapters.length >= 4 && v.chapters.length <= 6 && v.chapters.every(c => !!c && typeof c === 'object' && (c as Record<string, unknown>).timestamp === '' && typeof (c as Record<string, unknown>).label === 'string' && ((c as Record<string, unknown>).label as string).trim().length > 0 && ((c as Record<string, unknown>).label as string).length <= 200) && text('playlist_suggestion', 500) && text('pinned_comment', 1000) && text('end_screen_cta', 500)
 }
 
-export function buildSeoOptimizerPrompt(input: { topic: string; existingTitle?: string; niche: string; useNiche: boolean; platform: string }): string {
+export function buildSeoOptimizerPrompt(input: { topic: string; existingTitle?: string; keywords: string[]; niche: string; useNiche: boolean; platform: string }): string {
   return `Egy magyar tartalomgyártónak kell egy teljes SEO/feltöltési csomagot írnod ehhez a videóhoz.
 
 TÉMA: "${input.topic}"
 ${input.existingTitle ? `CÍM: "${input.existingTitle}"` : ''}
+MEGADOTT KULCSSZAVAK: ${input.keywords.join(', ') || 'nincs külön megadva; a témát használd elsődleges kifejezésként'}
 ${input.useNiche && input.niche ? `NICHE: ${input.niche}\n` : ''}PLATFORM: ${input.platform}
 
 FELADAT — adj meg MINDENT az alábbiakból:
@@ -73,7 +76,7 @@ FELADAT — adj meg MINDENT az alábbiakból:
 - description: 3-5 bekezdéses magyar leírás, az ELSŐ SOR tartalmazza a fő kulcsszót és keltsen kíváncsiságot (ez jelenik meg keresésben)
 - tags: 8-12 releváns YouTube tag (kulcsszavak, ne hashtag formátumban)
 - hashtags: 3-5 hashtag (#-tel), amik a leírás alá kerülnek
-- chapters: 4-6 fejezet időbélyeg-becsléssel (pl. "0:00", "1:30"), realisztikus időzítéssel egy átlagos videóhoz
+- chapters: 4-6 fejezetvázlat. Mivel nincs kész videóhossz vagy vágott videó, a timestamp minden elemnél pontosan üres string legyen; valós időbélyeget ne találj ki.
 - playlist_suggestion: milyen lejátszási listába illene ez a videó
 - pinned_comment: 1-2 mondatos kitűzhető komment, ami beszélgetést indít
 - end_screen_cta: 1 mondatos végképernyő szöveg-javaslat (mire kattintson a néző)

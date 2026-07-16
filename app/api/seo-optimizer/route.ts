@@ -18,6 +18,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
     if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
+    if (existing_title !== undefined && (typeof existing_title !== 'string' || existing_title.length > 120)) return NextResponse.json({ error: 'A meglévő cím legfeljebb 120 karakter lehet.' }, { status: 400 })
+    if (platform !== undefined && platform !== 'youtube') return NextResponse.json({ error: 'Nem támogatott platform.' }, { status: 400 })
+    if (region !== undefined && !['HU', 'US'].includes(region)) return NextResponse.json({ error: 'Nem támogatott régió.' }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
@@ -27,7 +30,11 @@ export async function POST(request: NextRequest) {
     const { niche, useNiche } = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
     const platformValue = platform || 'youtube'
     const regionValue = region || 'HU'
-    const keywordList: string[] = Array.isArray(keywords) ? keywords : (typeof keywords === 'string' ? keywords.split(',').map((k: string) => k.trim()).filter(Boolean) : [])
+    const rawKeywords: unknown[] = Array.isArray(keywords) ? keywords : (typeof keywords === 'string' ? keywords.split(',') : [])
+    if (rawKeywords.some(keyword => typeof keyword !== 'string')) return NextResponse.json({ error: 'A kulcsszavak csak szövegek lehetnek.' }, { status: 400 })
+    const keywordList = Array.from(new Set((rawKeywords as string[]).map(keyword => keyword.trim()).filter(Boolean)))
+    if (keywordList.length > 20 || keywordList.some(keyword => keyword.length > 100)) return NextResponse.json({ error: 'Legfeljebb 20, egyenként 100 karakteres kulcsszó adható meg.' }, { status: 400 })
+    const normalizedTopic = topic.trim()
 
     const normalizedInput = normalizePaidResultInput({ topic, existing_title, keywords: keywordList, platform: platformValue, region: regionValue, niche: useNiche ? niche : '', useNiche })
     const inputHash = buildPaidResultHash({ userId, toolType: 'seo_optimizer', normalizedInput, platform: platformValue, region: regionValue })
@@ -55,7 +62,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS.seo_optimizer} kredit szükséges.` }, { status: 402 })
       }
 
-      const prompt = buildSeoOptimizerPrompt({ topic, existingTitle: existing_title || undefined, niche, useNiche, platform: platformValue })
+      const prompt = buildSeoOptimizerPrompt({ topic: normalizedTopic, existingTitle: existing_title?.trim() || undefined, keywords: keywordList, niche, useNiche, platform: platformValue })
       const aiCall = await callAIProvider({
         model: MODELS.fast,
         maxTokens: 2000,
@@ -67,16 +74,16 @@ export async function POST(request: NextRequest) {
       const seoPackage = extractJson<SeoPackage>(aiCall.text)
       if (!isValidSeoPackage(seoPackage)) throw new Error('Invalid SEO package returned by AI provider')
       const heuristics = computeSeoHeuristics({
-        title: seoPackage.seo_title || existing_title || topic,
+        title: seoPackage.seo_title || existing_title || normalizedTopic,
         description: seoPackage.description || '',
-        keywords: keywordList.length > 0 ? keywordList : [topic],
+        keywords: keywordList.length > 0 ? keywordList : [normalizedTopic],
         tags: seoPackage.tags || [],
       })
       const seoScore = computeSeoScore(heuristics)
 
-      await logUsage(userId, 'seo_optimizer', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic })
+      await logUsage(userId, 'seo_optimizer', MODELS.fast, aiCall.usage.inputTokens, aiCall.usage.outputTokens, { topic: normalizedTopic })
 
-      const charge = await chargeFeature(userId, 'seo_optimizer', { topic })
+      const charge = await chargeFeature(userId, 'seo_optimizer', { topic: normalizedTopic })
       if (!charge.success) {
         return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
       }
@@ -85,16 +92,18 @@ export async function POST(request: NextRequest) {
         { label: 'Cím hossza megfelelő (15-70 karakter)', done: heuristics.title_length_flag === 'ok' },
         { label: 'Leírás első sora tartalmaz kulcsszót', done: heuristics.description_first_line_has_keyword },
         { label: 'Elég tag van megadva (5-15)', done: heuristics.tag_count_flag === 'ok' },
-        { label: 'Van fejezet-időbélyeg', done: (seoPackage.chapters || []).length > 0 },
+        { label: 'Van fejezetvázlat (az időbélyegeket a kész videóhoz kell igazítani)', done: (seoPackage.chapters || []).length > 0 },
         { label: 'Van kitűzhető komment', done: !!seoPackage.pinned_comment },
         { label: 'Van végképernyő CTA', done: !!seoPackage.end_screen_cta },
       ]
 
       const responsePayload = {
-        topic,
+        topic: normalizedTopic,
         seo_package: seoPackage,
         heuristics,
         seo_score: seoScore,
+        score_methodology: 'deterministic_metadata_readiness_v1',
+        score_disclaimer: 'Heurisztikus feltöltési metaadat-készültség, nem keresési helyezés- vagy nézettség-előrejelzés.',
         checklist,
         _credits_remaining: charge.new_balance,
       }
@@ -104,11 +113,11 @@ export async function POST(request: NextRequest) {
         toolType: 'seo_optimizer',
         inputHash,
         normalizedInput,
-        originalInput: topic,
+        originalInput: normalizedTopic,
         platform: platformValue,
         region: regionValue,
         resultJson: responsePayload,
-        summaryJson: { topic, seo_score: seoScore },
+        summaryJson: { topic: normalizedTopic, seo_score: seoScore, score_methodology: 'deterministic_metadata_readiness_v1' },
         creditCost: CREDIT_COSTS.seo_optimizer,
         freshForHours: 24,
         provider: aiCall.provider,

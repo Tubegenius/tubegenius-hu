@@ -15,7 +15,7 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Content Gap | `/api/content-gap` | két valós forráshalmaz összevetése | paid result + lock | user cache | prompt/cache alap | részleges |
 | Title Studio | `/api/title-studio` | backend heurisztika + AI értékelés | paid result + lock | csak saját fizetett eredményből származó cím menthető | prompt/cache alap | részleges |
 | Thumbnail Studio | `/api/thumbnail-studio` | koncepcióértékelés | paid result + lock | csak saját fizetett eredményből származó koncepció menthető | kimenet/provenance alap | részleges |
-| SEO Optimizer | `/api/seo-optimizer` | determinisztikus SEO-score + AI | paid result + lock | tenant mentés | függőben | függőben |
+| SEO Optimizer | `/api/seo-optimizer` | determinisztikus metaadat-készültségi score + validált AI csomag; nincs rangsorpredikció | paid result + lock | tenant mentés | score/input/output edge case | lezárt |
 | Script Extractor | `/api/script-extract` | transcript-forrás + strukturálás | paid result + lock | user cache | függőben | függőben |
 | Auto Transcript | `/api/transcript` | OpenAI transcript + időbélyeg | paid result + lock | user cache | formatter/cache alap | részleges |
 | Channel Audit | `/api/channel-audit` | validált audit-score + elkülönített OAuth-analitika + niche-releváns ajánlás | paid result + lock | aktív csatorna tenanttal | score/input/output/error edge case | lezárt |

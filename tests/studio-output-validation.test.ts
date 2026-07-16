@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeSeoScore, isValidSeoPackage } from '@/lib/seo-optimizer'
+import { computeSeoHeuristics, computeSeoScore, isValidSeoPackage } from '@/lib/seo-optimizer'
 import { isValidThumbnailConcept } from '@/lib/thumbnail-studio'
 import { isValidTitleVariation } from '@/lib/title-studio'
 
@@ -7,6 +7,15 @@ describe('studio output validation', () => {
   it('weights SEO keyword coverage as one quarter of the total score', () => {
     expect(computeSeoScore({ title_length: 30, title_length_flag: 'ok', description_first_line_length: 20, description_first_line_has_keyword: true, keyword_coverage_in_title: 0, tag_count: 8, tag_count_flag: 'ok' })).toBe(75)
     expect(computeSeoScore({ title_length: 30, title_length_flag: 'ok', description_first_line_length: 20, description_first_line_has_keyword: true, keyword_coverage_in_title: 100, tag_count: 8, tag_count_flag: 'ok' })).toBe(100)
+    expect(computeSeoScore({ title_length: 2, title_length_flag: 'too_short', description_first_line_length: 0, description_first_line_has_keyword: false, keyword_coverage_in_title: 0, tag_count: 0, tag_count_flag: 'too_few' })).toBe(0)
+  })
+  it('matches Hungarian keywords accent-insensitively and rejects invented chapter timing', () => {
+    const heuristics = computeSeoHeuristics({ title: 'Árvíztűrő növények otthon', description: 'Arvizturo novenyek bemutatása', keywords: ['árvíztűrő növények'], tags: ['a', 'b', 'c', 'd', 'e'] })
+    expect(heuristics.keyword_coverage_in_title).toBe(100)
+    expect(heuristics.description_first_line_has_keyword).toBe(true)
+    const base = { seo_title: 'Árvíztűrő növények otthon', description: 'Árvíztűrő növények bemutatása', tags: ['a', 'b', 'c', 'd', 'e'], hashtags: ['#a', '#b', '#c'], chapters: Array.from({ length: 4 }, (_, i) => ({ timestamp: '', label: `Fejezet ${i}` })), playlist_suggestion: 'Növények', pinned_comment: 'Te melyiket választanád?', end_screen_cta: 'Nézd meg a következő videót.' }
+    expect(isValidSeoPackage(base)).toBe(true)
+    expect(isValidSeoPackage({ ...base, chapters: [{ timestamp: '1:30', label: 'Kitalált idő' }, ...base.chapters.slice(1)] })).toBe(false)
   })
   it('rejects malformed AI studio payloads', () => {
     expect(isValidSeoPackage({ seo_title: 'x' })).toBe(false)
