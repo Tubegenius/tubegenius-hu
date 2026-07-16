@@ -76,10 +76,10 @@ export default function CreatorMemoryPanel({ items: initialItems }: { items: Cre
                       {item.opportunity_score && <span className="text-xs text-text-muted">Lehetőség: <span className="text-text-secondary font-medium">{item.opportunity_score}</span></span>}
                     </div>
                   )}
-                  {item.insight?.positive && (
-                    <p className="text-xs text-emerald mt-1.5">💡 Hasonló téma korábban bejött nálad</p>
+                  {item.insight?.published && (
+                    <p className="text-xs text-blue-300 mt-1.5">Korábban publikáltál hasonló témát — ez nem teljesítménybizonyíték</p>
                   )}
-                  {!item.insight?.positive && item.insight?.negative && (
+                  {!item.insight?.published && item.insight?.rejected && (
                     <p className="text-xs text-amber mt-1.5">⚠️ Hasonló témát már elutasítottál</p>
                   )}
                   {/* Gyors akciók */}

@@ -57,13 +57,13 @@ describe('video idea CRUD and workflow', () => {
     expect(forwardWorkflowStatus('validating', 'validated')).toBe('validated')
   })
   it('maps explicit CRUD states', () => {
-    expect(mapMemoryStateToWorkflowStatus('saved')).toBe('validated')
+    expect(mapMemoryStateToWorkflowStatus('saved')).toBe('new_idea')
     expect(mapMemoryStateToWorkflowStatus('completed')).toBe('published')
     expect(mapMemoryStateToWorkflowStatus('rejected')).toBe('rejected')
   })
   it('uses only related decisive outcomes as proof', () => {
     const pool: DecisiveVideoIdea[] = [{ id: '1', topic: 'youtube cim optimalizalas kezdoknek', platform: 'youtube', workflow_status: 'published', viral_score: 80, updated_at: '2026-07-15T00:00:00Z' }]
-    expect(matchRelatedOutcomes('youtube cim optimalizalas tippek', 'youtube', pool).positive).toBeDefined()
+    expect(matchRelatedOutcomes('youtube cim optimalizalas tippek', 'youtube', pool).published).toBeDefined()
     expect(matchRelatedOutcomes('kerti ontozorendszer', 'youtube', pool)).toEqual({})
   })
 })

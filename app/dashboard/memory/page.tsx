@@ -122,14 +122,14 @@ function MemoryCard({ item, onUpdate }: { item: MemoryItemExtended; onUpdate: ()
           </div>
           <h3 className="font-medium text-sm leading-snug mb-2" style={{ color: '#F8FAFC' }}>{item.topic}</h3>
 
-          {insight?.positive && (
-            <div className="text-xs px-2.5 py-1.5 rounded-lg mb-2" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#4ADE80' }}>
-              💡 Hasonló téma korábban bejött nálad: „{insight.positive.topic}"
+          {insight?.published && (
+            <div className="text-xs px-2.5 py-1.5 rounded-lg mb-2" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#93C5FD' }}>
+              Korábban publikáltál hasonló témát: „{insight.published.topic}" — ez önmagában nem teljesítménybizonyíték.
             </div>
           )}
-          {insight?.negative && (
+          {insight?.rejected && (
             <div className="text-xs px-2.5 py-1.5 rounded-lg mb-2" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#FBBF24' }}>
-              ⚠️ Hasonló témát már elutasítottál: „{insight.negative.topic}"
+              ⚠️ Hasonló témát már elutasítottál: „{insight.rejected.topic}"
             </div>
           )}
 

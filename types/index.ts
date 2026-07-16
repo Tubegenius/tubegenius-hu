@@ -429,8 +429,8 @@ export interface MemoryOutcomeMatch {
 }
 
 export interface MemoryInsight {
-  positive?: MemoryOutcomeMatch
-  negative?: MemoryOutcomeMatch
+  published?: MemoryOutcomeMatch
+  rejected?: MemoryOutcomeMatch
 }
 
 // ─── Video Package — mentett, visszanézhető generálás ───

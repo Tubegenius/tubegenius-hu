@@ -147,7 +147,7 @@ export async function getVideoIdeaWorkflowStatus(
   userId: string,
   inputHash: string
 ): Promise<VideoIdeaWorkflowStatus | null> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from('video_ideas')
     .select('workflow_status')
     .eq('user_id', userId)
@@ -209,7 +209,7 @@ export async function ensureVideoIdea(
       updated_at: new Date().toISOString(),
     })
 
-    const { data: existing } = await admin
+    const { data: existing, error: existingError } = await admin
       .from('video_ideas')
       .select('id')
       .eq('user_id', input.userId)
@@ -358,7 +358,7 @@ export async function linkVideoIdeaToLegacyRecord(
 // (app/api/dashboard/summary/route.ts readyIdeas szurese) — egy puszta memoria-mozgas
 // nem jelent tenyleges csomagot.
 const MEMORY_STATE_TO_WORKFLOW: Record<'saved' | 'in_progress' | 'completed' | 'rejected', VideoIdeaWorkflowStatus> = {
-  saved: 'validated',
+  saved: 'new_idea',
   in_progress: 'validating',
   completed: 'published',
   rejected: 'rejected',
@@ -392,13 +392,14 @@ export async function fetchDecisiveVideoIdeas(
   userId: string,
   limit = 300
 ): Promise<DecisiveVideoIdea[]> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from('video_ideas')
     .select('id, topic, platform, workflow_status, viral_score, updated_at')
     .eq('user_id', userId)
     .in('workflow_status', DECISIVE_STATUSES)
     .order('updated_at', { ascending: false })
     .limit(limit)
+  if (error) throw new Error(`decisive_video_ideas_load_failed:${error.message}`)
   return (data as DecisiveVideoIdea[] | null) || []
 }
 
@@ -430,8 +431,8 @@ export interface RelatedOutcomeMatch {
 }
 
 export interface RelatedOutcomes {
-  positive?: RelatedOutcomeMatch
-  negative?: RelatedOutcomeMatch
+  published?: RelatedOutcomeMatch
+  rejected?: RelatedOutcomeMatch
 }
 
 // Egy adott tema es egy mar lezart-allapotu otlethalmaz osszevetese —
@@ -467,7 +468,7 @@ export function matchRelatedOutcomes(
     }
   }
 
-  return { positive: bestPositive, negative: bestNegative }
+  return { published: bestPositive, rejected: bestNegative }
 }
 
 export async function setVideoIdeaWorkflowStatus(
@@ -475,20 +476,23 @@ export async function setVideoIdeaWorkflowStatus(
   input: { userId: string; videoIdeaId: string; workflowStatus: VideoIdeaWorkflowStatus }
 ): Promise<{ success: boolean; previous?: VideoIdeaWorkflowStatus | null; error?: string }> {
   try {
-    const { data: existing } = await admin
+    const { data: existing, error: existingError } = await admin
       .from('video_ideas')
       .select('workflow_status')
       .eq('id', input.videoIdeaId)
       .eq('user_id', input.userId)
       .single()
+    if (existingError || !existing) return { success: false, error: existingError?.message || 'video_idea_not_found' }
 
-    const { error } = await admin
+    const { data: updated, error } = await admin
       .from('video_ideas')
       .update({ workflow_status: input.workflowStatus, updated_at: new Date().toISOString() })
       .eq('id', input.videoIdeaId)
       .eq('user_id', input.userId)
+      .select('id')
+      .single()
 
-    if (error) return { success: false, error: error.message }
+    if (error || !updated) return { success: false, error: error?.message || 'video_idea_update_failed' }
     return { success: true, previous: (existing?.workflow_status as VideoIdeaWorkflowStatus) || null }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'unknown_error' }

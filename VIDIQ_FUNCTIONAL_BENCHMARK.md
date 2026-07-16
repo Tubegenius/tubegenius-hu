@@ -14,7 +14,7 @@ Jelölések: **igazolt** = kód + adatforrás + teszt áttekintve; **részleges*
 | Trend Alerts: keyword/category/competitor monitor, gyakoriság | Tracked Trends + Trend Alerts | Trendenként és versenytársanként napi/heti/kikapcsolt gyakoriság; összehasonlítható snapshotokból mért trend-VPH gyorsulás/lassulás; competitor-videónként állítható, legutóbbi két mérésből számolt VPH-küszöbriasztás. | igazolt alapfunkció |
 | Optimize: tag, leírás, kategória, preview, progress | SEO Optimizer | Tag/leírás/checklist megvan; preview, kategória-ajánlás és időbeli progress nincs | részleges |
 | Channel Audit | Channel Audit + Video Audit | Érvényes Videódiagnózis-score-okból készülő, állításbiztos mintázatelemzés és külön OAuth-analitika megvan. Nem állítjuk az auditpontszámról, hogy valós nézettségi teljesítmény; a vidIQ teljes scorecard- és csatornatörténeti mélysége még részleges. | igazolt eltérő módszertan / részleges képesség |
-| AI Coach | Creator OS modulok + Memory | Nem általános chatcoach, hanem bizonyítékhoz és workflow-hoz kötött döntési rendszer | eltérő előny |
+| AI Coach | Creator OS modulok + Memory | A sajátadat-források kompatibilitása és állításbiztonsági szerződése auditált. Coach-végpont még nincs; előbb provenance-os CreatorEvidenceContext és Video Idea → YouTube outcome kapcsolat kell. | tervezett eltérő előny / még hiány |
 | Thumbnail Maker / testing | Thumbnail Studio | Koncepció-intelligence van, képalkotás és valódi A/B thumbnail testing nincs | hiány/részleges |
 | Most Viewed / Outliers | Similar Videos + Competitor outlier | Valós evidence, szerveroldali provenance, snapshotból számolt VPH és napi háttérmérés megvan. | igazolt alapfunkció |
 

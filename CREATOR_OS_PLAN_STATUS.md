@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-16 — CREATOR MEMORY ÉS AI COACH SAJÁTADAT-KAPU
+
+- Creator Memory proof/event enrichment explicit tenant-szűrést és fail-closed hibakezelést kapott. A központi Video Idea a memória upsert előtt készül el, a kapcsolat ugyanabban a memóriaírásban rögzül; workflow- vagy eseményszinkron hibája többé nem jelent sikert.
+- A memória GET state, POST platform és DELETE azonosító szerződése validált; nem létező törlés 404. A `saved` memóriaállapot ismét `new_idea`, nem sugall hamis validáltságot.
+- Megszűnt a `published = bejött` hamis tanulási állítás. A UI csak azt közli, hogy hasonló téma korábban publikálva lett; valós sikert kizárólag összekapcsolt YouTube Analytics outcome bizonyíthat majd.
+- Elkészült az `AI_COACH_DATA_COMPATIBILITY.md`: sajátadat-forrásmátrix, provenance/tenant/confidence követelmények és a kötelező `CreatorEvidenceContext` előfeltétel.
+
 ## 2026-07-16 — CHANNEL AUDIT ÁLLÍTÁSBIZTONSÁG ÉS ADATMINŐSÉG
 
 - A Channel Audit csak teljes, véges 0–100 közötti dimenzió- és overall score rekordokat használ; hiányzó mező többé nem számít automatikus nullának. A forráslekérdezések hibája nem jelenhet meg megtévesztő üres auditként.

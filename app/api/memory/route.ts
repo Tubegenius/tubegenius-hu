@@ -3,7 +3,6 @@ import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-se
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import {
   ensureVideoIdea,
-  linkVideoIdeaToLegacyRecord,
   logVideoIdeaEvent,
   mapMemoryStateToWorkflowStatus,
   setVideoIdeaWorkflowStatus,
@@ -30,7 +29,9 @@ export async function GET(request: NextRequest) {
 
   const admin = createAdminClient()
   const { searchParams } = new URL(request.url)
-  const state = searchParams.get('state') as TopicState | null
+  const stateParam = searchParams.get('state')
+  if (stateParam !== null && !isMemoryState(stateParam)) return NextResponse.json({ error: 'Érvénytelen memóriaállapot' }, { status: 400 })
+  const state = stateParam as TopicState | null
   // Korabban nem volt semmilyen limit — minden mentett tema egyszerre
   // toltodott be minden oldal-nyitaskor, plusz mindegyikhez lefutott a
   // Jaccard-insight szamitas (enrichMemoryItems). Ez egy ideiglenes,
@@ -56,9 +57,13 @@ export async function GET(request: NextRequest) {
   }
 
   const items = data || []
-  const enriched = await enrichMemoryItems(admin, user.id, items)
-
-  return NextResponse.json({ items: enriched })
+  try {
+    const enriched = await enrichMemoryItems(admin, user.id, items)
+    return NextResponse.json({ items: enriched })
+  } catch (error) {
+    console.error('Memory enrichment error:', error)
+    return NextResponse.json({ error: 'A memória bizonyítékainak betöltése sikertelen.' }, { status: 500 })
+  }
 }
 
 // Egy request-en belul egyszer keri le a proof signal-okat, eseményeket es a
@@ -77,10 +82,11 @@ async function enrichMemoryItems(
   const eventsByIdea = new Map<string, VideoIdeaEvent[]>()
 
   if (videoIdeaIds.length > 0) {
-    const [{ data: signals }, { data: events }] = await Promise.all([
-      admin.from('video_idea_proof_signals').select('*').in('video_idea_id', videoIdeaIds),
-      admin.from('video_idea_events').select('*').in('video_idea_id', videoIdeaIds).order('created_at', { ascending: false }),
+    const [{ data: signals, error: signalsError }, { data: events, error: eventsError }] = await Promise.all([
+      admin.from('video_idea_proof_signals').select('*').eq('user_id', userId).in('video_idea_id', videoIdeaIds),
+      admin.from('video_idea_events').select('*').eq('user_id', userId).in('video_idea_id', videoIdeaIds).order('created_at', { ascending: false }),
     ])
+    if (signalsError || eventsError) throw new Error('memory_enrichment_load_failed')
     for (const signal of (signals as VideoIdeaProofSignal[] | null) || []) {
       const list = signalsByIdea.get(signal.video_idea_id) || []
       list.push(signal)
@@ -113,10 +119,10 @@ async function enrichMemoryItems(
     }
 
     const match = matchRelatedOutcomes(item.topic as string, item.platform as string | null, decisivePool, videoIdeaId)
-    const insight: MemoryInsight | null = match.positive || match.negative
+    const insight: MemoryInsight | null = match.published || match.rejected
       ? {
-          positive: match.positive && { topic: match.positive.topic, workflow_status: match.positive.workflow_status, updated_at: match.positive.updated_at, overlap: match.positive.overlap },
-          negative: match.negative && { topic: match.negative.topic, workflow_status: match.negative.workflow_status, updated_at: match.negative.updated_at, overlap: match.negative.overlap },
+          published: match.published && { topic: match.published.topic, workflow_status: match.published.workflow_status, updated_at: match.published.updated_at, overlap: match.published.overlap },
+          rejected: match.rejected && { topic: match.rejected.topic, workflow_status: match.rejected.workflow_status, updated_at: match.rejected.updated_at, overlap: match.rejected.overlap },
         }
       : null
 
@@ -146,14 +152,31 @@ export async function POST(request: NextRequest) {
   if (topicInputTooLong(topic)) return NextResponse.json({ error: 'A téma legfeljebb 300 karakter lehet' }, { status: 400 })
   if (state !== undefined && !isMemoryState(state)) return NextResponse.json({ error: 'Érvénytelen memóriaállapot' }, { status: 400 })
   if (![opportunity_score, viral_score, audit_score].every(isScoreOrNull)) return NextResponse.json({ error: 'A score értékeknek 0 és 100 közé kell esniük' }, { status: 400 })
+  if (platform !== undefined && !['youtube', 'youtube_long', 'youtube_shorts', 'tiktok', 'instagram_reels', 'facebook_reels'].includes(platform)) return NextResponse.json({ error: 'Érvénytelen platform' }, { status: 400 })
   if (!isOptionalTextWithinLimit(notes, 5000) || !isOptionalTextWithinLimit(search_keyword, 300) || !isOptionalTextWithinLimit(source_context, 100) || !isOptionalTextWithinLimit(quality_status, 100)) return NextResponse.json({ error: 'Túl hosszú szöveges mező' }, { status: 400 })
   const isJunkTopic = topic.includes("#") || (topic.length > 100 && !opportunity_score && !viral_score)
   if (isJunkTopic) return NextResponse.json({ skipped: true })
   const admin = createAdminClient()
 
+  const ideaResult = await ensureVideoIdea(admin, {
+    userId: user.id,
+    title: topic.trim(),
+    topic: topic.trim(),
+    platform: platform || 'youtube',
+    opportunityScore: opportunity_score ?? null,
+    viralScore: viral_score ?? null,
+    workflowStatus: mapMemoryStateToWorkflowStatus((state || 'saved') as 'saved' | 'in_progress' | 'completed' | 'rejected'),
+    metadata: {
+      source_context: source_context || 'creator_memory',
+      search_keyword: search_keyword || null,
+      quality_status: quality_status || null,
+    },
+  })
+  if (!ideaResult.success || !ideaResult.idea?.id) return NextResponse.json({ error: 'A központi videóötlet mentése sikertelen.' }, { status: 500 })
+
   const record: Record<string, unknown> = {
     user_id: user.id,
-    topic,
+    topic: topic.trim(),
     search_keyword: search_keyword || null,
     state: state || 'saved',
     opportunity_score: opportunity_score ?? null,
@@ -161,6 +184,7 @@ export async function POST(request: NextRequest) {
     platform: platform || 'youtube',
     notes: notes || null,
     updated_at: new Date().toISOString(),
+    video_idea_id: ideaResult.idea.id,
   }
   if (audit_score !== undefined) record.audit_score = audit_score
   if (audit_id) record.audit_id = audit_id
@@ -179,35 +203,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'A mentés sikertelen. Próbáld újra.' }, { status: 500 })
   }
 
-  const ideaResult = await ensureVideoIdea(admin, {
-    userId: user.id,
-    title: topic,
-    topic,
-    platform: platform || 'youtube',
-    opportunityScore: opportunity_score ?? null,
-    viralScore: viral_score ?? null,
-    workflowStatus: state === 'rejected' ? 'rejected' : state === 'completed' ? 'published' : 'new_idea',
-    metadata: {
-      source_context: source_context || 'creator_memory',
-      search_keyword: search_keyword || null,
-      quality_status: quality_status || null,
-    },
-  })
-
-  if (ideaResult.idea?.id && data?.id) {
-    await linkVideoIdeaToLegacyRecord(admin, {
-      table: 'creator_memory',
-      userId: user.id,
-      recordId: data.id,
-      videoIdeaId: ideaResult.idea.id,
-    })
-    await logVideoIdeaEvent(admin, {
+  if (data?.id) {
+    const eventResult = await logVideoIdeaEvent(admin, {
       userId: user.id,
       videoIdeaId: ideaResult.idea.id,
       eventType: state === 'rejected' ? 'idea_rejected' : 'idea_saved',
       sourceTool: source_context || 'creator_memory',
-      payload: { topic, search_keyword, state: state || 'saved' },
+      payload: { topic: topic.trim(), search_keyword, state: state || 'saved' },
     })
+    if (!eventResult.success) return NextResponse.json({ error: 'A memóriaesemény naplózása sikertelen.' }, { status: 500 })
   }
 
   // Amit a user explicit ment, azt limitáltan trackeljük (háttérfrissítés célra) —
@@ -259,14 +263,16 @@ export async function PATCH(request: NextRequest) {
       videoIdeaId: data.video_idea_id,
       workflowStatus: targetStatus,
     })
-    if (result.success && result.previous !== targetStatus) {
-      await logVideoIdeaEvent(admin, {
+    if (!result.success) return NextResponse.json({ error: 'A központi videóötlet állapotának frissítése sikertelen.' }, { status: 500 })
+    if (result.previous !== targetStatus) {
+      const eventResult = await logVideoIdeaEvent(admin, {
         userId: user.id,
         videoIdeaId: data.video_idea_id,
         eventType: 'state_changed',
         sourceTool: 'creator_memory',
         payload: { from: result.previous, to: targetStatus, memory_state: state },
       })
+      if (!eventResult.success) return NextResponse.json({ error: 'Az állapotváltozás naplózása sikertelen.' }, { status: 500 })
     }
   }
 
@@ -283,18 +289,21 @@ export async function DELETE(request: NextRequest) {
   }
 
   const { id } = await request.json()
+  if (typeof id !== 'string' || !id) return NextResponse.json({ error: 'Azonosító kötelező' }, { status: 400 })
   const admin = createAdminClient()
 
-  const { error } = await admin
+  const { data, error } = await admin
     .from('creator_memory')
     .delete()
     .eq('id', id)
     .eq('user_id', user.id)
+    .select('id')
 
   if (error) {
     console.error('Memory DELETE error:', error)
     return NextResponse.json({ error: 'A törlés sikertelen. Próbáld újra.' }, { status: 500 })
   }
+  if (!data?.length) return NextResponse.json({ error: 'A memóriaelem nem található.' }, { status: 404 })
 
   return NextResponse.json({ success: true })
 }
