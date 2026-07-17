@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { stripe, PLANS, TOPUPS, PlanKey, TopupKey } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase-server'
 import Stripe from 'stripe'
-import { canClaimFailedWebhook, isSettledTopupCheckout } from '@/lib/stripe-event-policy'
+import {
+  canClaimFailedWebhook,
+  getInvoiceSubscriptionId,
+  isInitialSubscriptionInvoice,
+  isSettledTopupCheckout,
+} from '@/lib/stripe-event-policy'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -83,6 +88,7 @@ export async function POST(req: NextRequest) {
           // szinkronban tartjuk a UI szamara (korabban ez sem toltodott ki).
           const { error: subscriptionSaveError } = await admin.from('user_credits').upsert({
             user_id: userId,
+            balance: planConfig.credits,
             plan,
             subscription_status: 'active',
             stripe_customer_id: session.customer as string,
@@ -115,8 +121,13 @@ export async function POST(req: NextRequest) {
 
       case 'invoice.payment_succeeded': {
         const invoice = event.data.object as Stripe.Invoice
-        const invoiceSubscription = (invoice as any).subscription
+        const invoiceSubscription = getInvoiceSubscriptionId(invoice as any)
         if (!invoiceSubscription) break
+
+        // The checkout event initializes the balance exactly once. Treating the
+        // first invoice as a renewal would either double-credit it or clamp an
+        // existing balance through the rollover cap.
+        if (isInitialSubscriptionInvoice(invoice.billing_reason)) break
 
         // Find user by subscription ID
         const { data: userRow, error: userLookupError } = await admin
