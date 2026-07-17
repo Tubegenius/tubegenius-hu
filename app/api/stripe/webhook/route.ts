@@ -197,10 +197,13 @@ export async function POST(req: NextRequest) {
 
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription
-        const { data: canceledSubscription, error: cancellationError } = await admin.from('user_credits').update({
+        const { error: cancellationError } = await admin.from('user_credits').update({
           subscription_status: 'canceled',
-        }).eq('stripe_subscription_id', subscription.id).select('user_id').single()
-        if (cancellationError || !canceledSubscription) throw cancellationError || new Error('Subscription cancellation affected no row')
+        }).eq('stripe_subscription_id', subscription.id)
+        // A customer may have replaced this subscription before Stripe delivers
+        // the deletion event. Zero matching rows is then a valid stale event,
+        // not a webhook failure.
+        if (cancellationError) throw cancellationError
         break
       }
     }
