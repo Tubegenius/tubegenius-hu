@@ -121,8 +121,10 @@ export async function POST(request: NextRequest) {
         : null)
     if (paid) {
       const opened = await openPaidResult(paid)
+      const polishedResult = polishHungarianOutput(opened.result_json) as Record<string, unknown>
+      const { _credits_remaining: _historicalCreditBalance, ...reopenableResult } = polishedResult
       return NextResponse.json({
-        ...(polishHungarianOutput(opened.result_json) as object),
+        ...reopenableResult,
         ...paidResultResponseMeta(opened),
       })
     }
@@ -362,8 +364,10 @@ export async function GET(request: NextRequest) {
     if (!paid) return NextResponse.json({ error: 'Videócsomag nem található' }, { status: 404 })
 
     const opened = await openPaidResult(paid)
+    const polishedResult = polishHungarianOutput(opened.result_json) as Record<string, unknown>
+    const { _credits_remaining: _historicalCreditBalance, ...reopenableResult } = polishedResult
     return NextResponse.json({
-      ...(polishHungarianOutput(opened.result_json) as object),
+      ...reopenableResult,
       ...paidResultResponseMeta(opened),
     })
   } catch (error) {
