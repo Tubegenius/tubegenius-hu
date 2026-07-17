@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-17 — YOUTUBE OAUTH PRODUCTION RECONNECT ELLENŐRZÉS
+
+- A production Channel Audit oldalon a kapcsolat bontása, majd a teljes Google OAuth újracsatlakozás élőben sikeresen lefutott. A callback a kanonikus `https://tubegenius-hu.vercel.app/api/youtube/oauth-callback` címre tért vissza, az összekapcsolt állapot, a bontási lehetőség és a valós, 28 napos YouTube Analytics blokk ismét megjelent.
+- Az első újracsatlakozási próbát a Google `redirect_uri_mismatch` hibával elutasította, mert a production callback még nem szerepelt az OAuth kliens engedélyezett redirect URI-jai között. A külső Google Cloud konfiguráció javítása után ugyanaz a folyamat sikeres lett; kódmódosítás nem kellett.
+- A visszakapcsolás utáni aktuális 28 napos értékek eltértek egy korábbi ugyanazon napi kézi mérés számaitól. Az OAuth- és adatbetöltési út működése igazolt, de az eltérés okát külön adategyeztetési pontként kell kezelni, nem tekinthető automatikusan regressziónak vagy lezárt metrikai egyezésnek.
+
 ## 2026-07-17 — VIDEO PACKAGE FACT-SAFETY ÉS WORKFLOW-INTEGRITÁS HARDENING
 
 - Egyetlen felhasználói forrásvideó-transcript többé nem írhatja felül kézzel a minimum forráskövetelményt. High-risk egészségügyi, pénzügyi, jogi, politikai vagy vádjellegű témánál továbbra is három külön forrás szükséges; a transcript primer forrás, nem automatikusan több független bizonyíték.
