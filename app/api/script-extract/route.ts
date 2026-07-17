@@ -240,7 +240,7 @@ Valaszolj KIZAROLAG valid JSON-ban:
     })
     if (!paidSave.success) {
       console.error('[ScriptExtract] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-      const refund = await refundCreditsAfterPersistenceFailure(userId, 'script_extract', CREDIT_COSTS.script_extract, { reason: 'paid_result_save_failed' })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'script_extract', CREDIT_COSTS.script_extract, { reason: 'paid_result_save_failed' }, charge.credit_transaction_id)
       if (!refund.success) console.error('[ScriptExtract] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
       return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
     }

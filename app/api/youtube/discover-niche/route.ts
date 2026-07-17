@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
         niche_confidence: result.candidates[0].confidence,
       }).eq('user_id', userId).select('user_id').single()
       if (saveError || !savedProfile) {
-        const refund = await refundCreditsAfterPersistenceFailure(userId, 'niche_discovery_refresh', CREDIT_COSTS.niche_discovery_refresh, { reason: 'profile_save_failed' })
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'niche_discovery_refresh', CREDIT_COSTS.niche_discovery_refresh, { reason: 'profile_save_failed' }, charge.credit_transaction_id)
         return NextResponse.json({ error: refund.success ? 'A mentés sikertelen volt, a kreditet visszaadtuk.' : 'A mentés és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
       }
 

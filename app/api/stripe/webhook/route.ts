@@ -81,21 +81,29 @@ export async function POST(req: NextRequest) {
           const planConfig = PLANS[plan]
           if (!planConfig) break
 
-          // A user_credits tablaban nincs kulon subscription_credits mezo,
-          // csak egy kozos "balance" — uj elofizetes inditasakor ezt
-          // egyenesen a terv kezdo kreditjere allitjuk (nem increment,
-          // hiszen ez egy uj/kezdo allapot), es a monthly_allowance-t is
-          // szinkronban tartjuk a UI szamara (korabban ez sem toltodott ki).
-          const { error: subscriptionSaveError } = await admin.from('user_credits').upsert({
+          const { error: ensureCreditRowError } = await admin.from('user_credits').upsert({
             user_id: userId,
-            balance: planConfig.credits,
             plan,
             subscription_status: 'active',
             stripe_customer_id: session.customer as string,
             stripe_subscription_id: session.subscription as string,
             monthly_allowance: planConfig.credits,
           }, { onConflict: 'user_id' })
-          if (subscriptionSaveError) throw subscriptionSaveError
+          if (ensureCreditRowError) throw ensureCreditRowError
+
+          // Initial subscription credit only touches the subscription bucket.
+          // Cap=allowance initializes it to the plan amount without touching any
+          // previously purchased/conservatively migrated credit.
+          const { data: initialCredit, error: initialCreditError } = await admin.rpc('apply_bucket_credit_event', {
+            p_user_id: userId,
+            p_delta: planConfig.credits,
+            p_bucket: 'subscription',
+            p_cap: planConfig.credits,
+            p_external_ref: `stripe:subscription:${event.id}`,
+            p_reason: 'subscription_start',
+            p_metadata: { plan, stripe_event_id: event.id },
+          })
+          if (initialCreditError || !initialCredit) throw initialCreditError || new Error('Initial subscription credit mutation returned no balance')
         } else if (session.mode === 'payment') {
           if (!isSettledTopupCheckout(session.mode, session.payment_status)) throw new Error('Top-up checkout is not paid')
           const pkg = session.metadata?.package as TopupKey
@@ -104,9 +112,10 @@ export async function POST(req: NextRequest) {
 
           // Atomi increment RPC-vel — korabban select-update (read-then-write)
           // volt, ami ket kozel egyideju esemenynel elveszithetett egy frissitest.
-          const { data: newBalance, error: rpcError } = await admin.rpc('apply_credit_event', {
+          const { data: topupResult, error: rpcError } = await admin.rpc('apply_bucket_credit_event', {
             p_user_id: userId,
             p_delta: topupConfig.credits,
+            p_bucket: 'purchased',
             p_cap: null,
             p_external_ref: `stripe:${event.id}`,
             p_reason: 'topup_purchase',
@@ -114,7 +123,7 @@ export async function POST(req: NextRequest) {
           })
           if (rpcError) throw rpcError
 
-          if (newBalance == null) throw new Error('Top-up credit mutation returned no balance')
+          if (topupResult == null) throw new Error('Top-up credit mutation returned no balance')
         }
         break
       }
@@ -151,9 +160,10 @@ export async function POST(req: NextRequest) {
 
         // Atomi increment RPC-vel, a rollover-sapka (rolloverCap) a fuggvenyen
         // belul LEAST()-tel ervenyesul — korabban ez is select-update volt.
-        const { data: newBalance, error: rpcError } = await admin.rpc('apply_credit_event', {
+        const { data: renewalResult, error: rpcError } = await admin.rpc('apply_bucket_credit_event', {
           p_user_id: resolvedUserId,
           p_delta: planConfig.credits,
+          p_bucket: 'subscription',
           p_cap: planConfig.rolloverCap,
           p_external_ref: `stripe:invoice:${invoice.id}`,
           p_reason: 'subscription_renewal',
@@ -161,7 +171,7 @@ export async function POST(req: NextRequest) {
         })
         if (rpcError) throw rpcError
 
-        if (newBalance == null) throw new Error('Subscription credit mutation returned no balance')
+        if (renewalResult == null) throw new Error('Subscription credit mutation returned no balance')
         break
       }
 

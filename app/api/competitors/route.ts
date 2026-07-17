@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
 
     if (insertError) {
       console.error('[Competitors] KRITIKUS: mentés sikertelen, a user már fizetett érte:', insertError)
-      const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_save_failed' })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_save_failed' }, charge.credit_transaction_id)
       if (insertError.code === '23505' && refund.success) return NextResponse.json({ error: 'Ezt a csatornát már figyeled. A kreditet visszaadtuk.' }, { status: 409 })
       return NextResponse.json({ error: refund.success ? 'A mentés sikertelen volt, a kreditet visszaadtuk.' : 'A mentés és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
@@ -187,7 +187,7 @@ export async function POST(request: NextRequest) {
       )
       if (videosError) {
         await admin.from('tracked_competitors').delete().eq('id', competitor.id).eq('user_id', userId)
-        const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_videos_save_failed' })
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_videos_save_failed' }, charge.credit_transaction_id)
         return NextResponse.json({ error: refund.success ? 'A videók mentése sikertelen volt, a kreditet visszaadtuk.' : 'A videók mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
       }
     }
@@ -199,7 +199,7 @@ export async function POST(request: NextRequest) {
     ])
     if (snapshotError) {
       await admin.from('tracked_competitors').delete().eq('id', competitor.id).eq('user_id', userId)
-      const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_snapshot_save_failed' })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'competitor_add', CREDIT_COSTS.competitor_add, { reason: 'competitor_snapshot_save_failed' }, charge.credit_transaction_id)
       return NextResponse.json({ error: refund.success ? 'A teljesítmény-előzmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'A teljesítmény-előzmény mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
 

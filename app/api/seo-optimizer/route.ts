@@ -128,7 +128,7 @@ export async function POST(request: NextRequest) {
       })
       if (!paidSave.success) {
         console.error('[SeoOptimizer] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-        const refund = await refundCreditsAfterPersistenceFailure(userId, 'seo_optimizer', CREDIT_COSTS.seo_optimizer, { reason: 'paid_result_save_failed' })
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'seo_optimizer', CREDIT_COSTS.seo_optimizer, { reason: 'paid_result_save_failed' }, charge.credit_transaction_id)
         if (!refund.success) console.error('[SeoOptimizer] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
         return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
       }

@@ -335,7 +335,7 @@ export async function POST(request: NextRequest) {
     })
     if (!paidSave.success) {
       console.error('[VideoPackage] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-      const refund = await refundCreditsAfterPersistenceFailure(userId, feature, CREDIT_COSTS[feature], { reason: 'paid_result_save_failed' })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, feature, CREDIT_COSTS[feature], { reason: 'paid_result_save_failed' }, chargeResult.credit_transaction_id)
       if (!refund.success) console.error('[VideoPackage] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
       return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
     }

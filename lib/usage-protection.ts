@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
-import { calculateCreditMutation, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
 import { refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { checkDailySoftLimit } from '@/lib/daily-soft-limit'
+import { randomUUID } from 'crypto'
 
 // ── Free user limitek ────────────────────────────────────────
 
@@ -254,63 +254,26 @@ export async function chargeProtectedFeature(
   userId: string,
   feature: ProtectedFeature,
   extraMetadata: Record<string, unknown> = {},
-): Promise<{ success: boolean; newBalance: number; error?: string }> {
+): Promise<{ success: boolean; newBalance: number; error?: string; credit_transaction_id?: string; subscription_spent?: number; purchased_spent?: number }> {
   const admin = adminClient()
   const cost = FREE_LIMITS[feature].creditCost
-
-  let updatedBalance: number | undefined
-  let lastObservedBalance = 0
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const { data: current, error: fetchError } = await admin
-      .from('user_credits')
-      .select('balance, total_used')
-      .eq('user_id', userId)
-      .single()
-
-    const currentBalance = Number(current?.balance ?? 0)
-    lastObservedBalance = currentBalance
-    if (fetchError || !current) {
-      if (fetchError) console.error('[UsageProtection] balance read hiba:', fetchError)
-      return { success: false, newBalance: currentBalance, error: 'Kredit egyenleg nem található' }
-    }
-    const mutation = calculateCreditMutation(currentBalance, Number(current.total_used ?? 0), cost)
-    if (!mutation.allowed) {
-      return { success: false, newBalance: currentBalance, error: 'Nincs elég kredit' }
-    }
-
-    const { data: updated, error } = await admin
-      .from('user_credits')
-      .update({
-        balance: mutation.newBalance,
-        total_used: mutation.newTotalUsed,
-      })
-      .eq('user_id', userId)
-      .eq('balance', currentBalance)
-      .gte('balance', cost)
-      .select('balance')
-      .single()
-
-    if (updated) {
-      updatedBalance = Number(updated.balance)
-      break
-    }
-
-    const optimisticLockMiss = isOptimisticCreditLockMiss(error)
-    if (!optimisticLockMiss) {
-      console.error('[UsageProtection] chargeProtectedFeature DB hiba:', error)
-      break
-    }
-    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 25 * attempt))
+  const { data, error } = await admin.rpc('spend_credits', {
+    p_user_id: userId,
+    p_cost: cost,
+    p_feature: feature,
+    p_external_ref: `spend:${randomUUID()}`,
+    p_metadata: extraMetadata,
+  })
+  if (error || !data) {
+    const { data: current } = await admin.from('user_credits').select('balance').eq('user_id', userId).single()
+    const insufficient = String(error?.message || '').includes('insufficient credits')
+    if (error && !insufficient) console.error('[UsageProtection] spend_credits RPC hiba:', error)
+    return { success: false, newBalance: Number(current?.balance ?? 0), error: insufficient ? 'Nincs elég kredit' : 'A kredit levonás nem sikerült.' }
   }
-
-  if (updatedBalance === undefined) {
-    return {
-      success: false,
-      newBalance: lastObservedBalance,
-      error: 'A kredit levonás nem sikerült — túl sok egyidejű kérés. Próbáld újra.',
-    }
-  }
+  const receipt = data as Record<string, unknown>
+  const transactionId = String(receipt.transaction_id || '')
+  const updatedBalance = Number(receipt.total_balance)
+  if (!transactionId || !Number.isFinite(updatedBalance)) return { success: false, newBalance: 0, error: 'A kredit tranzakció válasza hibás.' }
 
   const { error: chargeLogError } = await admin.from('ai_usage_logs').insert({
     user_id: userId,
@@ -320,15 +283,21 @@ export async function chargeProtectedFeature(
     output_tokens: 0,
     estimated_cost_usd: 0,
     credits_charged: cost,
-    metadata: { type: 'protected_feature_charge', feature, ...extraMetadata },
+    metadata: { type: 'protected_feature_charge', feature, credit_transaction_id: transactionId, ...extraMetadata },
   })
   if (chargeLogError) {
     console.error('[UsageProtection] charge audit log failed, refunding:', chargeLogError)
-    const refund = await refundCreditsAfterPersistenceFailure(userId, feature, cost, { ...extraMetadata, reason: 'protected_charge_audit_log_failed' })
+    const refund = await refundCreditsAfterPersistenceFailure(userId, feature, cost, { ...extraMetadata, reason: 'protected_charge_audit_log_failed' }, transactionId)
     return { success: false, newBalance: refund.new_balance ?? updatedBalance, error: refund.success ? 'A kreditművelet naplózása sikertelen volt, a kreditet visszaadtuk.' : 'A kreditművelet helyreállítása sikertelen.' }
   }
 
-  return { success: true, newBalance: updatedBalance }
+  return {
+    success: true,
+    newBalance: updatedBalance,
+    credit_transaction_id: transactionId,
+    subscription_spent: Number(receipt.subscription_spent || 0),
+    purchased_spent: Number(receipt.purchased_spent || 0),
+  }
 }
 export function getGlobalQuotaLevel(): 'normal' | 'throttled' | 'critical' | 'exhausted' {
   const { getQuotaState } = require('./youtube-service')

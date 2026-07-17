@@ -67,7 +67,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         { onConflict: 'tracked_competitor_id,video_id' }
       )
       if (videosError) {
-        const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_refresh_videos_save_failed' })
+        const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_refresh_videos_save_failed' }, charge.credit_transaction_id)
         return NextResponse.json({ error: refund.success ? 'A videók mentése sikertelen volt, a kreditet visszaadtuk.' : 'A videók mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
       }
     }
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       ...videos.map(v => ({ tracked_competitor_id: competitor.id, user_id: userId, video_id: v.videoId, view_count: v.viewCount, checked_at: checkedAt })),
     ])
     if (snapshotError) {
-      const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_snapshot_save_failed' })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_snapshot_save_failed' }, charge.credit_transaction_id)
       return NextResponse.json({ error: refund.success ? 'A teljesítmény-előzmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'A teljesítmény-előzmény mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
 
@@ -90,7 +90,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }).eq('id', competitor.id).eq('user_id', userId)
 
     if (competitorUpdateError) {
-      const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_refresh_save_failed' })
+      const refund = await refundCreditsAfterPersistenceFailure(userId, 'outlier_scan', CREDIT_COSTS.outlier_scan, { reason: 'competitor_refresh_save_failed' }, charge.credit_transaction_id)
       return NextResponse.json({ error: refund.success ? 'A frissítés mentése sikertelen volt, a kreditet visszaadtuk.' : 'A frissítés mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
     }
 

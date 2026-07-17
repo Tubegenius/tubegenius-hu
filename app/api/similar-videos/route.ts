@@ -562,6 +562,7 @@ export async function POST(request: NextRequest) {
 
     // Kredit levonást később végezzük, a YouTube keresés után — csak ha nem cache hit
     let creditCharged = false
+    let creditTransactionId: string | undefined
     if (usageCheck.cost > 0) {
       // Egyelőre nem vonunk le — a keresés után döntünk
       const hasEnough = usageCheck.canRun
@@ -779,6 +780,7 @@ export async function POST(request: NextRequest) {
       if (usageCheck.cost > 0 && !creditCharged) {
         const charge = await chargeProtectedFeature(userId, 'similar_videos', { topic })
         creditCharged = charge.success
+        creditTransactionId = charge.credit_transaction_id
         if (!charge.success) {
           return NextResponse.json({ error: charge.error || 'Nincs elég kredited ehhez a kereséshez.' }, { status: 402 })
         }
@@ -839,7 +841,7 @@ export async function POST(request: NextRequest) {
       if (!paidSave.success) {
         console.error('[SimilarVideos] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
         if (usageCheck.cost > 0) {
-          const refund = await refundCreditsAfterPersistenceFailure(userId, 'similar_videos', usageCheck.cost, { reason: 'paid_result_save_failed' })
+          const refund = await refundCreditsAfterPersistenceFailure(userId, 'similar_videos', usageCheck.cost, { reason: 'paid_result_save_failed' }, creditTransactionId)
           if (!refund.success) console.error('[SimilarVideos] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
           return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
         }

@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
     .eq('user_id', user.id)
 
   if (updateError) {
-    const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'tracked_trend_save_failed' })
+    const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'tracked_trend_save_failed' }, charge.credit_transaction_id)
     return NextResponse.json({ error: refund.success ? 'A frissítés mentése sikertelen volt, a kreditet visszaadtuk.' : 'A frissítés mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
   }
 
@@ -267,7 +267,7 @@ export async function POST(request: NextRequest) {
       status: row.status,
     }).eq('id', row.id).eq('user_id', user.id)
     if (rollbackError) console.error('[TrendDeepRefresh] source rollback failed:', rollbackError)
-    const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'trend_snapshot_save_failed' })
+    const refund = await refundCreditsAfterPersistenceFailure(user.id, 'trend_deep_refresh', CREDIT_COSTS.trend_deep_refresh, { reason: 'trend_snapshot_save_failed' }, charge.credit_transaction_id)
     return NextResponse.json({ error: refund.success ? 'A trend snapshot mentése sikertelen volt, a kreditet visszaadtuk.' : 'A trend snapshot mentése és a kredit-visszatérítés sikertelen.' }, { status: 500 })
   }
 

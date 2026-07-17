@@ -8,8 +8,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { MODELS } from '@/lib/models'
-import { calculateCreditMutation, calculateCreditRefund, isOptimisticCreditLockMiss } from '@/lib/credit-charge-policy'
 import { checkDailySoftLimit, type DailySoftLimitDecision } from '@/lib/daily-soft-limit'
+import { randomUUID } from 'crypto'
 
 export type FeatureName =
   | 'video_package_shorts'
@@ -79,10 +79,10 @@ function adminClient() {
   )
 }
 
-const CREDIT_CHARGE_MAX_ATTEMPTS = 3
-
-function waitForCreditRetry(attempt: number) {
-  return new Promise(resolve => setTimeout(resolve, 25 * attempt))
+export interface CreditChargeReceipt {
+  credit_transaction_id: string
+  subscription_spent: number
+  purchased_spent: number
 }
 
 export async function getUserId(): Promise<string | null> {
@@ -96,16 +96,21 @@ export async function getUserId(): Promise<string | null> {
   return user?.id || null
 }
 
-export async function getCreditBalance(userId: string): Promise<{ balance: number; plan: string } | null> {
+export async function getCreditBalance(userId: string): Promise<{ balance: number; plan: string; subscription_balance: number; purchased_balance: number } | null> {
   const admin = adminClient()
   const { data, error } = await admin
     .from('user_credits')
-    .select('balance, plan')
+    .select('balance, plan, subscription_credit_balance, purchased_credit_balance')
     .eq('user_id', userId)
     .single()
 
   if (error || !data) return null
-  return { balance: Number(data.balance), plan: data.plan }
+  return {
+    balance: Number(data.balance),
+    plan: data.plan,
+    subscription_balance: Number(data.subscription_credit_balance ?? 0),
+    purchased_balance: Number(data.purchased_credit_balance ?? 0),
+  }
 }
 
 export async function hasEnoughCredits(userId: string, feature: FeatureName): Promise<boolean> {
@@ -144,67 +149,26 @@ export async function chargeFeature(
   userId: string,
   feature: FeatureName,
   metadata: Record<string, unknown> = {}
-): Promise<{ success: boolean; new_balance?: number; error?: string }> {
+): Promise<{ success: boolean; new_balance?: number; error?: string } & Partial<CreditChargeReceipt>> {
   const admin = adminClient()
   const cost = CREDIT_COSTS[feature]
-
-  let updatedBalance: number | undefined
-  let lastObservedBalance: number | undefined
-
-  for (let attempt = 1; attempt <= CREDIT_CHARGE_MAX_ATTEMPTS; attempt++) {
-    const { data: current, error: fetchErr } = await admin
-      .from('user_credits')
-      .select('balance, total_used')
-      .eq('user_id', userId)
-      .single()
-
-    if (fetchErr || !current) {
-      if (fetchErr) console.error('[Credits] chargeFeature balance read hiba:', fetchErr)
-      return { success: false, error: 'Kredit egyenleg nem található' }
-    }
-
-    const currentBalance = Number(current.balance)
-    lastObservedBalance = currentBalance
-    const mutation = calculateCreditMutation(currentBalance, Number(current.total_used ?? 0), cost)
-    if (!mutation.allowed) {
-      return { success: false, new_balance: currentBalance, error: 'Nincs elég kredit' }
-    }
-
-    const { data: updated, error: updateErr } = await admin
-      .from('user_credits')
-      .update({
-        balance: mutation.newBalance,
-        total_used: mutation.newTotalUsed,
-      })
-      .eq('user_id', userId)
-      .eq('balance', currentBalance)
-      .gte('balance', cost)
-      .select('balance')
-      .single()
-
-    if (updated) {
-      updatedBalance = Number(updated.balance)
-      break
-    }
-
-    // PGRST116 itt a compare-and-swap feltétel elvesztését jelenti: egy másik,
-    // jogos kreditművelet előbb módosította az egyenleget. Friss egyenlegből
-    // újraszámolunk; más adatbázishibát nem fedünk el retry-val.
-    const optimisticLockMiss = isOptimisticCreditLockMiss(updateErr)
-    if (!optimisticLockMiss) {
-      console.error('[Credits] chargeFeature DB hiba:', updateErr)
-      break
-    }
-    if (attempt < CREDIT_CHARGE_MAX_ATTEMPTS) await waitForCreditRetry(attempt)
+  const { data, error } = await admin.rpc('spend_credits', {
+    p_user_id: userId,
+    p_cost: cost,
+    p_feature: feature,
+    p_external_ref: `spend:${randomUUID()}`,
+    p_metadata: metadata,
+  })
+  if (error || !data) {
+    const current = await getCreditBalance(userId)
+    const insufficient = String(error?.message || '').includes('insufficient credits')
+    if (error && !insufficient) console.error('[Credits] spend_credits RPC hiba:', error)
+    return { success: false, new_balance: current?.balance, error: insufficient ? 'Nincs elég kredit' : 'A kredit levonás nem sikerült.' }
   }
-
-  if (updatedBalance === undefined) {
-    return {
-      success: false,
-      new_balance: lastObservedBalance,
-      error: 'A kredit levonás nem sikerült — túl sok egyidejű kérés. Próbáld újra.',
-    }
-  }
+  const receipt = data as Record<string, unknown>
+  const transactionId = String(receipt.transaction_id || '')
+  const updatedBalance = Number(receipt.total_balance)
+  if (!transactionId || !Number.isFinite(updatedBalance)) return { success: false, error: 'A kredit tranzakció válasza hibás.' }
 
   const { error: chargeLogError } = await admin.from('ai_usage_logs').insert({
     user_id: userId,
@@ -214,44 +178,53 @@ export async function chargeFeature(
     output_tokens: 0,
     estimated_cost_usd: 0,
     credits_charged: cost,
-    metadata: { ...metadata, type: 'charge' },
+    metadata: { ...metadata, type: 'charge', credit_transaction_id: transactionId },
   })
   if (chargeLogError) {
     console.error('[Credits] charge audit log failed, refunding:', chargeLogError)
-    const refund = await refundCreditsAfterPersistenceFailure(userId, feature, cost, { ...metadata, reason: 'charge_audit_log_failed' })
+    const refund = await refundCreditsAfterPersistenceFailure(userId, feature, cost, { ...metadata, reason: 'charge_audit_log_failed' }, transactionId)
     return { success: false, new_balance: refund.new_balance, error: refund.success ? 'A kreditművelet naplózása sikertelen volt, a kreditet visszaadtuk.' : 'A kreditművelet helyreállítása sikertelen.' }
   }
 
-  return { success: true, new_balance: updatedBalance }
+  return {
+    success: true,
+    new_balance: updatedBalance,
+    credit_transaction_id: transactionId,
+    subscription_spent: Number(receipt.subscription_spent || 0),
+    purchased_spent: Number(receipt.purchased_spent || 0),
+  }
 }
 
 export async function refundCreditsAfterPersistenceFailure(
   userId: string,
   feature: string,
   cost: number,
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  creditTransactionId?: string,
 ): Promise<{ success: boolean; new_balance?: number }> {
   const admin = adminClient()
-  for (let attempt = 1; attempt <= CREDIT_CHARGE_MAX_ATTEMPTS; attempt++) {
-    const { data: current, error: fetchError } = await admin.from('user_credits').select('balance,total_used').eq('user_id', userId).single()
-    if (fetchError || !current) return { success: false }
-    const currentBalance = Number(current.balance)
-    const refund = calculateCreditRefund(currentBalance, Number(current.total_used ?? 0), cost)
-    const { data: updated, error } = await admin.from('user_credits').update({ balance: refund.newBalance, total_used: refund.newTotalUsed })
-      .eq('user_id', userId).eq('balance', currentBalance).select('balance').single()
-    if (updated) {
-      const { error: refundLogError } = await admin.from('ai_usage_logs').insert({
-        user_id: userId, feature_name: feature, model: 'system_refund', input_tokens: 0,
-        output_tokens: 0, estimated_cost_usd: 0, credits_charged: -cost,
-        metadata: { ...metadata, type: 'persistence_failure_refund' },
-      })
-      if (refundLogError) console.error('[Credits] refund audit log failed:', refundLogError)
-      return { success: true, new_balance: Number(updated.balance) }
-    }
-    if (!isOptimisticCreditLockMiss(error)) return { success: false }
-    if (attempt < CREDIT_CHARGE_MAX_ATTEMPTS) await waitForCreditRetry(attempt)
+  if (!creditTransactionId) {
+    console.error('[Credits] bucket refund refused without original transaction id', { userId, feature })
+    return { success: false }
   }
-  return { success: false }
+  const { data, error } = await admin.rpc('refund_credit_spend', {
+    p_user_id: userId,
+    p_spend_transaction_id: creditTransactionId,
+    p_external_ref: `refund:${creditTransactionId}`,
+    p_metadata: { ...metadata, feature, expected_cost: cost },
+  })
+  if (error || !data) {
+    console.error('[Credits] refund_credit_spend RPC hiba:', error)
+    return { success: false }
+  }
+  const refund = data as Record<string, unknown>
+  const { error: refundLogError } = await admin.from('ai_usage_logs').insert({
+    user_id: userId, feature_name: feature, model: 'system_refund', input_tokens: 0,
+    output_tokens: 0, estimated_cost_usd: 0, credits_charged: -cost,
+    metadata: { ...metadata, type: 'persistence_failure_refund', credit_transaction_id: creditTransactionId },
+  })
+  if (refundLogError) console.error('[Credits] refund audit log failed:', refundLogError)
+  return { success: true, new_balance: Number(refund.total_balance) }
 }
 
 export async function checkPaidFeatureAccess(

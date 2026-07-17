@@ -851,6 +851,7 @@ KRITIKUS JSON SZABÁLYOK:
     const validCount = topics.length
     let charged = false
     let creditsCharged = 0
+    let creditTransactionId: string | undefined
 
     if (force_refresh && validCount > 0) {
       const charge = await chargeProtectedFeature(user.id, 'opportunity_engine', { topic: niche, engine_version: ENGINE_VERSION })
@@ -867,6 +868,7 @@ KRITIKUS JSON SZABÁLYOK:
       }
       charged = true
       creditsCharged = 2
+      creditTransactionId = charge.credit_transaction_id
     } else if (!force_refresh && validCount > 0) {
       // Ingyenes heti kvotabol futott (friss generalas, nem cache-hit) - nincs
       // kredit levonás, de a "Legutóbbi történeted" panelen meg kell jelennie.
@@ -1002,7 +1004,7 @@ KRITIKUS JSON SZABÁLYOK:
       if (!paidSave.success) {
         console.error('[Opportunity] KRITIKUS: paid_results mentés sikertelen:', paidSave.error)
         if (creditsCharged > 0) {
-          const refund = await refundCreditsAfterPersistenceFailure(user.id, 'opportunity_engine', creditsCharged, { reason: 'paid_result_save_failed' })
+          const refund = await refundCreditsAfterPersistenceFailure(user.id, 'opportunity_engine', creditsCharged, { reason: 'paid_result_save_failed' }, creditTransactionId)
           if (!refund.success) console.error('[Opportunity] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
           return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
         }
