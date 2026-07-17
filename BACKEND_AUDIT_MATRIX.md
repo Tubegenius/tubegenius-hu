@@ -1,6 +1,6 @@
 # WillViral backend auditmátrix
 
-Utolsó frissítés: 2026-07-16. A frontend vizuális/UX audit nincs ebben a mátrixban.
+Utolsó frissítés: 2026-07-17. A frontend vizuális/UX audit nincs ebben a mátrixban.
 
 Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = kritikus út ellenőrizve, teljes hibamátrix még hátra van; **függőben** = következő auditblokk.
 
@@ -24,7 +24,7 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Niche discovery | `/api/youtube/discover-niche` | utolsó 15 videó címe + nyers aktuális views; validált, deduplikált, confidence-rendezett jelöltlista; nem teljesítménypredikció | aktív csatornához kötött cache + ingyenes/fizetős lock + refresh refund | profil tenanttal, szigorú boolean input, ellenőrzött mentés | output/dedupe/sorrend/határérték | lezárt |
 | Creator Memory | `/api/memory` | döntési minta; published nem performance; provenance-os proof/event | nem fizetős | tenant CRUD/enrichment + validált state/score/text/platform + ellenőrzött workflow sync | workflow/input/tenant/error alap | lezárt |
 | Video Ideas/Calendar | `/api/video-ideas` | központi állapotgép | nem fizetős | tenant CRUD + score/metadata/dátum/hash védelem | identity/workflow/input alap | lezárt |
-| Stripe/credits | `/api/stripe/*`, `/api/credits` | ledger, esemény- és invoice-idempotencia, rollover; csak paid top-up | atomi jóváírás + CAS levonás/refund + auditlog-kompenzáció + fail-closed soft limit | webhook signature/auth + állapotfeltételes retry claim + ellenőrzött DB-műveletek | credit/refund/soft-limit/Stripe event policy | részleges: Stripe sandbox E2E hátra van |
+| Stripe/credits | `/api/stripe/*`, `/api/credits` | ledger, esemény- és invoice-idempotencia, első checkout pontos kezdőegyenlege, megújítási rollover; régi és új Stripe invoice payload támogatott; csak paid top-up | atomi jóváírás + CAS levonás/refund + auditlog-kompenzáció + fail-closed soft limit | aláírt production webhook + állapotfeltételes retry claim + stale cancellation no-op + ellenőrzött DB-műveletek | 103 regressziós teszt + TypeScript + production Stripe sandbox Checkout/webhook/Creator `150/150` E2E | lezárt |
 | YouTube OAuth/Analytics | `/api/youtube/*` | 28 napos valós Analytics; top 10 + top-50 minta alsó 10 explicit határral | 24 órás publikus profilcache; OAuth token refresh | nonce CSRF + kanonikus HTTPS origin + tenant token + fail-closed DB + production 035 RLS | origin policy + teljes regresszió + production disconnect/reconnect és Analytics-visszatérés | lezárt |
 | AI provider layer | `lib/services/ai-provider-service.ts` | kötelezően regisztrált prompt ID/verzió + közös JSON parser; modell-, méret-, token- és completion-validáció | teljes direkt + közvetett usage/költség telemetry az Opportunity és Similar Videos fizetős flow-ban | szerveroldali kulcsok; 60s timeout + kontrollált retry; csonkolt/üres válasz fail-closed | 85 regressziós teszt + production build | lezárt |
 

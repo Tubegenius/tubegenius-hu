@@ -1,5 +1,12 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-17 — STRIPE SANDBOX E2E LEZÁRÁS
+
+- A teljes production Stripe sandbox előfizetési út élőben sikeresen lefutott: Checkout fizetés, aláírt webhook, Creator csomagaktiválás és pontos `150/150` kezdőegyenleg. A webhook endpoint négy szükséges eseményt fogad, a Vercel production deploy `Ready`.
+- Az első 500-as hiba oka a `user_credits` tábla hiányzó service-role jogosultsága volt; a `036_service_role_user_credits_grants.sql` migráció productionben lefutott. A Stripe webhook secret Production és Preview környezetben konfigurálva van.
+- A Stripe 2026-06-24 API invoice payloadja az előfizetés ID-ját már a `parent.subscription_details.subscription` mezőben adja. A resolver a régi és új formátumot is támogatja; az első invoice nem dupláz kreditet, a checkout pontos kezdőegyenleget állít, a későbbi invoice-ok rolloverrel újítanak.
+- A már lecserélt előfizetés későn érkező törlési eseménye biztonságos stale no-op, nem 500. A teljes regresszió 24 tesztfájl / 103 teszt és a TypeScript-ellenőrzés szerint sikeres. Production commit: `ffdbf37`.
+
 ## 2026-07-17 — YOUTUBE OAUTH PRODUCTION RECONNECT ELLENŐRZÉS
 
 - A production Channel Audit oldalon a kapcsolat bontása, majd a teljes Google OAuth újracsatlakozás élőben sikeresen lefutott. A callback a kanonikus `https://tubegenius-hu.vercel.app/api/youtube/oauth-callback` címre tért vissza, az összekapcsolt állapot, a bontási lehetőség és a valós, 28 napos YouTube Analytics blokk ismét megjelent.
