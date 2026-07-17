@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-17 — VIDEO PACKAGE FACT-SAFETY ÉS WORKFLOW-INTEGRITÁS HARDENING
+
+- Egyetlen felhasználói forrásvideó-transcript többé nem írhatja felül kézzel a minimum forráskövetelményt. High-risk egészségügyi, pénzügyi, jogi, politikai vagy vádjellegű témánál továbbra is három külön forrás szükséges; a transcript primer forrás, nem automatikusan több független bizonyíték.
+- Az Opportunity context kizárólag stratégiai priorizálási metaadatként kerül a promptba, nem tényforrásként. A route korlátozza a JSON méretét, mezőtípusokat, forráslistákat, platformot, stílust, intenzitást és célt; profil DB-hibánál fail-closed.
+- A legacy csomagmentés csak sikeres Video Idea-link után állíthatja `ready_to_produce` állapotba a workflow-t. Hibás UUID/input 400, nem létező törlés 404. A blokk 24 tesztfájl 101 tesztjével, TypeScripttel és production builddel sikeres.
+
 ## 2026-07-17 — VIRAL SCORE LOW-DATA ÉS CACHE-INTEGRITÁS HARDENING
 
 - A minimum háromvideós bizonyítékkapu már nem a nyers keresési találatokból, hanem kizárólag a ténylegesen visszaérkezett, érvényes YouTube stats rekordokból számol. Hibás ID, hiányzó stats, jövőbeli/hibás dátum, negatív, tört, végtelen vagy safe-integer tartományon kívüli számláló nem épülhet score-ba, confidence-be vagy proof signalba.

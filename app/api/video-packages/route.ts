@@ -3,6 +3,9 @@ import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-se
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { ensureVideoIdea, linkVideoIdeaToLegacyRecord, logVideoIdeaEvent, markVideoIdeaReadyToProduce } from '@/lib/video-ideas/video-idea-service'
 import { getPaidResultById } from '@/lib/paid-results/paid-results-service'
+import { isJsonWithinLimit, isPlainRecord } from '@/lib/api-input-validation'
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 // GET: lista vagy egy konkrét csomag (?id=...)
 export async function GET(request: NextRequest) {
@@ -47,8 +50,8 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-  const requestBody = await request.json()
-  if (typeof requestBody.paid_result_id !== 'string') return NextResponse.json({ error: 'Érvényes fizetett videócsomag-eredmény szükséges.' }, { status: 400 })
+  const requestBody: unknown = await request.json().catch(() => null)
+  if (!isPlainRecord(requestBody) || !isJsonWithinLimit(requestBody) || typeof requestBody.paid_result_id !== 'string' || !UUID_PATTERN.test(requestBody.paid_result_id)) return NextResponse.json({ error: 'Érvényes fizetett videócsomag-eredmény szükséges.' }, { status: 400 })
   const paidResult = await getPaidResultById(user.id, requestBody.paid_result_id)
   if (!paidResult || paidResult.tool_type !== 'video_package' || !paidResult.result_json || typeof paidResult.result_json !== 'object') {
     return NextResponse.json({ error: 'A fizetett videócsomag-eredmény nem található.' }, { status: 404 })
@@ -135,12 +138,16 @@ export async function POST(request: NextRequest) {
       recordId: data.id,
       videoIdeaId: ideaResult.idea.id,
     })
+    if (!linkResult.success) {
+      await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
+      return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
+    }
     const readyResult = await markVideoIdeaReadyToProduce(admin, {
       userId: user.id,
       videoIdeaId: ideaResult.idea.id,
       videoPackageId: data.id,
     })
-    if (!linkResult.success || !readyResult.success) {
+    if (!readyResult.success) {
       await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
       return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
     }
@@ -171,18 +178,22 @@ export async function DELETE(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-  const { id } = await request.json()
+  const body: unknown = await request.json().catch(() => null)
+  if (!isPlainRecord(body) || typeof body.id !== 'string' || !UUID_PATTERN.test(body.id)) return NextResponse.json({ error: 'Érvénytelen csomagazonosító.' }, { status: 400 })
+  const { id } = body
   const admin = createAdminClient()
 
-  const { error } = await admin
+  const { data: deleted, error } = await admin
     .from('video_packages')
     .delete()
     .eq('id', id)
     .eq('user_id', user.id)
+    .select('id')
 
   if (error) {
     console.error('Video package DELETE error:', error)
     return NextResponse.json({ error: 'A törlés sikertelen. Próbáld újra.' }, { status: 500 })
   }
+  if (!deleted || deleted.length === 0) return NextResponse.json({ error: 'Csomag nem található' }, { status: 404 })
   return NextResponse.json({ success: true })
 }

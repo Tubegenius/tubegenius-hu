@@ -27,18 +27,42 @@ import {
   generatePackaging,
   extractPlatformChecklist,
 } from '@/lib/video-package'
-import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+
+interface PackageSource { title: string; url?: string; snippet?: string; source?: string }
+interface PackageSourceVideo { video_id?: string; id?: string; url?: string; title?: string; channel?: string; hook?: string; key_points?: string[]; transcript_available?: boolean; raw_transcript?: string }
+interface PackageOpportunityContext { id?: string; title?: string; ready_to_produce_status?: string; ready_to_produce_label?: string; confidence?: string; opportunity_score?: number; risk_flags?: unknown[] }
+interface VideoPackageRequestBody {
+  topic?: string; platform?: string; video_length?: string; narration_style?: string; intensity?: string; goal?: string
+  custom_prompt?: string; niche?: string; channel_context?: string; language?: string; fact_block?: string
+  sources?: PackageSource[]; web_sources?: PackageSource[]; youtube_sources?: PackageSource[]
+  source_video?: PackageSourceVideo; opportunity_context?: PackageOpportunityContext
+}
 
 export async function POST(request: NextRequest) {
   try {
+    const parsedBody: unknown = await request.json().catch(() => null)
+    if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody, 100_000)) return NextResponse.json({ error: 'Érvénytelen vagy túl nagy kérés.' }, { status: 400 })
+    const textFields = ['topic', 'platform', 'video_length', 'narration_style', 'intensity', 'goal', 'custom_prompt', 'niche', 'channel_context', 'language', 'fact_block']
+    if (textFields.some(key => parsedBody[key] !== undefined && parsedBody[key] !== null && typeof parsedBody[key] !== 'string')) return NextResponse.json({ error: 'Érvénytelen szöveges mező.' }, { status: 400 })
     const {
       topic, platform, video_length, narration_style, intensity, goal,
       custom_prompt, niche, channel_context, language, fact_block, sources,
       web_sources, youtube_sources, source_video, opportunity_context,
-    } = await request.json()
+    } = parsedBody as VideoPackageRequestBody
 
     if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
+    const allowedPlatforms = ['youtube_shorts', 'youtube_long', 'youtube', 'tiktok', 'instagram_reels', 'facebook_reels']
+    const allowedStyles = Object.keys(STYLE_PROMPTS)
+    if (typeof platform !== 'string' || typeof video_length !== 'string' || typeof narration_style !== 'string' || typeof intensity !== 'string' || typeof goal !== 'string' || !allowedPlatforms.includes(platform) || !allowedStyles.includes(narration_style) || !['light', 'classic', 'extreme'].includes(intensity) || !['views', 'comments', 'shares', 'saves', 'subscribers', 'affiliate'].includes(goal)) return NextResponse.json({ error: 'Érvénytelen videóbeállítás.' }, { status: 400 })
+    if (typeof custom_prompt === 'string' && custom_prompt.length > 2000) return NextResponse.json({ error: 'Az egyéni prompt túl hosszú.' }, { status: 400 })
+    if (opportunity_context !== undefined && !isPlainRecord(opportunity_context)) return NextResponse.json({ error: 'Érvénytelen Opportunity kontextus.' }, { status: 400 })
+    if (['sources', 'web_sources', 'youtube_sources'].some(key => parsedBody[key] !== undefined && (!Array.isArray(parsedBody[key]) || (parsedBody[key] as unknown[]).length > 20))) return NextResponse.json({ error: 'Érvénytelen vagy túl nagy forráslista.' }, { status: 400 })
+    for (const key of ['sources', 'web_sources', 'youtube_sources']) {
+      const items = parsedBody[key]
+      if (Array.isArray(items) && items.some(item => !isPlainRecord(item) || typeof item.title !== 'string' || item.title.length > 500 || (item.url !== undefined && typeof item.url !== 'string') || (item.snippet !== undefined && (typeof item.snippet !== 'string' || item.snippet.length > 5000)))) return NextResponse.json({ error: 'Érvénytelen forrásadat.' }, { status: 400 })
+    }
 
     if (opportunity_context?.ready_to_produce_status === 'rejected') {
       return NextResponse.json({
@@ -135,7 +159,7 @@ export async function POST(request: NextRequest) {
     const userSourceItems = [
       ...(sources || []),
       ...(fact_block ? [{ title: 'User provided facts', snippet: fact_block, source: 'user_fact_block' }] : []),
-      ...(sourceVideoSnippet ? [{ title: `Source video transcript: ${source_video.title || topic}`, url: source_video.url, snippet: sourceVideoSnippet, source: 'source_video_transcript' }] : []),
+      ...(sourceVideoSnippet ? [{ title: `Source video transcript: ${source_video?.title || topic}`, url: source_video?.url, snippet: sourceVideoSnippet, source: 'source_video_transcript' }] : []),
     ]
 
     // Verified Fact Block epites
@@ -148,16 +172,8 @@ export async function POST(request: NextRequest) {
       userSourceItems,
     )
 
-    if (sourceVideoMode) {
-      factBlock.minimum_sources_met = true
-      if (!factBlock.sources_used.includes(source_video.url || source_video.title || 'source_video')) {
-        factBlock.sources_used.push(source_video.url || source_video.title || 'source_video')
-      }
-      factBlock.known_unknowns = factBlock.known_unknowns.filter(k => !k.toLowerCase().includes('forr'))
-    }
-
     // Quality status
-    const qualityStatus = sourceVideoMode ? 'verified_with_limits' : determineQualityStatus(factBlock, contentType)
+    const qualityStatus = determineQualityStatus(factBlock, contentType)
 
     // Blokkolás ha nincs elég forrás factual témánál
     if (qualityStatus === 'insufficient_sources' && strictFactMode) {
@@ -182,14 +198,15 @@ export async function POST(request: NextRequest) {
     // kapun (stats_only-tudatos) engedjuk csak at, sose nyersen.
     let creatorContext = channel_context || niche || ''
     if (!creatorContext) {
-      const { data: profileRow } = await createAdminClient().from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+      const { data: profileRow, error: profileError } = await createAdminClient().from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).maybeSingle()
+      if (profileError) throw new Error(`Video Package profile read failed: ${profileError.message}`)
       const gated = resolveCreatorNicheContext({ topic, channelUsageMode: profileRow?.channel_usage_mode, niche: profileRow?.niche, mainCategory: profileRow?.main_category, specificFocus: profileRow?.specific_focus })
       creatorContext = gated.useNiche ? gated.niche : ''
     }
     const uploadTimes = getUploadTimes(platform)
 
     const opportunitySection = opportunity_context
-      ? `\nOPPORTUNITY_CONTEXT:\nStatus: ${opportunity_context.ready_to_produce_label || opportunity_context.ready_to_produce_status || 'unknown'}\nConfidence: ${opportunity_context.confidence || 'unknown'}\nOpportunity score: ${opportunity_context.opportunity_score || 'unknown'}\nRisk flags: ${(opportunity_context.risk_flags || []).join(' | ') || 'none'}\nA csomag csak a VERIFIED_FACT_BLOCK es OPPORTUNITY_CONTEXT altal tamasztott allitasokat hasznalhatja.`
+      ? `\nOPPORTUNITY_CONTEXT:\nStatus: ${opportunity_context.ready_to_produce_label || opportunity_context.ready_to_produce_status || 'unknown'}\nConfidence: ${opportunity_context.confidence || 'unknown'}\nOpportunity score: ${opportunity_context.opportunity_score || 'unknown'}\nRisk flags: ${Array.isArray(opportunity_context.risk_flags) ? opportunity_context.risk_flags.slice(0, 10).map(String).join(' | ') || 'none' : 'none'}\nAz OPPORTUNITY_CONTEXT csak strategiai priorizalasi metaadat, NEM tenyforras. Konkret allitast kizarolag a VERIFIED_FACT_BLOCK tamaszthat ala.`
       : ''
 
     const factSection = (sourceVideoMode && sourceVideoSnippet)
