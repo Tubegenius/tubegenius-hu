@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isJsonWithinLimit, isOptionalTextWithinLimit, isPlainRecord, isScoreOrNull, MAX_TOPIC_INPUT_LENGTH, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { isJsonWithinLimit, isOptionalTextWithinLimit, isPlainRecord, isScoreOrNull, MAX_TOPIC_INPUT_LENGTH, parseNonNegativeSafeInteger, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 describe('API input validation errors', () => {
   it('accepts the boundary and rejects the first oversized character', () => {
@@ -30,5 +30,14 @@ describe('API input validation errors', () => {
     expect(isJsonWithinLimit({ value: 'x'.repeat(200) }, 100)).toBe(false)
     expect(isOptionalTextWithinLimit(null, 10)).toBe(true)
     expect(isOptionalTextWithinLimit('12345678901', 10)).toBe(false)
+  })
+
+  it('accepts only non-negative safe integer API counters', () => {
+    expect(parseNonNegativeSafeInteger('0')).toBe(0)
+    expect(parseNonNegativeSafeInteger('12345')).toBe(12345)
+    expect(parseNonNegativeSafeInteger('-1')).toBeNull()
+    expect(parseNonNegativeSafeInteger('1.5')).toBeNull()
+    expect(parseNonNegativeSafeInteger('Infinity')).toBeNull()
+    expect(parseNonNegativeSafeInteger(undefined)).toBeNull()
   })
 })

@@ -27,3 +27,9 @@ export function isJsonWithinLimit(value: unknown, maxBytes = 20_000): boolean {
 export function isOptionalTextWithinLimit(value: unknown, maxLength: number): boolean {
   return value === undefined || value === null || (typeof value === 'string' && value.length <= maxLength)
 }
+
+export function parseNonNegativeSafeInteger(value: string | undefined): number | null {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null
+}

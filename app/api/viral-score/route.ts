@@ -24,7 +24,7 @@ import {
 } from '@/lib/video-ideas/video-idea-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
-import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { isJsonWithinLimit, isPlainRecord, parseNonNegativeSafeInteger, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
 // ── Téma-relevancia szűrés ────────────────────────────────────
 // A YouTube/Serper keresés önmagában fuzzy — pl. "AI botrányok"-ra simán
@@ -239,14 +239,20 @@ function buildViralDecisionSummary(input: {
 
 export async function POST(request: NextRequest) {
   try {
-    const { topic, platform, region, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
+    const parsedBody: unknown = await request.json().catch(() => null)
+    if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody)) return NextResponse.json({ error: 'Érvénytelen vagy túl nagy kérés.' }, { status: 400 })
+    const textFields = ['topic', 'platform', 'region', 'paidResultId', 'paid_result_id']
+    if (textFields.some(key => parsedBody[key] !== undefined && parsedBody[key] !== null && typeof parsedBody[key] !== 'string')) return NextResponse.json({ error: 'Érvénytelen szöveges mező.' }, { status: 400 })
+    if (['cache_only', 'force_refresh'].some(key => parsedBody[key] !== undefined && typeof parsedBody[key] !== 'boolean')) return NextResponse.json({ error: 'Érvénytelen logikai mező.' }, { status: 400 })
+    const { topic, platform, region, cache_only, force_refresh, paidResultId, paid_result_id } = parsedBody as { topic?: string; platform?: string; region?: string; cache_only?: boolean; force_refresh?: boolean; paidResultId?: string; paid_result_id?: string }
     if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
 
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
-    const { data: profileRow } = await createAdminClient().from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
+    const { data: profileRow, error: profileError } = await createAdminClient().from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).maybeSingle()
+    if (profileError) throw new Error(`Viral Score profile read failed: ${profileError.message}`)
     // Korabban ez a route csak a legacy `niche` oszlopot olvasta, relevancia-
     // szures/stats_only-gatelas nelkul — egy topic-tol teljesen fuggetlen
     // profil niche torzithatta a nicheFitScore-t. Most a megosztott kapun megy at.
@@ -343,7 +349,17 @@ export async function POST(request: NextRequest) {
 
     // YouTube adatok lekérése
     const ytData = await fetchYouTubeData(topic, region || 'HU')
-    const videoCount = ytData?.videos?.length || 0
+    // Csak olyan találat bizonyíték, amelyhez valódi, ép stats rekord is érkezett.
+    const videoStats: YouTubeVideoStats[] = (ytData?.videos || []).flatMap((v: { id: { videoId: string }; snippet: { title: string; channelTitle: string; publishedAt: string; thumbnails: { medium?: { url: string }; default?: { url: string } } } }) => {
+      const statsItem = (ytData?.stats || []).find((s: { id: string }) => s.id === v.id.videoId)
+      const publishedAtMs = new Date(v.snippet.publishedAt).getTime()
+      const viewCount = parseNonNegativeSafeInteger(statsItem?.statistics?.viewCount)
+      const likeCount = parseNonNegativeSafeInteger(statsItem?.statistics?.likeCount)
+      const commentCount = parseNonNegativeSafeInteger(statsItem?.statistics?.commentCount)
+      if (!statsItem || !/^[A-Za-z0-9_-]{11}$/.test(v.id.videoId) || !Number.isFinite(publishedAtMs) || publishedAtMs > Date.now() + 60 * 60 * 1000 || viewCount === null || likeCount === null || commentCount === null) return []
+      return [{ videoId: v.id.videoId, title: v.snippet.title, channelTitle: v.snippet.channelTitle, publishedAt: v.snippet.publishedAt, viewCount, likeCount, commentCount, thumbnailUrl: v.snippet.thumbnails.medium?.url || v.snippet.thumbnails.default?.url || '' }]
+    })
+    const videoCount = videoStats.length
     const confidence = getConfidence(videoCount)
 
     // ─── KRITIKUS SZABÁLY: ha nincs elég adat, NEM hívunk Claude-ot score-ért ───
@@ -396,21 +412,6 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // ─── Videók egységes formátumra hozása a megosztott scoring függvényekhez ───
-    const videoStats: YouTubeVideoStats[] = (ytData?.videos || []).map((v: { id: { videoId: string }; snippet: { title: string; channelTitle: string; publishedAt: string; thumbnails: { medium?: { url: string }; default?: { url: string } } } }) => {
-      const statsItem = (ytData?.stats || []).find((s: { id: string }) => s.id === v.id.videoId)
-      return {
-        videoId: v.id.videoId,
-        title: v.snippet.title,
-        channelTitle: v.snippet.channelTitle,
-        publishedAt: v.snippet.publishedAt,
-        viewCount: parseInt(statsItem?.statistics?.viewCount || '0'),
-        likeCount: parseInt(statsItem?.statistics?.likeCount || '0'),
-        commentCount: parseInt(statsItem?.statistics?.commentCount || '0'),
-        thumbnailUrl: v.snippet.thumbnails.medium?.url || v.snippet.thumbnails.default?.url || '',
-      }
-    })
-
     // Statisztikák aggregálása
     let avgViews = 0, avgLikes = 0, avgComments = 0
     if (videoStats.length > 0) {
@@ -419,7 +420,7 @@ export async function POST(request: NextRequest) {
       avgComments = videoStats.reduce((sum, v) => sum + v.commentCount, 0) / videoStats.length
     }
 
-    const totalResults = ytData?.total_results || 0
+    const totalResults = videoCount
 
     // ─── Webes visszhang lekérése (Serper) — a meglévő YouTube-alapú súlyokat
     // nem bántjuk, csak kiegészítjük velük (lásd calcBackendViralScore). Ha a

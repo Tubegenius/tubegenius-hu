@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-17 — VIRAL SCORE LOW-DATA ÉS CACHE-INTEGRITÁS HARDENING
+
+- A minimum háromvideós bizonyítékkapu már nem a nyers keresési találatokból, hanem kizárólag a ténylegesen visszaérkezett, érvényes YouTube stats rekordokból számol. Hibás ID, hiányzó stats, jövőbeli/hibás dátum, negatív, tört, végtelen vagy safe-integer tartományon kívüli számláló nem épülhet score-ba, confidence-be vagy proof signalba.
+- A piaci méret nevezője is a validált evidence-minta lett. A Viral Score API hibás/túl nagy JSON-t és rossz mezőtípust 400-zal utasít el; profil- és legacy cache olvasási adatbázishibánál fail-closed, így cache-hiba nem indít új fizetős elemzést.
+- A blokk 23 tesztfájl 99 tesztjével, TypeScripttel és a 78 oldalas production builddel sikeres.
+
 ## 2026-07-17 — SIMILAR VIDEOS DÖNTÉSI ÉS METRIKAINTEGRITÁS HARDENING
 
 - A videós döntési motor teljes numerikus szerződést érvényesít: minden részpont véges 0–100 érték, a view/VPD metrikák végesek és nem negatívak, a publikációs dátum valós és nem jövőbeli. Sérült adat minden market/evidence kaput lezár és 0 pontos elutasítást ad; végtelen view count többé nem gyárthat hamis „Ajánlott inspiráció” státuszt.

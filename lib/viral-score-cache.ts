@@ -72,19 +72,16 @@ export interface CachedViralScore {
 }
 
 export async function getCachedViralScore(hash: string, userId: string): Promise<CachedViralScore | null> {
-  try {
-    const admin = adminClient()
-    const { data } = await admin
-      .from('viral_score_searches')
-      .select('id, result, score, created_at, updated_at, last_opened_at, last_refreshed_at')
-      .eq('user_id', userId)
-      .eq('search_context_hash', hash)
-      .eq('status', 'completed')
-      .single()
-    return data
-  } catch {
-    return null
-  }
+  const admin = adminClient()
+  const { data, error } = await admin
+    .from('viral_score_searches')
+    .select('id, result, score, created_at, updated_at, last_opened_at, last_refreshed_at')
+    .eq('user_id', userId)
+    .eq('search_context_hash', hash)
+    .eq('status', 'completed')
+    .maybeSingle()
+  if (error) throw new Error(`Viral Score cache read failed: ${error.message}`)
+  return data
 }
 
 export async function touchLastOpened(id: string): Promise<void> {
