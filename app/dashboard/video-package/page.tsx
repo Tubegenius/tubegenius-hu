@@ -766,7 +766,7 @@ export default function VideoPackagePage() {
             evidence_match_score: opportunityContextData.evidence_match_score,
             risk_flags: opportunityContextData.risk_flags || [],
             preparation_mode: opportunityPreparationMode,
-          } : null,
+          } : undefined,
           source_video: sourceExtract ? {
             video_id: sourceExtract.video_id,
             url: sourceVideoUrl,
