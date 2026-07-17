@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import CreatorIntelligenceSummary from '@/components/dashboard/CreatorIntelligenceSummary'
 import TrackedTrendsPanel from '@/components/dashboard/TrackedTrendsPanel'
@@ -27,14 +28,19 @@ const quickActions = [
 ]
 
 export default function OverviewClient({ displayName, profile }: { displayName: string; profile: CreatorProfile | null }) {
+  const [greeting, setGreeting] = useState('Szia')
   const tip = getDailyTip(profile?.platform)
   const tipIcon = getCategoryIcon(tip.category)
   const tipColor = getCategoryColor(tip.category)
 
+  useEffect(() => {
+    setGreeting(getGreeting())
+  }, [])
+
   return (
     <div className="max-w-6xl mx-auto animate-fade-in">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{getGreeting()}, {displayName}!</h1>
+        <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{greeting}, {displayName}!</h1>
         <p className="text-sm" style={{ color: '#94A3B8' }}>Így halad a saját aktivitásod alapján a tartalomgyártásod.</p>
       </div>
 
