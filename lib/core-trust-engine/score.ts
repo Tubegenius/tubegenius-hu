@@ -1,6 +1,10 @@
 import type { TrustScores, ValidationResult } from './types'
 import type { TrendCandidate } from '@/lib/trend-radar'
 
+function boundedScore(value: number): number {
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0
+}
+
 export function computeTrustScores(
   candidate: TrendCandidate,
   validation: ValidationResult,
@@ -8,7 +12,7 @@ export function computeTrustScores(
   const validWebCount = validation.valid_web_sources.length
   const web_validation = Math.min(100, validWebCount * 35)
 
-  const niche_fit = Math.min(100, validation.niche_fit_score)
+  const niche_fit = boundedScore(validation.niche_fit_score)
 
   const videoCount = validation.valid_video_sources.length
   const content_gap = videoCount === 0
@@ -18,7 +22,7 @@ export function computeTrustScores(
   const strongVideoCount = validation.valid_video_sources.filter(v => v.is_strong).length
   const video_engagement = Math.min(100, strongVideoCount * 25)
 
-  const freshness = candidate.freshness_score
+  const freshness = boundedScore(candidate.freshness_score)
 
   const total = Math.round(
     web_validation    * 0.30 +
@@ -34,6 +38,6 @@ export function computeTrustScores(
     content_gap,
     video_engagement,
     freshness,
-    total: Math.min(99, Math.max(1, total)),
+    total: Number.isFinite(total) ? Math.min(99, Math.max(1, total)) : 1,
   }
 }

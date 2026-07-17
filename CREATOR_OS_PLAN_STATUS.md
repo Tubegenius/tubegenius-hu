@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-17 — OPPORTUNITY DÖNTÉSI MOTOR ÉS INPUT-INTEGRITÁS HARDENING
+
+- A Core Trust Engine minden niche-fit és freshness pontot véges 0–100 tartományba zár; `NaN`, végtelen vagy tartományon kívüli érték többé nem emelhet score-t és nem nyithatja ki a „Gyártható most” döntési kaput.
+- Hibás/jövőbeli publikációs dátumú, negatív vagy nem véges metrikájú, hibás relevance score-ú vagy érvénytelen YouTube ID-jú videó nem lehet bizonyíték. Webes evidence kizárólag érvényes HTTP(S) URL-ről fogadható el; ismeretlen/rejected nyers confidence biztonságosan alacsonyra normalizálódik.
+- Az Opportunity API a hibás, túl nagy vagy rossz típusú JSON inputot 400-zal utasítja el. Profil-, opportunity cache-, trend cache- és Creator Memory olvasási adatbázishibánál fail-closed, így tárolási hiba nem indít felesleges fizetős külső munkát és nem hoz vissza kizárt témát. 23 tesztfájl 93 tesztje, TypeScript és a 78 oldalas production build sikeres.
+
 ## 2026-07-16 — AI PROVIDER SZERZŐDÉS ÉS KÖLTSÉGMÉRÉS HARDENING
 
 - Minden AI-hívás kizárólag engedélyezett, központilag definiált modellt, regisztrált prompt ID/verziót, korlátozott üzenetszámot, promptméretet és output-token keretet használhat. Üres, hibás usage-adatú vagy tokenlimit miatt csonkolt provider-válasz fail-closed.

@@ -2,7 +2,7 @@
 // WillViral — Opportunity Engine v4 (Core Trust Engine)
 
 import { NextRequest, NextResponse } from 'next/server'
-import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import { MODELS } from '@/lib/models'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
@@ -152,11 +152,48 @@ function buildBroadDiscoveryFallbackTopics(params: {
 
 // ── Main handler ─────────────────────────────────────────────
 
+interface OpportunityRequestBody {
+  niche?: string
+  topic?: string
+  platform?: string
+  language?: string
+  region?: string
+  creator_level?: string
+  discovery_mode?: string
+  parent_niche?: string
+  main_category?: string
+  specific_focus?: string
+  audience?: string
+  avoid_topics?: string
+  paidResultId?: string
+  paid_result_id?: string
+  search_mode?: string
+  channel_usage_mode?: string
+  cache_only?: boolean
+  force_refresh?: boolean
+  use_channel_signals?: boolean
+  exclude_titles?: string[]
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    const parsedBody: unknown = await request.json().catch(() => null)
+    if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody)) {
+      return NextResponse.json({ error: 'Érvénytelen vagy túl nagy kérés.' }, { status: 400 })
+    }
+    const textFields = ['niche', 'topic', 'platform', 'language', 'region', 'creator_level', 'discovery_mode', 'parent_niche', 'main_category', 'specific_focus', 'audience', 'avoid_topics', 'paidResultId', 'paid_result_id', 'search_mode', 'channel_usage_mode']
+    if (textFields.some(key => parsedBody[key] !== undefined && parsedBody[key] !== null && typeof parsedBody[key] !== 'string')) {
+      return NextResponse.json({ error: 'Érvénytelen szöveges mező.' }, { status: 400 })
+    }
+    if (['cache_only', 'force_refresh', 'use_channel_signals'].some(key => parsedBody[key] !== undefined && typeof parsedBody[key] !== 'boolean')) {
+      return NextResponse.json({ error: 'Érvénytelen logikai mező.' }, { status: 400 })
+    }
+    if (parsedBody.exclude_titles !== undefined && (!Array.isArray(parsedBody.exclude_titles) || parsedBody.exclude_titles.length > 50 || parsedBody.exclude_titles.some(value => typeof value !== 'string' || value.length > 300))) {
+      return NextResponse.json({ error: 'Érvénytelen kizárási lista.' }, { status: 400 })
+    }
+    const body = parsedBody as OpportunityRequestBody
     const { platform, language, region, creator_level, discovery_mode, parent_niche, cache_only, force_refresh, exclude_titles, main_category: bodyMainCategory, specific_focus: bodySpecificFocus, audience, avoid_topics, paidResultId, paid_result_id, topic, use_channel_signals, channel_usage_mode: bodyChannelUsageMode } = body
-    const searchMode: OpportunitySearchMode | undefined = ['niche_based', 'specific_topic', 'discovery_random'].includes(body.search_mode) ? body.search_mode : undefined
+    const searchMode: OpportunitySearchMode | undefined = ['niche_based', 'specific_topic', 'discovery_random'].includes(body.search_mode as string) ? body.search_mode as OpportunitySearchMode : undefined
     const excludeTitles: string[] = Array.isArray(exclude_titles)
       ? exclude_titles.map((t: string) => String(t).toLowerCase().trim()).filter(Boolean)
       : []
@@ -177,22 +214,23 @@ export async function POST(request: NextRequest) {
     // automatikusan a topicra, nem a profil niche-ere hivatkozik).
     // discovery_random: nincs kotelezo user-inputolt niche/topic — a
     // creator profil/csatorna-jelekbol szarmaztatunk egy kiindulasi niche-t.
-    let niche = (body.niche || '').replace(/[,;\s]+$/, '').trim()
+    let niche = String(body.niche || '').replace(/[,;\s]+$/, '').trim()
     let main_category = bodyMainCategory
     let specific_focus = bodySpecificFocus
     let channelUsageMode: string | null = bodyChannelUsageMode || null
 
     if (searchMode === 'specific_topic') {
-      const specificTopic = (topic || specific_focus || '').trim()
+      const specificTopic = String(topic || specific_focus || '').trim()
       if (!specificTopic) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
       niche = specificTopic
       specific_focus = specificTopic
     } else if (searchMode === 'discovery_random') {
-      const { data: profileRow } = await admin
+      const { data: profileRow, error: profileError } = await admin
         .from('profiles')
         .select('main_category, specific_focus, niche, channel_usage_mode, detected_niche_candidates, selected_main_niche')
         .eq('user_id', user.id)
-        .single()
+        .maybeSingle()
+      if (profileError) throw new Error(`Opportunity profile read failed: ${profileError.message}`)
       channelUsageMode = profileRow?.channel_usage_mode || null
       const candidates = Array.isArray(profileRow?.detected_niche_candidates) ? profileRow.detected_niche_candidates : []
 
@@ -244,7 +282,7 @@ export async function POST(request: NextRequest) {
     // teljesen valid magyar fókuszmondatokat). Explicit search_mode mindig
     // felulirja a heurisztikat (backward-compat: ha nincs search_mode, a
     // regi heurisztika dont, pl. a Command Center meglevo deep-linkjeinél).
-    const isFromStructuredFocus = Boolean(specific_focus) && specific_focus.trim() === niche
+    const isFromStructuredFocus = typeof specific_focus === 'string' && specific_focus.trim() === niche
     const isValidatedFocus = isFromStructuredFocus && validateSpecificFocus(niche).status === 'ok'
     const nicheIntent = searchMode === 'specific_topic'
       ? 'specific_topic'
@@ -315,14 +353,15 @@ export async function POST(request: NextRequest) {
     // nap első kérésekor. Ez volt a nap-váltás utáni "üres Top lehetőségek"
     // hiba VALÓDI, gyökér oka — nem csak megjelenítési, hanem költség-hiba is.
     const oppCacheKeyPrefix = oppCacheKey.replace(/-\d{4}-\d{2}-\d{2}$/, '')
-    const { data: oppCached } = await admin
+    const { data: oppCached, error: oppCacheReadError } = await admin
       .from('opportunity_cache')
       .select('*')
       .like('cache_key', `${oppCacheKeyPrefix}-%`)
       .gt('expires_at', new Date().toISOString())
       .order('generated_at', { ascending: false })
       .limit(1)
-      .single()
+      .maybeSingle()
+    if (oppCacheReadError) throw new Error(`Opportunity cache read failed: ${oppCacheReadError.message}`)
 
     if (oppCached && !force_refresh) {
       const allTopics = oppCached.topics as (OpportunityTopic & { needs_explanation?: boolean; engine_version?: string })[]
@@ -353,14 +392,15 @@ export async function POST(request: NextRequest) {
       // állapotot olyankor, amikor valójában van már validált adat.
       const stableKeyPrefix = oppCacheKey.replace(/-\d{4}-\d{2}-\d{2}$/, '')
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-      const { data: fallbackCached } = await admin
+      const { data: fallbackCached, error: fallbackCacheReadError } = await admin
         .from('opportunity_cache')
         .select('*')
         .like('cache_key', `${stableKeyPrefix}-%`)
         .gt('generated_at', sevenDaysAgo)
         .order('generated_at', { ascending: false })
         .limit(1)
-        .single()
+        .maybeSingle()
+      if (fallbackCacheReadError) throw new Error(`Opportunity fallback cache read failed: ${fallbackCacheReadError.message}`)
 
       if (fallbackCached) {
         const allTopics = fallbackCached.topics as (OpportunityTopic & { needs_explanation?: boolean; engine_version?: string })[]
@@ -458,7 +498,7 @@ export async function POST(request: NextRequest) {
           specific_focus,
           platform,
           region: effectiveRegion,
-          language: language || 'hu',
+          language: language === 'en' ? 'en' : 'hu',
           creator_profile: { audience, avoid_topics },
           channel_usage_mode: channelUsageMode,
           // specific_topic modban a topic mar kozel-direkt validacios query —
@@ -517,14 +557,15 @@ export async function POST(request: NextRequest) {
     // a trendCacheKey is tartalmaz egy dátum-bucketet, de a valódi frissesség-
     // határ az expires_at, nem a pontos kulcsegyezés.
     const trendCacheKeyPrefix = trendCacheKey.replace(/_\d{4}-\d{2}-\d{2}$/, '')
-    const { data: cachedTrend } = await admin
+    const { data: cachedTrend, error: trendCacheReadError } = await admin
       .from('trend_candidate_cache')
       .select('candidates')
       .like('cache_key', `${trendCacheKeyPrefix}_%`)
       .gt('expires_at', new Date().toISOString())
       .order('generated_at', { ascending: false })
       .limit(1)
-      .single()
+      .maybeSingle()
+    if (trendCacheReadError) throw new Error(`Trend candidate cache read failed: ${trendCacheReadError.message}`)
 
     let trendCandidates: TrendCandidate[]
 
@@ -563,7 +604,7 @@ export async function POST(request: NextRequest) {
           discoveryMode: isDrilldown ? 'evergreen_fact' : 'trend',
           mainCategory: main_category || '',
           specificFocus: specific_focus || '',
-          language: language || 'hu',
+          language: language === 'en' ? 'en' : 'hu',
           onAIUsage: collectAiUsage,
         })
       }
@@ -649,10 +690,11 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 4. Creator Memory exclusions ─────────────────────────
-    const { data: memoryItems } = await admin
+    const { data: memoryItems, error: memoryReadError } = await admin
       .from('creator_memory')
       .select('topic, state')
       .eq('user_id', user.id)
+    if (memoryReadError) throw new Error(`Creator memory read failed: ${memoryReadError.message}`)
 
     const completedTopics = new Set((memoryItems || []).filter(m => m.state === 'completed').map(m => m.topic.toLowerCase()))
     const rejectedTopics = new Set((memoryItems || []).filter(m => m.state === 'rejected').map(m => m.topic.toLowerCase()))

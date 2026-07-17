@@ -16,7 +16,7 @@ export function decideTrust(
   const webCount = validation.valid_web_sources.length
   const videoCount = validation.valid_video_sources.length
   const strongVideoCount = validation.valid_video_sources.filter(v => v.is_strong).length
-  const nicheFit = validation.niche_fit_score
+  const nicheFit = scores.niche_fit
   const hasAnyEvidence = webCount > 0 || videoCount > 0
 
   if (validation.consistency.is_polluted || consistencyScore < 40) {

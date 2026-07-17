@@ -43,7 +43,7 @@ export function evaluateCandidate(
       seed_keyword: candidate.seed_keyword,
       category: candidate.category,
       trend_source_type: candidate.trend_source_type,
-      raw_confidence: candidate.confidence as 'high' | 'medium' | 'low',
+      raw_confidence: normalizeConfidence(candidate.confidence),
       validation,
       scores,
       decision,
@@ -86,7 +86,7 @@ export function evaluateCandidate(
     seed_keyword: candidate.seed_keyword,
     category: candidate.category,
     trend_source_type: candidate.trend_source_type,
-    raw_confidence: candidate.confidence as 'high' | 'medium' | 'low',
+    raw_confidence: normalizeConfidence(candidate.confidence),
     validation,
     scores,
     decision,
@@ -101,6 +101,10 @@ export function evaluateCandidate(
     recommended_format: recommendedFormatForExpansion(expansionType, storyPotential.total),
     hook_pattern: hookPatternForExpansion(expansionType, candidate.candidate_topic),
   }
+}
+
+function normalizeConfidence(value: TrendCandidate['confidence']): 'high' | 'medium' | 'low' {
+  return value === 'high' || value === 'medium' ? value : 'low'
 }
 
 export function applySafeOutput(

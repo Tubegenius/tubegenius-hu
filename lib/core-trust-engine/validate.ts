@@ -23,6 +23,19 @@ function extractDomainFromUrl(url: string): string {
   }
 }
 
+function isSafeEvidenceUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && Boolean(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
+function isFiniteNonNegative(value: number): boolean {
+  return Number.isFinite(value) && value >= 0
+}
+
 function sourceDomainMatches(url: string, title: string): boolean {
   const titleDomain = extractDomainFromTitle(title)
   if (!titleDomain) return true
@@ -54,6 +67,10 @@ export function validateCandidate(
   const rejectedWeb: Array<{ title: string; reason: string }> = []
 
   for (const source of candidate.web_sources) {
+    if (!isSafeEvidenceUrl(source.link || '')) {
+      rejectedWeb.push({ title: source.title, reason: 'invalid_evidence_url' })
+      continue
+    }
     const pageType = classifySourcePage(source.link || '', source.title)
     const wasRemoved = consistency.removed_sources.some(r => r.title === source.title)
 
@@ -93,7 +110,25 @@ export function validateCandidate(
       continue
     }
 
-    const ageDays = Math.max(1, (Date.now() - new Date(video.publishedAt).getTime()) / (24 * 60 * 60 * 1000))
+    if (!/^[A-Za-z0-9_-]{11}$/.test(video.videoId || '')) {
+      rejectedVideo.push({ title: video.title, reason: 'invalid_video_id' })
+      continue
+    }
+    if (![video.viewCount, video.likeCount, video.commentCount].every(isFiniteNonNegative)) {
+      rejectedVideo.push({ title: video.title, reason: 'invalid_video_metrics' })
+      continue
+    }
+    if (!Number.isFinite(video.relevance_score) || video.relevance_score < 0 || video.relevance_score > 100) {
+      rejectedVideo.push({ title: video.title, reason: 'invalid_relevance_score' })
+      continue
+    }
+
+    const publishedAtMs = new Date(video.publishedAt).getTime()
+    if (!Number.isFinite(publishedAtMs) || publishedAtMs > Date.now()) {
+      rejectedVideo.push({ title: video.title, reason: 'invalid_published_at' })
+      continue
+    }
+    const ageDays = Math.max(1, (Date.now() - publishedAtMs) / (24 * 60 * 60 * 1000))
     const viewsPerDay = video.viewCount / ageDays
     const isStrong = video.viewCount >= 1000 || viewsPerDay >= 300
 
