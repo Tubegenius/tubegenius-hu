@@ -102,6 +102,8 @@ interface VideoPackageResult {
   intensity_downgraded?: boolean
   intensity_downgrade_reason?: string
   opportunity_context?: {
+    id?: string
+    title?: string
     ready_to_produce_status?: string
     ready_to_produce_label?: string
     confidence?: string
@@ -109,6 +111,8 @@ interface VideoPackageResult {
     evidence_match_score?: number | null
     risk_flags?: string[]
     preparation_mode?: boolean
+    web_sources?: OpportunityPackageContext['web_sources']
+    evidence_videos?: OpportunityPackageContext['evidence_videos']
   } | null
   _credits_remaining?: number
   from_paid_result?: boolean
@@ -499,6 +503,10 @@ export default function VideoPackagePage() {
         setVideoLength(data.video_length)
         if (data.narration_style) setNarrationStyle(data.narration_style)
         setResult(data)
+        if (data.opportunity_context?.id && data.opportunity_context?.title) {
+          setOpportunityContext(data.opportunity_context as OpportunityPackageContext)
+          opportunityContextRef.current = data.opportunity_context as OpportunityPackageContext
+        }
         setSaved(true)
         setReopenedWithoutCharge(true)
       } else {
@@ -519,6 +527,13 @@ export default function VideoPackagePage() {
       const data = await res.json()
       if (res.ok && data.package) {
         const pkg = data.package
+        const snapshot = Array.isArray(pkg.sources)
+          ? pkg.sources.find((source: { source_type?: string }) => source?.source_type === 'opportunity_snapshot')?.context
+          : null
+        if (snapshot?.id && snapshot?.title) {
+          setOpportunityContext(snapshot as OpportunityPackageContext)
+          opportunityContextRef.current = snapshot as OpportunityPackageContext
+        }
         setTopic(pkg.topic)
         setPlatform(pkg.platform)
         setVideoLength(pkg.video_length)
@@ -534,6 +549,7 @@ export default function VideoPackagePage() {
           hashtags: pkg.hashtags, upload_times: pkg.upload_times, cta: pkg.cta,
           timestamps: pkg.timestamps, sources_used: pkg.sources,
           estimated_word_count: pkg.estimated_word_count, estimated_duration: pkg.estimated_duration,
+          opportunity_context: snapshot || null,
         })
         setSaved(true)
         setSavedPackageId(pkg.id)

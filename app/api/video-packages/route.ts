@@ -61,6 +61,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'A mentett videócsomag szerkezete hibás.' }, { status: 422 })
   }
   const admin = createAdminClient()
+  const opportunitySnapshot = body.opportunity_context && typeof body.opportunity_context === 'object'
+    ? [{ title: 'Opportunity source snapshot', source_type: 'opportunity_snapshot', context: body.opportunity_context }]
+    : []
 
   const { data, error } = await admin
     .from('video_packages')
@@ -74,7 +77,7 @@ export async function POST(request: NextRequest) {
       intensity: body.intensity || null,
       goal: body.goal || null,
       verified_fact_block: body.verified_fact_block || null,
-      sources: body.sources || [],
+      sources: opportunitySnapshot.length > 0 ? opportunitySnapshot : (body.sources || []),
       verified_fact_block_json: body.verified_fact_block_json || null,
       forbidden_claims: body.forbidden_claims || [],
       sources_used: body.sources_used || [],

@@ -43,11 +43,15 @@ export async function GET(request: NextRequest) {
   const effectiveNiche = [profileRow?.niche, profileRow?.main_category, profileRow?.specific_focus].filter(Boolean).join(' ')
 
   const auditList = (audits || []).filter(audit => hasValidOverallScore(audit) && hasValidDimensionScores(audit))
+  const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
   if (auditList.length < MIN_AUDITS_REQUIRED) {
     return NextResponse.json({
       has_enough_data: false,
       audit_count: auditList.length,
       min_required: MIN_AUDITS_REQUIRED,
+      relevant_audit_count: relevantForTopics.length,
+      min_relevant_required: MIN_AUDITS_REQUIRED,
+      can_generate_suggestions: false,
     })
   }
 
@@ -57,7 +61,6 @@ export async function GET(request: NextRequest) {
   // enelkul egy egyszeri teszt/vicc celbol auditalt, teljesen off-niche videó
   // (pl. zenei klip) is bekerulhet ide es a "kovetkezo 10 video" promptba is.
   // A dimenzio-atlagok (fent) NEM szurtek, mert azok keszseg-mertekek, nem tema-fuggoek.
-  const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
   const sorted = [...relevantForTopics].sort((a, b) => b.overall_score - a.overall_score)
   const topStrong = sorted.slice(0, 3).map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
   const topWeak = sorted.slice(-3).reverse().map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
@@ -66,6 +69,9 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     has_enough_data: true,
     audit_count: auditList.length,
+    relevant_audit_count: relevantForTopics.length,
+    min_relevant_required: MIN_AUDITS_REQUIRED,
+    can_generate_suggestions: relevantForTopics.length >= MIN_AUDITS_REQUIRED,
     dimension_averages: dimensionAverages,
     weakest_dimension: weakestDimension,
     top_strong: topStrong,

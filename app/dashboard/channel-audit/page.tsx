@@ -46,6 +46,9 @@ interface ChannelAuditData {
   has_enough_data: boolean
   audit_count: number
   min_required?: number
+  relevant_audit_count?: number
+  min_relevant_required?: number
+  can_generate_suggestions?: boolean
   dimension_averages?: DimensionAverages
   weakest_dimension?: { key: string; label: string; value: number }
   top_strong?: AuditSummary[]
@@ -205,6 +208,12 @@ export default function ChannelAuditPage() {
 
   async function requestSuggestions(forceRefresh = false) {
     setError(null)
+    if (!data?.can_generate_suggestions) {
+      const relevantCount = data?.relevant_audit_count ?? 0
+      const requiredCount = data?.min_relevant_required ?? 3
+      setError(`A javaslatokhoz legalább ${requiredCount} niche-releváns Videódiagnózis szükséges. Jelenleg ${relevantCount}/${requiredCount} releváns audit áll rendelkezésre. Ez az ellenőrzés ingyenes, nem vontunk le kreditet.`)
+      return
+    }
     try {
       const creditsRes = await fetch('/api/credits')
       const credits = await creditsRes.json()
@@ -447,6 +456,20 @@ export default function ChannelAuditPage() {
                 </button>
               )}
             </div>
+            {!suggestionsResult && !data.can_generate_suggestions && (
+              <div className="rounded-xl px-4 py-3 mb-3"
+                style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.22)' }}>
+                <p className="text-sm font-medium" style={{ color: '#FBBF24' }}>
+                  Még {Math.max(0, (data.min_relevant_required ?? 3) - (data.relevant_audit_count ?? 0))} niche-releváns Videódiagnózis szükséges
+                </p>
+                <p className="text-xs mt-1" style={{ color: '#CBD5E1' }}>
+                  Jelenleg {data.relevant_audit_count ?? 0}/{data.min_relevant_required ?? 3} releváns audit van. A fizetős megerősítés csak 3/3-nál jelenik meg; ez az előzetes ellenőrzés 0 kredit.
+                </p>
+                <Link href="/dashboard/video-audit" className="text-xs inline-block mt-2 underline" style={{ color: '#93C5FD' }}>
+                  Niche-releváns Videódiagnózis készítése →
+                </Link>
+              </div>
+            )}
             {generating && !suggestionsResult && (
               <LoadingScreen steps={LOADING_STEPS.channelAudit} />
             )}

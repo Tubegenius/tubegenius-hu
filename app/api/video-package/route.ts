@@ -29,7 +29,11 @@ import {
 } from '@/lib/video-package'
 import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
-interface PackageSource { title: string; url?: string; snippet?: string; source?: string }
+interface PackageSource {
+  title: string; url?: string; snippet?: string; source?: string
+  video_id?: string; channel_title?: string; thumbnail_url?: string
+  view_count?: number; like_count?: number; comment_count?: number; published_at?: string
+}
 interface PackageSourceVideo { video_id?: string; id?: string; url?: string; title?: string; channel?: string; hook?: string; key_points?: string[]; transcript_available?: boolean; raw_transcript?: string }
 interface PackageOpportunityContext { id?: string; title?: string; ready_to_produce_status?: string; ready_to_produce_label?: string; confidence?: string; opportunity_score?: number; risk_flags?: unknown[] }
 interface VideoPackageRequestBody {
@@ -286,7 +290,13 @@ export async function POST(request: NextRequest) {
       sources_used: polishedCore.sources_used || sources || [],
       verified_fact_block: factBlock,
       forbidden_claims: factBlock.forbidden_claims,
-      opportunity_context: opportunity_context || null,
+      // A fizetett eredmény a teljes forrássnapshotot őrzi. Így a bizonyítékok
+      // paidResultId-s újranyitáskor nem a böngésző sessionStorage-ából élnek.
+      opportunity_context: opportunity_context ? {
+        ...opportunity_context,
+        web_sources: webSourceItems,
+        evidence_videos: youtubeSourceItems,
+      } : null,
     }
 
     await logUsage(userId, feature, MODELS.primary, coreResult.inputTokens, coreResult.outputTokens, { topic, platform, video_length, sub_step: 'core', content_type: contentType })
