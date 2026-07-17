@@ -51,7 +51,15 @@ function clampScore(value: number) {
   return Math.round(Math.max(0, Math.min(100, value)))
 }
 
+export function isValidVideoDecisionInput(input: VideoDecisionInput): boolean {
+  const scores = [input.relevance_score, input.freshness_score, input.velocity_score, input.engagement_score, input.outlier_score]
+  return scores.every(value => Number.isFinite(value) && value >= 0 && value <= 100) &&
+    [input.view_count, input.views_per_day].every(value => Number.isFinite(value) && value >= 0) &&
+    ageDays(input.published_at) < 9999
+}
+
 export function hasVideoMarketValidation(input: VideoDecisionInput) {
+  if (!isValidVideoDecisionInput(input)) return false
   return (
     input.view_count >= 1000 ||
     (input.views_per_day >= 300 && input.view_count >= 300) ||
@@ -61,6 +69,7 @@ export function hasVideoMarketValidation(input: VideoDecisionInput) {
 }
 
 export function scoreValidatedVideo(input: VideoDecisionInput) {
+  if (!isValidVideoDecisionInput(input)) return 0
   let score = clampScore(
     input.velocity_score * 0.30 +
     input.engagement_score * 0.25 +
@@ -78,6 +87,16 @@ export function scoreValidatedVideo(input: VideoDecisionInput) {
 
 export function decideSimilarVideo(input: VideoDecisionInput): DecisionResult {
   const risk_flags: string[] = []
+
+  if (!isValidVideoDecisionInput(input)) {
+    return {
+      status: 'rejected',
+      label: 'Érvénytelen bizonyíték',
+      score: 0,
+      risk_flags: ['Hiányos vagy érvénytelen videómetrika'],
+      gates: { relevance: false, market_validation: false, freshness: false, evidence: false },
+    }
+  }
 
   // ── Relevancia kapu — irreleváns videó nem jut tovább ──
   if (input.relevance_score < 60) {

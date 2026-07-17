@@ -1,5 +1,11 @@
 # WILLVIRAL CREATOR OS — MESTERTERV ÁLLAPOT
 
+## 2026-07-17 — SIMILAR VIDEOS DÖNTÉSI ÉS METRIKAINTEGRITÁS HARDENING
+
+- A videós döntési motor teljes numerikus szerződést érvényesít: minden részpont véges 0–100 érték, a view/VPD metrikák végesek és nem negatívak, a publikációs dátum valós és nem jövőbeli. Sérült adat minden market/evidence kaput lezár és 0 pontos elutasítást ad; végtelen view count többé nem gyárthat hamis „Ajánlott inspiráció” státuszt.
+- A Similar Videos API a hibás vagy túl nagy JSON-t, rossz mezőtípust és az 1–20 tartományon kívüli találatszámot 400-zal utasítja el. Profil-niche olvasási adatbázishibánál fail-closed; a YouTube számlálók kizárólag nem negatív safe integerként kerülnek a snapshot- és scoring-folyamba.
+- A blokk 23 tesztfájl 98 tesztjével, TypeScripttel és a 78 oldalas production builddel sikeres.
+
 ## 2026-07-17 — OPPORTUNITY DÖNTÉSI MOTOR ÉS INPUT-INTEGRITÁS HARDENING
 
 - A Core Trust Engine minden niche-fit és freshness pontot véges 0–100 tartományba zár; `NaN`, végtelen vagy tartományon kívüli érték többé nem emelhet score-t és nem nyithatja ki a „Gyártható most” döntési kaput.

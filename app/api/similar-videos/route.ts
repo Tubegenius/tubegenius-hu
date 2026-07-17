@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import type { SimilarVideo } from '@/types'
 import {
   calcSearchRelevance,
@@ -442,10 +442,43 @@ async function hydrateStats(items: YouTubeSearchItem[]) {
   return youtubeStats(ids)
 }
 
+function safeYouTubeCount(value: string | undefined): number {
+  const parsed = Number(value || 0)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
+}
+
+interface SimilarVideosRequestBody {
+  topic?: string
+  region?: string
+  max_results?: number
+  user_niche?: string
+  use_profile_niche?: boolean
+  platform?: string
+  language?: string
+  cache_only?: boolean
+  force_refresh?: boolean
+  paidResultId?: string
+  paid_result_id?: string
+}
+
 export async function POST(request: NextRequest) {
   let requestLockId: string | undefined
   try {
-    const { topic, region, max_results = 9, user_niche, use_profile_niche, platform, language, cache_only, force_refresh, paidResultId, paid_result_id } = await request.json()
+    const parsedBody: unknown = await request.json().catch(() => null)
+    if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody)) {
+      return NextResponse.json({ error: 'Érvénytelen vagy túl nagy kérés.' }, { status: 400 })
+    }
+    const textFields = ['topic', 'region', 'user_niche', 'platform', 'language', 'paidResultId', 'paid_result_id']
+    if (textFields.some(key => parsedBody[key] !== undefined && parsedBody[key] !== null && typeof parsedBody[key] !== 'string')) {
+      return NextResponse.json({ error: 'Érvénytelen szöveges mező.' }, { status: 400 })
+    }
+    if (['use_profile_niche', 'cache_only', 'force_refresh'].some(key => parsedBody[key] !== undefined && typeof parsedBody[key] !== 'boolean')) {
+      return NextResponse.json({ error: 'Érvénytelen logikai mező.' }, { status: 400 })
+    }
+    if (parsedBody.max_results !== undefined && (!Number.isInteger(parsedBody.max_results) || (parsedBody.max_results as number) < 1 || (parsedBody.max_results as number) > 20)) {
+      return NextResponse.json({ error: 'A találatszám 1 és 20 közötti egész szám lehet.' }, { status: 400 })
+    }
+    const { topic, region, max_results = 9, user_niche, use_profile_niche, platform, language, cache_only, force_refresh, paidResultId, paid_result_id } = parsedBody as SimilarVideosRequestBody
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     }
@@ -460,7 +493,8 @@ export async function POST(request: NextRequest) {
     let effectiveNiche = user_niche || ''
     if (!effectiveNiche && use_profile_niche === true) {
       const admin = createAdminClient()
-      const { data: prof } = await admin.from('profiles').select('niche').eq('user_id', userId).single()
+      const { data: prof, error: profileError } = await admin.from('profiles').select('niche').eq('user_id', userId).maybeSingle()
+      if (profileError) throw new Error(`Similar Videos profile read failed: ${profileError.message}`)
       effectiveNiche = prof?.niche || ''
     }
     console.log(`[SimilarVideos] niche_fit: effectiveNiche="${effectiveNiche}" topic="${topic}"`)
@@ -589,9 +623,9 @@ export async function POST(request: NextRequest) {
         channelTitle: item.snippet.channelTitle,
         channelId: item.snippet.channelId || null,
         publishedAt: item.snippet.publishedAt,
-        viewCount: parseInt(stats?.statistics.viewCount || '0'),
-        likeCount: parseInt(stats?.statistics.likeCount || '0'),
-        commentCount: parseInt(stats?.statistics.commentCount || '0'),
+        viewCount: safeYouTubeCount(stats?.statistics.viewCount),
+        likeCount: safeYouTubeCount(stats?.statistics.likeCount),
+        commentCount: safeYouTubeCount(stats?.statistics.commentCount),
         thumbnailUrl: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.default?.url || '',
         description: item.snippet.description || '',
         query: item.query,

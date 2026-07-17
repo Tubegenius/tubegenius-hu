@@ -7,7 +7,7 @@ Jelölések: **lezárt** = kód + regressziós teszt + build; **részleges** = k
 | Funkció | Fő backend | Módszertan/adat | Cache/kredit | CRUD/biztonság | Teszt | Állapot |
 |---|---|---|---|---|---|---|
 | Opportunity Engine | `/api/opportunity` | dinamikus niche expansion; véges, bounded score-ok; fail-closed bizonyíték- és döntési kapuk | paid result + lock + soft limit; cache/Memory DB-hiba fail-closed | tenant-szűrt és HTTP(S)/YouTube-ID/metrika/dátum validált bizonyíték; korlátozott JSON input | score/decision/evidence edge case + teljes regresszió + production build | lezárt |
-| Similar Videos | `/api/similar-videos` | relevancia, velocity, outlier, evidence gate | kvóta + paid result + lock | proof signal tenant policy | decision edge case | részleges |
+| Similar Videos | `/api/similar-videos` | relevancia, velocity, outlier; teljes véges/tartományos decision input és fail-closed evidence gate | kvóta + paid result + lock; profil DB-hiba fail-closed | proof signal tenant policy; safe-integer YouTube metrikák; korlátozott JSON input | decision/metrika edge case + teljes regresszió + production build | lezárt |
 | Viral Score | `/api/viral-score` | backend score, web buzz, low-data gate | paid result + legacy cache + lock | Video Idea/proof kapcsolat | dátum/score alap | részleges |
 | Video Audit | `/api/video-audit` | proxyhatárok javítva; fals retention/időpont/thumbnail jel megszüntetve | paid result + lock + soft limit | userhez kötött mentés | input/módszertan edge case | lezárt |
 | Video Package | `/api/video-package` | fact block + opportunity evidence | paid result + lock | Video Idea kapcsolat | cache-flow alap | részleges |
