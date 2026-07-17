@@ -131,6 +131,7 @@ export async function POST(request: NextRequest) {
   })
 
   if (!ideaResult.success || !ideaResult.idea?.id) {
+    console.error('[VideoPackages] Video idea creation failed:', ideaResult.error || 'missing_video_idea_id')
     await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
     return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
   }
@@ -142,6 +143,7 @@ export async function POST(request: NextRequest) {
       videoIdeaId: ideaResult.idea.id,
     })
     if (!linkResult.success) {
+      console.error('[VideoPackages] Video idea link failed:', linkResult.error || 'unknown_link_error')
       await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
       return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
     }
@@ -151,6 +153,7 @@ export async function POST(request: NextRequest) {
       videoPackageId: data.id,
     })
     if (!readyResult.success) {
+      console.error('[VideoPackages] Ready-to-produce update failed:', readyResult.error || 'unknown_ready_error')
       await admin.from('video_packages').delete().eq('id', data.id).eq('user_id', user.id)
       return NextResponse.json({ error: 'A videócsomag workflow-kapcsolata nem menthető.' }, { status: 500 })
     }
