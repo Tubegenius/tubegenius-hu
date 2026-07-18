@@ -1,16 +1,26 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import type { CreatorProfile } from '@/types'
 import { CREDIT_BALANCE_UPDATED_EVENT } from '@/lib/credit-balance-events'
+import { findNavSectionForPath } from '@/lib/nav-config'
 
 interface HeaderProps {
   user: User
   profile: CreatorProfile | null
 }
 
+function breadcrumbFor(pathname: string): string {
+  const match = findNavSectionForPath(pathname)
+  if (!match) return ''
+  if (match.section.type === 'link') return match.section.label
+  return match.item ? `${match.section.label} / ${match.item.label}` : match.section.label
+}
+
 export default function DashboardHeader({ user, profile }: HeaderProps) {
+  const pathname = usePathname()
   const initials = (profile?.channel_name || user.email || 'U').slice(0, 2).toUpperCase()
   const [credits, setCredits] = useState<number | null>(null)
 
@@ -29,7 +39,7 @@ export default function DashboardHeader({ user, profile }: HeaderProps) {
       style={{ height: 72, background: 'rgba(7,10,18,0.82)', backdropFilter: 'blur(16px)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
 
       <div className="flex items-center gap-2 text-sm text-text-muted">
-        {/* breadcrumb placeholder */}
+        {breadcrumbFor(pathname)}
       </div>
 
       <div className="flex items-center gap-3">

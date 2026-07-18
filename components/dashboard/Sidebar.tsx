@@ -5,36 +5,31 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { CreatorProfile } from '@/types'
 import Logo from '@/components/brand/Logo'
+import AppIcon from '@/components/icons/AppIcon'
+import { NAV_SECTIONS } from '@/lib/nav-config'
 import { CREDIT_BALANCE_UPDATED_EVENT } from '@/lib/credit-balance-events'
 
 interface SidebarProps {
   profile: CreatorProfile | null
 }
 
-const navItems = [
-  { label: 'Creator központ', href: '/dashboard/overview', icon: 'ti-layout-dashboard' },
-  { label: 'Trend Feed', href: '/dashboard', icon: 'ti-chart-dots-3' },
-  { label: 'Trend riasztások', href: '/dashboard/trend-alerts', icon: 'ti-bell' },
-  { label: 'Videólehetőségek', href: '/dashboard/opportunities', icon: 'ti-bulb' },
-  { label: 'Kulcsszókutató', href: '/dashboard/keyword-research', icon: 'ti-tags' },
-  { label: 'Versenytársfigyelő', href: '/dashboard/competitors', icon: 'ti-target-arrow' },
-  { label: 'Title Studio', href: '/dashboard/title-studio', icon: 'ti-edit' },
-  { label: 'Thumbnail Studio', href: '/dashboard/thumbnail-studio', icon: 'ti-photo' },
-  { label: 'SEO Optimalizáló', href: '/dashboard/seo-optimizer', icon: 'ti-seo' },
-  { label: 'Tartalom naptár', href: '/dashboard/calendar', icon: 'ti-calendar' },
-  { label: 'Content Gap Finder', href: '/dashboard/content-gap', icon: 'ti-search-off' },
-  { label: 'Piaci bizonyítékok', href: '/dashboard/similar-videos', icon: 'ti-player-play' },
-  { label: 'Gyártási csomag', href: '/dashboard/video-package', icon: 'ti-package' },
-  { label: 'Videódiagnózis', href: '/dashboard/video-audit', icon: 'ti-stethoscope' },
-  { label: 'Channel Audit', href: '/dashboard/channel-audit', icon: 'ti-chart-histogram' },
-  { label: 'Virális esély', href: '/dashboard/viral-score', icon: 'ti-chart-bar' },
-  { label: 'Auto Transcript', href: '/dashboard/transcript', icon: 'ti-microphone' },
-  { label: 'Script Extractor', href: '/dashboard/script-extractor', icon: 'ti-file-text' },
-  { label: 'Tartalommemória', href: '/dashboard/memory', icon: 'ti-brain' },
-  { label: 'Kreditek', href: '/dashboard/credits', icon: 'ti-bolt' },
-]
+const NAV_GROUPS_STORAGE_KEY = 'willviral_nav_open_groups'
+
+function isLeafActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`)
+}
+
+function groupContainingPath(pathname: string): string | null {
+  for (const section of NAV_SECTIONS) {
+    if (section.type === 'group' && section.items.some(item => isLeafActive(pathname, item.href))) {
+      return section.id
+    }
+  }
+  return null
+}
 
 export default function DashboardSidebar({ profile }: SidebarProps) {
   const pathname = usePathname()
@@ -43,6 +38,47 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
 
   const [credits, setCredits] = useState<{ balance: number; monthly_allowance: number; plan: string } | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const active = groupContainingPath(pathname)
+    const initial: Record<string, boolean> = {}
+    for (const section of NAV_SECTIONS) {
+      if (section.type === 'group') initial[section.id] = section.id === active
+    }
+    return initial
+  })
+
+  // Első betöltés után a korábban elmentett nyitott/zárt csoport-állapotot
+  // is figyelembe vesszük (csak kliens oldalon, hogy ne legyen hidratációs
+  // eltérés a szerver-renderelt alapállapothoz képest).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(NAV_GROUPS_STORAGE_KEY)
+      if (raw) {
+        const stored = JSON.parse(raw) as Record<string, boolean>
+        setOpenGroups(prev => ({ ...prev, ...stored }))
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Route váltáskor az aktuális oldalt tartalmazó csoport mindig nyitva
+  // legyen, még ha korábban be is volt csukva.
+  useEffect(() => {
+    const active = groupContainingPath(pathname)
+    if (active) {
+      setOpenGroups(prev => (prev[active] ? prev : { ...prev, [active]: true }))
+    }
+  }, [pathname])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(NAV_GROUPS_STORAGE_KEY, JSON.stringify(openGroups))
+    } catch {}
+  }, [openGroups])
+
+  function toggleGroup(id: string) {
+    setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }))
+  }
 
   useEffect(() => {
     fetch('/api/credits').then(r => r.json()).then(setCredits).catch(() => {})
@@ -119,14 +155,49 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
         </button>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map(item => {
-          const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {NAV_SECTIONS.map(section => {
+          if (section.type === 'link') {
+            const isActive = pathname === section.href
+            return (
+              <Link key={section.id} href={section.href} className={isActive ? 'nav-item-active' : 'nav-item'}>
+                <AppIcon icon={section.icon} className="w-5 h-5 flex-shrink-0" />
+                <span>{section.label}</span>
+              </Link>
+            )
+          }
+
+          const isOpen = !!openGroups[section.id]
+          const hasActiveChild = section.items.some(item => isLeafActive(pathname, item.href))
+
           return (
-            <Link key={item.href} href={item.href} className={isActive ? 'nav-item-active' : 'nav-item'}>
-              <i className={`ti ${item.icon} text-base w-5 text-center`} />
-              <span>{item.label}</span>
-            </Link>
+            <div key={section.id}>
+              <button
+                type="button"
+                onClick={() => toggleGroup(section.id)}
+                aria-expanded={isOpen}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors hover:bg-white/5 ${hasActiveChild ? 'text-text-primary' : 'text-text-secondary'}`}
+                style={hasActiveChild ? { borderLeft: '2px solid #3B82F6', paddingLeft: '10px' } : undefined}
+              >
+                <AppIcon icon={section.icon} className="w-5 h-5 flex-shrink-0" />
+                <span className="flex-1 text-left">{section.label}</span>
+                <AppIcon icon={isOpen ? ChevronDown : ChevronRight} className="w-4 h-4 text-text-muted flex-shrink-0" />
+              </button>
+
+              {isOpen && (
+                <div className="ml-4 pl-3 py-0.5 space-y-0.5" style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
+                  {section.items.map(item => {
+                    const isActive = isLeafActive(pathname, item.href)
+                    return (
+                      <Link key={item.href} href={item.href} className={isActive ? 'nav-item-active' : 'nav-item'}>
+                        <AppIcon icon={item.icon} className="w-4 h-4 flex-shrink-0" />
+                        <span>{item.label}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           )
         })}
       </nav>
