@@ -6,9 +6,12 @@ import { useSearchParams } from 'next/navigation'
 import type { ViralScoreResult, VideoCardData } from '@/types'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
-import { scoreLabel, scoreLabelColor, scoreColor } from '@/lib/score-utils'
+import { scoreColor } from '@/lib/score-utils'
 import VideoCardActions from '@/components/VideoCardActions'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import ViralScoreHero from '@/components/viral-score/ViralScoreHero'
+import StatusIcon from '@/components/icons/StatusIcon'
+import { Bookmark, PlayCircle, Package, Eye } from 'lucide-react'
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -16,68 +19,6 @@ function formatNumber(n: number): string {
   return n.toString()
 }
 
-function ScoreRing({ score, verdict }: { score: number; verdict: string }) {
-  const color = verdict === 'strong' ? '#10B981' : verdict === 'moderate' ? '#F59E0B' : '#F43F5E'
-  const radius = 54
-  const circumference = 2 * Math.PI * radius
-  const strokeDashoffset = circumference - (score / 100) * circumference
-
-  return (
-    <div className="relative w-36 h-36 mx-auto">
-      <svg className="w-full h-full -rotate-90" viewBox="0 0 140 140">
-        <circle cx="70" cy="70" r={radius} fill="none" stroke="#121826" strokeWidth="10" />
-        <circle
-          cx="70" cy="70" r={radius}
-          fill="none"
-          stroke={color}
-          strokeWidth="10"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={strokeDashoffset}
-          style={{ transition: 'stroke-dashoffset 1s ease-out' }}
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-3xl font-bold text-text-primary">{score}</span>
-        <span className="text-xs text-text-muted">/ 100</span>
-        <span className="text-xs font-semibold mt-0.5" style={{ color: scoreLabelColor(score) }}>
-          {scoreLabel(score)}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-const verdictConfig = {
-  strong: { label: 'Erős téma ✓', color: 'text-emerald', bg: 'bg-emerald/10', border: 'border-emerald/20' },
-  moderate: { label: 'Közepes lehetőség', color: 'text-amber', bg: 'bg-amber/10', border: 'border-amber/20' },
-  weak: { label: 'Gyenge piaci igény', color: 'text-rose', bg: 'bg-rose/10', border: 'border-rose/20' },
-  avoid: { label: 'Nem ajánlott', color: 'text-rose', bg: 'bg-rose/10', border: 'border-rose/20' },
-}
-
-const confidenceLabel = {
-  magas: 'Magas megbízhatóság (30+ videó)',
-  közepes: 'Közepes megbízhatóság (10–29 videó)',
-  alacsony: 'Alacsony megbízhatóság (5–9 videó)',
-  nagyon_alacsony: 'Nagyon alacsony megbízhatóság (1–4 videó)',
-}
-
-function viralDecisionMeta(result: ViralScoreResult) {
-  const status = result.decision_status || (result.verdict === 'strong' ? 'make_now' : result.verdict === 'moderate' ? 'test_angle' : result.verdict === 'weak' ? 'research' : 'avoid')
-  const fallback = {
-    make_now: { label: 'Gyártható téma', reason: 'A témában elég erős jel látszik ahhoz, hogy gyártási döntést hozz.', action: 'Készíts videócsomagot, majd válassz erős hookot.', color: '#22C55E', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.2)', icon: 'ti-circle-check' },
-    test_angle: { label: 'Tesztelhető szög', reason: 'Van piaci jel, de érdemes szűkebb angle-t keresni.', action: 'Nézz Piaci bizonyíték példákat és csomagold konkrétabb ígéretre.', color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)', icon: 'ti-flask' },
-    research: { label: 'Kutatás kell', reason: 'A jel még gyenge vagy bizonytalan.', action: 'Szűkítsd a keresést, majd validáld Piaci bizonyíték vagy webes forrás alapján.', color: '#60A5FA', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)', icon: 'ti-search' },
-    avoid: { label: 'Most nem ajánlott', reason: 'Nincs elég erős adat ahhoz, hogy erre építs.', action: 'Próbálj más megfogalmazást vagy tágabb témát.', color: '#F43F5E', bg: 'rgba(244,63,94,0.08)', border: 'rgba(244,63,94,0.2)', icon: 'ti-alert-triangle' },
-  }[status]
-
-  return {
-    ...fallback,
-    label: result.decision_label || fallback.label,
-    reason: result.decision_reason || fallback.reason,
-    action: result.next_action || fallback.action,
-  }
-}
 
 export default function ViralScorePage() {
   const searchParams = useSearchParams()
@@ -299,8 +240,8 @@ export default function ViralScorePage() {
             <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap"
               style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
               <div>
-                <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
-                  <i className="ti ti-database mr-1.5" />
+                <p className="text-sm font-medium flex items-center gap-1.5" style={{ color: '#93C5FD' }}>
+                  <StatusIcon kind="saved" className="w-4 h-4" />
                   {result.cache_status === 'fresh' ? 'Friss mentett eredmény betöltve' : 'Korábbi mentett eredmény betöltve'}
                 </p>
                 <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
@@ -319,59 +260,7 @@ export default function ViralScorePage() {
             </div>
           )}
 
-          {/* Score card */}
-          <div className="card text-center">
-            <ScoreRing score={result.score} verdict={result.verdict} />
-            
-            <div className="mt-4">
-              {(() => {
-                const cfg = verdictConfig[result.verdict]
-                return (
-                  <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium border ${cfg.bg} ${cfg.color} ${cfg.border}`}>
-                    {cfg.label}
-                  </span>
-                )
-              })()}
-            </div>
-
-            <p className="text-text-secondary text-sm mt-3 max-w-sm mx-auto leading-relaxed">
-              {result.recommendation}
-            </p>
-
-            {/* Confidence */}
-            <p className="text-text-muted text-xs mt-3">
-              {confidenceLabel[result.confidence]}
-            </p>
-          </div>
-
-          {/* Creator decision */}
-          {(() => {
-            const decision = viralDecisionMeta(result)
-            return (
-              <div className="card" style={{ background: decision.bg, border: `1px solid ${decision.border}` }}>
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                    <i className={`ti ${decision.icon}`} style={{ color: decision.color, fontSize: '20px' }} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: decision.color }}>Creator döntés</p>
-                    <h3 className="text-lg font-bold mb-1" style={{ color: '#F8FAFC' }}>{decision.label}</h3>
-                    <p className="text-sm leading-relaxed" style={{ color: '#CBD5E1' }}>{decision.reason}</p>
-                    <p className="text-sm mt-2 font-medium" style={{ color: '#F8FAFC' }}>{decision.action}</p>
-                    {result.risk_flags && result.risk_flags.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-3">
-                        {result.risk_flags.map(flag => (
-                          <span key={flag} className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: '#CBD5E1', border: '1px solid rgba(255,255,255,0.08)' }}>
-                            {flag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
+          <ViralScoreHero result={result} />
 
           {/* Breakdown */}
           <div className="card">
@@ -474,7 +363,9 @@ export default function ViralScorePage() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium line-clamp-1" style={{ color: '#F8FAFC' }}>{video.title}</p>
-                          <p className="text-xs" style={{ color: '#94A3B8' }}>{video.channel_title} · 👁 {formatNumber(video.view_count)}</p>
+                          <p className="text-xs flex items-center gap-1" style={{ color: '#94A3B8' }}>
+                            {video.channel_title} · <Eye className="w-3 h-3" aria-hidden="true" /> {formatNumber(video.view_count)}
+                          </p>
                         </div>
                       </a>
                       <VideoCardActions video={cardData} compact />
@@ -487,20 +378,20 @@ export default function ViralScorePage() {
 
           {/* Actions */}
           <div className="flex gap-3">
-            <button onClick={saveToMemory} className="btn-secondary flex-1">
-              📌 Mentés
+            <button onClick={saveToMemory} className="btn-secondary flex-1 inline-flex items-center justify-center gap-1.5">
+              <Bookmark className="w-4 h-4" aria-hidden="true" /> Mentés
             </button>
             <a
               href={`/dashboard/similar-videos?topic=${encodeURIComponent(result.topic)}`}
-              className="btn-secondary flex-1 text-center"
+              className="btn-secondary flex-1 text-center inline-flex items-center justify-center gap-1.5"
             >
-              🎬 Piaci bizonyítékok →
+              <PlayCircle className="w-4 h-4" aria-hidden="true" /> Piaci bizonyítékok →
             </a>
             <a
               href={`/dashboard/video-package?topic=${encodeURIComponent(result.topic)}`}
-              className="btn-primary flex-1 text-center"
+              className="btn-primary flex-1 text-center inline-flex items-center justify-center gap-1.5"
             >
-              🎁 Videócsomag →
+              <Package className="w-4 h-4" aria-hidden="true" /> Videócsomag →
             </a>
           </div>
         </div>
