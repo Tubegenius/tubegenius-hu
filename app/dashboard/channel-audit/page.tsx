@@ -3,10 +3,16 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { Activity, Trophy, TrendingDown, Compass } from 'lucide-react'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import ChannelHeaderCard, { type ChannelProfile } from '@/components/channel-audit/ChannelHeaderCard'
+import ChannelAuditHero from '@/components/channel-audit/ChannelAuditHero'
+import Badge from '@/components/ui/Badge'
+import EmptyState from '@/components/ui/EmptyState'
+import StatChip from '@/components/ui/StatChip'
+import StatusIcon from '@/components/icons/StatusIcon'
 
 interface ChannelVideoPerformance {
   videoId: string
@@ -280,10 +286,20 @@ export default function ChannelAuditPage() {
         <CreditConfirmModal check={creditCheck} onConfirm={confirmSuggestions} onCancel={() => setCreditCheck(null)} loading={generating} />
       )}
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>📊 Channel Audit</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>Az eddigi Videódiagnózisaid mintázata — mi erős, mi gyenge, mit gyárts legközelebb.</p>
-      </div>
+      <ChannelAuditHero
+        channelProfile={channelProfile}
+        channelConnected={channelConnected}
+        data={data}
+        suggestionsResult={suggestionsResult}
+        generating={generating}
+        loading={loading}
+        connecting={connecting}
+        loadError={loadError}
+        error={error}
+        onConnectChannel={connectChannel}
+        onRequestSuggestions={() => requestSuggestions()}
+        onRefreshSuggestions={() => requestSuggestions(true)}
+      />
 
       {channelProfile && (
         <div className="mb-6">
@@ -293,7 +309,10 @@ export default function ChannelAuditPage() {
 
       {data?.niche_review_required && (
         <div className="card mb-6" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
-          <p className="text-sm font-medium" style={{ color: '#FBBF24' }}>Új YouTube-csatornát választottál.</p>
+          <div className="flex items-center gap-2">
+            <StatusIcon kind="needs_review" className="w-4 h-4" />
+            <p className="text-sm font-medium" style={{ color: '#FBBF24' }}>Új YouTube-csatornát választottál.</p>
+          </div>
           <p className="text-xs mt-1" style={{ color: '#CBD5E1' }}>
             A jelenlegi Creator Profile niche-t nem módosítottuk, de még nincs megerősítve ehhez a csatornához. A döntésig nem indul fizetős témagenerálás, és 0 kredit fogy.
           </p>
@@ -304,30 +323,18 @@ export default function ChannelAuditPage() {
       )}
 
       {(data?.legacy_unassigned_audit_count || 0) > 0 && (
-        <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>
-          {data!.legacy_unassigned_audit_count} korábbi, csatornához nem rendelhető auditot nem használtunk az összesítésben.
-        </p>
-      )}
-
-      {channelConnected === false && (
-        <div className="card mb-6 flex items-center justify-between gap-4 flex-wrap" style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)' }}>
-          <div>
-            <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
-              {channelProfile ? '🔗 YouTube-fiók összekötése mélyebb elemzéshez' : '🔗 Kösd össze a YouTube csatornád'}
-            </p>
-            <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>Valós nézettség, watch time és feliratkozó-adatok jelennek meg a kézi audit-mintázat mellett.</p>
-          </div>
-          <button onClick={connectChannel} disabled={connecting} className="btn-primary text-sm px-4 py-1.5 flex-shrink-0">
-            {connecting ? 'Átirányítás...' : 'Csatorna összekapcsolása'}
-          </button>
+        <div className="mb-4">
+          <Badge variant="neutral">
+            {data!.legacy_unassigned_audit_count} korábbi, csatornához nem rendelhető auditot nem használtunk az összesítésben.
+          </Badge>
         </div>
       )}
 
       {channelConnected && channelAnalytics && (
         <div className="card mb-6">
           <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <p className="text-xs" style={{ color: '#94A3B8' }}>
-              📡 VALÓS CSATORNA-ANALITIKA {channelAnalytics.channelTitle ? `— ${channelAnalytics.channelTitle}` : ''} ({channelAnalytics.rangeStart} – {channelAnalytics.rangeEnd})
+            <p className="text-xs flex items-center gap-1.5" style={{ color: '#94A3B8' }}>
+              <Activity className="w-3.5 h-3.5" /> VALÓS CSATORNA-ANALITIKA {channelAnalytics.channelTitle ? `— ${channelAnalytics.channelTitle}` : ''} ({channelAnalytics.rangeStart} – {channelAnalytics.rangeEnd})
             </p>
             <button onClick={disconnectChannel} disabled={disconnecting}
               className="text-xs px-3 py-1.5 rounded-lg font-semibold"
@@ -336,28 +343,16 @@ export default function ChannelAuditPage() {
             </button>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Megtekintés</p>
-              <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{channelAnalytics.totals.views.toLocaleString('hu-HU')}</p>
-            </div>
-            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Watch time (perc)</p>
-              <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{Math.round(channelAnalytics.totals.estimatedMinutesWatched).toLocaleString('hu-HU')}</p>
-            </div>
-            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Új feliratkozó</p>
-              <p className="text-sm font-bold" style={{ color: '#22C55E' }}>+{channelAnalytics.totals.subscribersGained.toLocaleString('hu-HU')}</p>
-            </div>
-            <div className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <p className="text-xs mb-0.5" style={{ color: '#94A3B8' }}>Elvesztett feliratkozó</p>
-              <p className="text-sm font-bold" style={{ color: '#EF4444' }}>-{channelAnalytics.totals.subscribersLost.toLocaleString('hu-HU')}</p>
-            </div>
+            <StatChip label="Megtekintés" value={channelAnalytics.totals.views.toLocaleString('hu-HU')} accentColor="#3B82F6" />
+            <StatChip label="Watch time (perc)" value={Math.round(channelAnalytics.totals.estimatedMinutesWatched).toLocaleString('hu-HU')} accentColor="#3B82F6" />
+            <StatChip label="Új feliratkozó" value={`+${channelAnalytics.totals.subscribersGained.toLocaleString('hu-HU')}`} accentColor="#22C55E" />
+            <StatChip label="Elvesztett feliratkozó" value={`-${channelAnalytics.totals.subscribersLost.toLocaleString('hu-HU')}`} accentColor="#EF4444" />
           </div>
 
           {(channelAnalytics.topVideos.length > 0 || channelAnalytics.weakestVideos.length > 0) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
               <div>
-                <p className="text-xs mb-2" style={{ color: '#22C55E' }}>🏆 LEGJOBBAN TELJESÍTŐ VIDEÓID (valós nézettség)</p>
+                <p className="text-xs mb-2 flex items-center gap-1.5" style={{ color: '#22C55E' }}><Trophy className="w-3.5 h-3.5" /> LEGJOBBAN TELJESÍTŐ VIDEÓID (valós nézettség)</p>
                 <div className="space-y-1.5">
                   {channelAnalytics.topVideos.map(v => (
                     <a key={v.videoId} href={`https://www.youtube.com/watch?v=${v.videoId}`} target="_blank" rel="noopener noreferrer"
@@ -369,7 +364,7 @@ export default function ChannelAuditPage() {
                 </div>
               </div>
               <div>
-                <p className="text-xs mb-2" style={{ color: '#EF4444' }}>📉 TOP 50 MINTA ALSÓ 10 VIDEÓJA (28 napos nézettség)</p>
+                <p className="text-xs mb-2 flex items-center gap-1.5" style={{ color: '#EF4444' }}><TrendingDown className="w-3.5 h-3.5" /> TOP 50 MINTA ALSÓ 10 VIDEÓJA (28 napos nézettség)</p>
                 <div className="space-y-1.5">
                   {channelAnalytics.weakestVideos.map(v => (
                     <a key={v.videoId} href={`https://www.youtube.com/watch?v=${v.videoId}`} target="_blank" rel="noopener noreferrer"
@@ -385,31 +380,29 @@ export default function ChannelAuditPage() {
         </div>
       )}
 
-      {loading && (
-        <div className="card text-center py-12">
-          <div className="inline-block w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3B82F6', borderTopColor: 'transparent' }} />
-        </div>
-      )}
-
       {loadError && (
         <div className="card text-center py-12" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <div className="flex justify-center mb-3">
+            <Badge variant="danger">Audit betöltési hiba</Badge>
+          </div>
           <p className="text-sm mb-3" style={{ color: '#EF4444' }}>{loadError}</p>
           <button onClick={load} className="btn-secondary text-sm px-4 py-1.5">Újrapróbálás</button>
         </div>
       )}
 
       {!loading && !loadError && data && !data.has_enough_data && (
-        <div className="card text-center py-12">
-          <p className="text-3xl mb-3">📊</p>
-          <p style={{ color: '#CBD5E1' }} className="mb-2">
-            Még csak {data.audit_count} Videódiagnózisod van — legalább {data.min_required} szükséges a mintázat-elemzéshez.
-          </p>
-          <Link href="/dashboard/video-audit" className="btn-primary inline-block mt-3">Videódiagnózis készítése →</Link>
-        </div>
+        <EmptyState
+          title="Még nem elég adat egy megbízható audithoz"
+          description={`Még csak ${data.audit_count} Videódiagnózisod van — legalább ${data.min_required} szükséges a mintázat-elemzéshez.`}
+          ctaLabel="Videódiagnózis készítése →"
+          ctaHref="/dashboard/video-audit"
+          className="mb-6"
+        />
       )}
 
       {error && (
         <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
+          <div className="mb-2"><Badge variant="danger">Javaslat-generálási hiba</Badge></div>
           <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
         </div>
       )}
@@ -427,8 +420,8 @@ export default function ChannelAuditPage() {
                 const isWeakest = data.weakest_dimension?.key === key
                 return (
                   <div key={key} className="flex items-center gap-2 text-xs">
-                    <span className="w-40 flex-shrink-0" style={{ color: isWeakest ? '#F59E0B' : '#94A3B8' }}>
-                      {DIMENSION_LABELS[key]} {isWeakest && '⚠️'}
+                    <span className="w-40 flex-shrink-0 flex items-center gap-1" style={{ color: isWeakest ? '#F59E0B' : '#94A3B8' }}>
+                      {DIMENSION_LABELS[key]} {isWeakest && <StatusIcon kind="warning" className="w-3.5 h-3.5" />}
                     </span>
                     <div className="flex-1 h-1.5 rounded-full" style={{ background: '#121826' }}>
                       <div className="h-full rounded-full" style={{ width: `${value}%`, background: value >= 70 ? '#22C55E' : value >= 40 ? '#F59E0B' : '#EF4444' }} />
@@ -490,6 +483,7 @@ export default function ChannelAuditPage() {
             {!suggestionsResult && !data.can_generate_suggestions && (
               <div className="rounded-xl px-4 py-3 mb-3"
                 style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.22)' }}>
+                <div className="mb-1"><Badge variant="warning">Preflight</Badge></div>
                 <p className="text-sm font-medium" style={{ color: '#FBBF24' }}>
                   Még {Math.max(0, (data.min_relevant_required ?? 3) - (data.relevant_audit_count ?? 0))} niche-releváns Videódiagnózis szükséges
                 </p>
@@ -508,9 +502,11 @@ export default function ChannelAuditPage() {
               <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap mb-3"
                 style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
                 <div>
-                  <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
-                    {suggestionsResult.cache_status === 'fresh' ? 'Friss mentett javaslat betöltve' : 'Korábbi mentett javaslat betöltve'}
-                  </p>
+                  <div className="mb-1">
+                    <Badge variant={suggestionsResult.cache_status === 'fresh' ? 'success' : 'info'}>
+                      {suggestionsResult.cache_status === 'fresh' ? 'Friss mentett javaslat betöltve' : 'Korábbi mentett javaslat betöltve'}
+                    </Badge>
+                  </div>
                   <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
                     Nem vontunk le új kreditet.
                     {suggestionsResult.last_analyzed_at && ` Utolsó generálás: ${new Date(suggestionsResult.last_analyzed_at).toLocaleDateString('hu-HU')}.`}
@@ -527,10 +523,12 @@ export default function ChannelAuditPage() {
             {suggestionsResult && (
               <div className="space-y-3">
                 {suggestionsResult.suggestions.map((s, i) => (
-                  <div key={i} className="py-2" style={{ borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                  <div key={i} className="rounded-lg px-3 py-3 transition-colors hover:bg-white/5" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <p className="text-sm font-medium" style={{ color: '#F8FAFC' }}>{s.topic}</p>
-                    <p className="text-xs" style={{ color: '#CBD5E1' }}>{s.reasoning}</p>
-                    <Link href={`/dashboard/opportunities?niche=${encodeURIComponent(s.topic)}`} className="text-xs" style={{ color: '#3B82F6' }}>🧭 Validálás →</Link>
+                    <p className="text-xs mt-0.5" style={{ color: '#CBD5E1' }}>{s.reasoning}</p>
+                    <Link href={`/dashboard/opportunities?niche=${encodeURIComponent(s.topic)}`} className="text-xs mt-1 inline-flex items-center gap-1" style={{ color: '#3B82F6' }}>
+                      <Compass className="w-3.5 h-3.5" /> Validálás →
+                    </Link>
                   </div>
                 ))}
               </div>
