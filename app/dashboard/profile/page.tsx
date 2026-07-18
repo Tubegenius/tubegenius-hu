@@ -50,8 +50,26 @@ const videoLengths: { value: VideoLength; label: string; desc: string }[] = [
 export default function ProfilePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const isOnboardingMode = searchParams.get('onboarding') === '1'
+  const [isOnboardingMode, setIsOnboardingMode] = useState(() => searchParams.get('onboarding') === '1')
+  // A profil `onboarding_completed` mezője — csak a guided-mode
+  // eldöntéséhez kell, a stepper mezőit/handleSave-et nem érinti.
+  // Kezdetben null (még nem tudjuk), amíg a loadProfile() be nem tölti.
+  const [onboardingCompletedFlag, setOnboardingCompletedFlag] = useState<boolean | null>(null)
   const supabase = createClient()
+
+  // guidedMode = a query paraméter VAGY a profil onboarding_completed
+  // mezője alapján dől el. A useSearchParams() hook a Next.js App Router
+  // soft-navigation route-cache-e miatt néha nem veszi észre, ha csak a
+  // query string változik ugyanazon az útvonalon belül — ezért mountkor és
+  // a hook/flag értékének minden változásakor a tényleges böngésző URL-t
+  // is ellenőrizzük, ami mindig a valódi forrás.
+  useEffect(() => {
+    const hookValue = searchParams.get('onboarding') === '1'
+    const locationValue = typeof window !== 'undefined'
+      && new URLSearchParams(window.location.search).get('onboarding') === '1'
+    const guidedMode = hookValue || locationValue || onboardingCompletedFlag === false
+    setIsOnboardingMode(guidedMode)
+  }, [searchParams, onboardingCompletedFlag])
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -107,6 +125,9 @@ export default function ProfilePage() {
       .single()
 
     if (data) {
+      // Ugyanaz a predikátum, mint az OnboardingGuard-ban (`=== true`
+      // számít késznek, minden más nem) — csak a guided-mode döntéshez.
+      setOnboardingCompletedFlag(data.onboarding_completed === true)
       setChannelName(data.channel_name || '')
       setPlatform(data.platform || 'youtube')
       setLanguage(data.language || 'hu')
