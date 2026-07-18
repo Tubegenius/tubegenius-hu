@@ -84,6 +84,12 @@ describe('channel-scoped audit integration contracts', () => {
     expect(channelAuditRoute.indexOf('getPaidResultById')).toBeLessThan(channelAuditRoute.indexOf(".eq('youtube_channel_id', activeChannelId)"))
   })
 
+  it('does not require repurchasing channel-scoped audits after a lexical niche mismatch', () => {
+    expect(channelAuditRoute).toContain('const topicEvidence = relevantForTopics.length >= MIN_AUDITS_REQUIRED ? relevantForTopics : auditList')
+    expect(channelAuditRoute).toContain('can_generate_suggestions: !nicheReviewRequired && auditList.length >= MIN_AUDITS_REQUIRED')
+    expect(channelAuditRoute).not.toContain('niche-releváns Videódiagnózis szükséges ehhez')
+  })
+
   it('never derives a niche during a normal profile save', () => {
     expect(profileRoute).not.toContain('discoverChannelNiches')
     expect(profileRoute).toContain('/api/youtube/resolve-niche-review')

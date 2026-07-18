@@ -60,6 +60,10 @@ export async function GET(request: NextRequest) {
 
   const auditList = (audits || []).filter(audit => hasValidOverallScore(audit) && hasValidDimensionScores(audit))
   const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
+  // These audits are already scoped to the active YouTube channel. Lexical
+  // niche matching may rank them, but a false negative must not force the
+  // creator to purchase the same three audits again.
+  const topicEvidence = relevantForTopics.length >= MIN_AUDITS_REQUIRED ? relevantForTopics : auditList
   if (auditList.length < MIN_AUDITS_REQUIRED) {
     return NextResponse.json({
       has_enough_data: false,
@@ -80,7 +84,7 @@ export async function GET(request: NextRequest) {
   // enelkul egy egyszeri teszt/vicc celbol auditalt, teljesen off-niche videó
   // (pl. zenei klip) is bekerulhet ide es a "kovetkezo 10 video" promptba is.
   // A dimenzio-atlagok (fent) NEM szurtek, mert azok keszseg-mertekek, nem tema-fuggoek.
-  const sorted = [...relevantForTopics].sort((a, b) => b.overall_score - a.overall_score)
+  const sorted = [...topicEvidence].sort((a, b) => b.overall_score - a.overall_score)
   const topStrong = sorted.slice(0, 3).map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
   const topWeak = sorted.slice(-3).reverse().map(a => ({ id: a.id, video_title: a.video_title, overall_score: a.overall_score, overall_label: a.overall_label, created_at: a.created_at }))
   const publishRhythm = computePublishRhythm(publishedIdeas || [])
@@ -90,7 +94,8 @@ export async function GET(request: NextRequest) {
     audit_count: auditList.length,
     relevant_audit_count: relevantForTopics.length,
     min_relevant_required: MIN_AUDITS_REQUIRED,
-    can_generate_suggestions: !nicheReviewRequired && relevantForTopics.length >= MIN_AUDITS_REQUIRED,
+    can_generate_suggestions: !nicheReviewRequired && auditList.length >= MIN_AUDITS_REQUIRED,
+    using_channel_scope_fallback: relevantForTopics.length < MIN_AUDITS_REQUIRED,
     dimension_averages: dimensionAverages,
     weakest_dimension: weakestDimension,
     top_strong: topStrong,
@@ -156,8 +161,8 @@ export async function POST(request: NextRequest) {
     // Relevancia-szures — lasd GET agban a reszletes magyarazatot: egy off-niche
     // teszt/vicc audit ne szennyezze a "kovetkezo videok" AI-javaslatot.
     const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
-    if (relevantForTopics.length < MIN_AUDITS_REQUIRED) return NextResponse.json({ error: `Legalább ${MIN_AUDITS_REQUIRED} niche-releváns Videódiagnózis szükséges ehhez.` }, { status: 400 })
-    const sorted = [...relevantForTopics].sort((a, b) => b.overall_score - a.overall_score)
+    const topicEvidence = relevantForTopics.length >= MIN_AUDITS_REQUIRED ? relevantForTopics : auditList
+    const sorted = [...topicEvidence].sort((a, b) => b.overall_score - a.overall_score)
     const strongTopics = sorted.slice(0, 3).map(a => a.topic || a.video_title)
     const weakTopics = sorted.slice(-3).map(a => a.topic || a.video_title)
 

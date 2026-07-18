@@ -99,6 +99,15 @@ interface AuditResult {
   diagnosis?: string
 }
 
+interface AuditHistoryItem {
+  id: string
+  platform: Platform
+  video_title: string
+  overall_score: number
+  decision_label?: string
+  created_at: string
+}
+
 // Supabase DB sor -> AuditResult konvertálás
 function dbRowToResult(row: Record<string, unknown>): AuditResult {
   const finalScores = (row.final_scores as Record<string, number>) ?? {}
@@ -204,9 +213,19 @@ export default function VideoAuditPage() {
   const [result, setResult] = useState<AuditResult | null>(null)
   const [error, setError] = useState('')
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
+  const [auditHistory, setAuditHistory] = useState<AuditHistoryItem[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
   const pendingActionRef = useRef<(() => void) | null>(null)
 
   const isYouTube = platform === 'youtube_long' || platform === 'youtube_shorts'
+
+  useEffect(() => {
+    fetch('/api/video-audits')
+      .then(r => r.json())
+      .then(data => setAuditHistory(Array.isArray(data.audits) ? data.audits : []))
+      .catch(() => setAuditHistory([]))
+      .finally(() => setHistoryLoading(false))
+  }, [])
 
   // Visszanyitás: ha van ?id= (régi, video_audits tábla sor) vagy ?paidResultId=
   // (a "Legutóbbi történeted" panelről érkező, perzisztens megvett eredmény)
@@ -450,6 +469,36 @@ export default function VideoAuditPage() {
       {loading && (
         <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6 mt-6">
           <LoadingScreen steps={LOADING_STEPS.videoAudit} />
+        </div>
+      )}
+
+      {!result && !loading && (
+        <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6 mt-6">
+          <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-4">Korábbi auditok</div>
+          {historyLoading ? (
+            <p className="text-sm text-[#94A3B8]">Audit-előzmények betöltése...</p>
+          ) : auditHistory.length === 0 ? (
+            <p className="text-sm text-[#94A3B8]">Még nincs elmentett Videódiagnózisod.</p>
+          ) : (
+            <div className="space-y-2">
+              {auditHistory.map(audit => (
+                <a
+                  key={audit.id}
+                  href={`/dashboard/video-audit?id=${audit.id}`}
+                  className="block rounded-xl bg-[#121826] border border-white/[0.08] px-4 py-3 hover:border-[#3B82F6]/40 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-white truncate">{audit.video_title || 'Névtelen audit'}</p>
+                    <span className={`text-sm font-black flex-shrink-0 ${scoreColor(audit.overall_score)}`}>{audit.overall_score}/100</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 mt-1 text-xs text-[#94A3B8]">
+                    <span>{PLATFORM_LABELS[audit.platform] || audit.platform}</span>
+                    <span>{new Date(audit.created_at).toLocaleDateString('hu-HU')}</span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
