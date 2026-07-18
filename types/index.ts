@@ -94,6 +94,8 @@ export interface CreatorProfile {
   selected_main_niche: string | null
   active_channel_id: string | null
   channel_connection_type: ChannelConnectionType | null
+  niche_validated_for_channel_id: string | null
+  niche_needs_review: boolean
   created_at: string
   updated_at: string
 }

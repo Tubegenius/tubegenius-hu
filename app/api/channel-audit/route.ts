@@ -9,6 +9,7 @@ import { computeDimensionAverages, findWeakestDimension, computePublishRhythm, b
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { isNicheReviewRequired } from '@/lib/channel-scope'
 
 const MIN_AUDITS_REQUIRED = 3
 
@@ -31,16 +32,31 @@ export async function GET(request: NextRequest) {
 
   const admin = createAdminClient()
 
-  const [{ data: audits, error: auditsError }, { data: publishedIdeas, error: publishedIdeasError }, { data: profileRow, error: profileError }] = await Promise.all([
-    admin.from('video_audits').select('id, video_title, topic, overall_score, overall_label, final_scores, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
+  const { data: profileRow, error: profileError } = await admin.from('profiles')
+    .select('niche, main_category, specific_focus, active_channel_id, niche_needs_review, niche_validated_for_channel_id, detected_niche_candidates')
+    .eq('user_id', userId).single()
+  if (profileError || !profileRow) return NextResponse.json({ error: 'A Channel Audit forrasadatainak betoltese sikertelen.' }, { status: 500 })
+  const activeChannelId = profileRow.active_channel_id as string | null
+  const nicheReviewRequired = isNicheReviewRequired({
+    storedReviewFlag: Boolean(profileRow.niche_needs_review),
+    validatedForChannelId: profileRow.niche_validated_for_channel_id || null,
+    candidates: profileRow.detected_niche_candidates,
+    activeChannelId,
+  })
+  if (!activeChannelId) return NextResponse.json({ has_enough_data: false, audit_count: 0, min_required: MIN_AUDITS_REQUIRED, relevant_audit_count: 0, min_relevant_required: MIN_AUDITS_REQUIRED, can_generate_suggestions: false, niche_review_required: nicheReviewRequired, active_channel_id: null, no_active_channel: true })
+  const [{ data: audits, error: auditsError }, { data: publishedIdeas, error: publishedIdeasError }, { count: legacyAuditCount, error: legacyCountError }] = await Promise.all([
+    admin.from('video_audits').select('id, video_title, topic, overall_score, overall_label, final_scores, created_at').eq('user_id', userId).eq('youtube_channel_id', activeChannelId).order('created_at', { ascending: false }).limit(50),
     admin.from('video_ideas').select('updated_at').eq('user_id', userId).eq('workflow_status', 'published'),
-    admin.from('profiles').select('niche, main_category, specific_focus').eq('user_id', userId).single(),
+    admin.from('video_audits').select('id', { count: 'exact', head: true }).eq('user_id', userId).is('youtube_channel_id', null),
   ])
+  if (legacyCountError) return NextResponse.json({ error: 'A legacy auditok szamlalasa sikertelen.' }, { status: 500 })
   if (auditsError || publishedIdeasError || profileError) return NextResponse.json({ error: 'A Channel Audit forrásadatainak betöltése sikertelen.' }, { status: 500 })
   // A profiles.niche mezo a legtobb aktiv route-nal sosem toltodik ki — a
   // valos niche-informacio a main_category/specific_focus mezokben el (lasd
   // lib/niche-relevance.ts shouldUseProfileNiche ugyanezt a mintat koveti).
-  const effectiveNiche = [profileRow?.niche, profileRow?.main_category, profileRow?.specific_focus].filter(Boolean).join(' ')
+  const effectiveNiche = nicheReviewRequired
+    ? ''
+    : [profileRow.niche, profileRow.main_category, profileRow.specific_focus].filter(Boolean).join(' ')
 
   const auditList = (audits || []).filter(audit => hasValidOverallScore(audit) && hasValidDimensionScores(audit))
   const relevantForTopics = filterRelevantAudits(auditList, effectiveNiche)
@@ -52,6 +68,9 @@ export async function GET(request: NextRequest) {
       relevant_audit_count: relevantForTopics.length,
       min_relevant_required: MIN_AUDITS_REQUIRED,
       can_generate_suggestions: false,
+      niche_review_required: nicheReviewRequired,
+      active_channel_id: activeChannelId,
+      legacy_unassigned_audit_count: legacyAuditCount || 0,
     })
   }
 
@@ -71,13 +90,16 @@ export async function GET(request: NextRequest) {
     audit_count: auditList.length,
     relevant_audit_count: relevantForTopics.length,
     min_relevant_required: MIN_AUDITS_REQUIRED,
-    can_generate_suggestions: relevantForTopics.length >= MIN_AUDITS_REQUIRED,
+    can_generate_suggestions: !nicheReviewRequired && relevantForTopics.length >= MIN_AUDITS_REQUIRED,
     dimension_averages: dimensionAverages,
     weakest_dimension: weakestDimension,
     top_strong: topStrong,
     top_weak: topWeak,
     workflow_completion_rhythm: publishRhythm,
     niche: effectiveNiche,
+    niche_review_required: nicheReviewRequired,
+    active_channel_id: activeChannelId,
+    legacy_unassigned_audit_count: legacyAuditCount || 0,
   })
 }
 
@@ -95,10 +117,26 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
+    const { data: channelProfileRow, error: channelProfileError } = await admin.from('profiles')
+      .select('active_channel_id, niche_needs_review, niche_validated_for_channel_id, detected_niche_candidates')
+      .eq('user_id', userId).single()
+    if (channelProfileError || !channelProfileRow) return NextResponse.json({ error: 'A csatornaprofil betoltese sikertelen.' }, { status: 500 })
+    const activeChannelId = channelProfileRow.active_channel_id as string | null
+    if (!activeChannelId) return NextResponse.json({ error: 'Elobb valassz aktiv YouTube-csatornat.', no_active_channel: true }, { status: 400 })
+    const nicheReviewRequired = isNicheReviewRequired({
+      storedReviewFlag: Boolean(channelProfileRow.niche_needs_review),
+      validatedForChannelId: channelProfileRow.niche_validated_for_channel_id || null,
+      candidates: channelProfileRow.detected_niche_candidates,
+      activeChannelId,
+    })
+    if (nicheReviewRequired) {
+      return NextResponse.json({ error: 'A Creator Profile niche megerositese szukseges az uj csatornahoz.', niche_review_required: true }, { status: 409 })
+    }
     const { data: audits, error: auditsError } = await admin
       .from('video_audits')
       .select('video_title, topic, overall_score, final_scores')
       .eq('user_id', userId)
+      .eq('youtube_channel_id', activeChannelId)
       .order('created_at', { ascending: false })
       .limit(50)
     if (auditsError) return NextResponse.json({ error: 'A Videódiagnózis-előzmények betöltése sikertelen.' }, { status: 500 })
@@ -124,7 +162,7 @@ export async function POST(request: NextRequest) {
     const weakTopics = sorted.slice(-3).map(a => a.topic || a.video_title)
 
     const auditSnapshot = auditList.map(a => ({ title: a.video_title, topic: a.topic, score: a.overall_score, final: a.final_scores }))
-    const normalizedInput = normalizePaidResultInput({ weakest: weakest?.label || '', strongTopics, weakTopics, auditSnapshot, niche: effectiveNiche })
+    const normalizedInput = normalizePaidResultInput({ activeChannelId, weakest: weakest?.label || '', strongTopics, weakTopics, auditSnapshot, niche: effectiveNiche })
     const inputHash = buildPaidResultHash({ userId, toolType: 'channel_audit', normalizedInput })
 
     const lock = await acquireRequestLock({ userId, toolType: 'channel_audit', inputHash })

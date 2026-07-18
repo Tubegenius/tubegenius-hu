@@ -54,6 +54,10 @@ export async function POST(request: NextRequest) {
         if ('error' in result) {
           return NextResponse.json({ error: result.error, message: 'Nem sikerült a csatorna videói alapján niche-t javasolni.' }, { status: 422 })
         }
+        const { data: currentProfile } = await admin.from('profiles').select('active_channel_id').eq('user_id', userId).single()
+        if (currentProfile?.active_channel_id !== channelId) {
+          return NextResponse.json({ error: 'channel_changed', message: 'A csatorna megvaltozott az elemzes kozben. Inditsd ujra.' }, { status: 409 })
+        }
         const { data: savedProfile, error: saveError } = await admin.from('profiles').update({
           detected_niche_candidates: result.candidates,
           niche_confidence: result.candidates[0].confidence,
@@ -82,6 +86,11 @@ export async function POST(request: NextRequest) {
       const result = await discoverChannelNiches({ channelInput })
       if ('error' in result) {
         return NextResponse.json({ error: result.error, message: 'Nem sikerült a csatorna videói alapján niche-t javasolni.' }, { status: 422 })
+      }
+
+      const { data: currentProfile } = await admin.from('profiles').select('active_channel_id').eq('user_id', userId).single()
+      if (currentProfile?.active_channel_id !== channelId) {
+        return NextResponse.json({ error: 'channel_changed', message: 'A csatorna megvaltozott az elemzes kozben. Inditsd ujra.' }, { status: 409 })
       }
 
       const charge = await chargeFeature(userId, 'niche_discovery_refresh')

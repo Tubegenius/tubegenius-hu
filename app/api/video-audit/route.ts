@@ -234,6 +234,14 @@ export async function POST(req: NextRequest) {
 
     // Admin kliens: RLS bypass a mentéshez
     const admin = createAdminClient()
+    const { data: auditProfile, error: auditProfileError } = await admin.from('profiles')
+      .select('active_channel_id')
+      .eq('user_id', user.id)
+      .single()
+    if (auditProfileError || !auditProfile) {
+      return NextResponse.json({ error: 'A csatornaprofil betoltese sikertelen.' }, { status: 500 })
+    }
+    const auditChannelId = auditProfile.active_channel_id as string | null
     let inputData: YouTubeApiData | ManualPlatformData
     let backendScores
     let hasApiData = false
@@ -290,6 +298,7 @@ export async function POST(req: NextRequest) {
     // Mentés admin klienssel (RLS bypass)
     const { data: savedAudit, error: insertError } = await admin.from('video_audits').insert({
       user_id: user.id,
+      youtube_channel_id: auditChannelId,
       platform,
       video_url: video_url ?? null,
       video_title: title,

@@ -54,6 +54,10 @@ interface ChannelAuditData {
   top_strong?: AuditSummary[]
   top_weak?: AuditSummary[]
   workflow_completion_rhythm?: Array<{ month: string; count: number }>
+  niche_review_required?: boolean
+  active_channel_id?: string | null
+  no_active_channel?: boolean
+  legacy_unassigned_audit_count?: number
 }
 
 const DIMENSION_LABELS: Record<keyof DimensionAverages, string> = {
@@ -105,10 +109,6 @@ export default function ChannelAuditPage() {
       loadPaidResult(paidResultId)
       return
     }
-    try {
-      const saved = sessionStorage.getItem(SUGGESTIONS_STATE_KEY)
-      if (saved) setSuggestionsResult(JSON.parse(saved))
-    } catch {}
   }, [])
 
   // Mentett "következő 10 videó" javaslat visszaállítása explicit paidResultId
@@ -124,7 +124,6 @@ export default function ChannelAuditPage() {
         return
       }
       setSuggestionsResult(body)
-      try { sessionStorage.setItem(SUGGESTIONS_STATE_KEY, JSON.stringify(body)) } catch {}
     } catch {
       setError('Hiba a mentett javaslat betöltésekor.')
     } finally {
@@ -199,6 +198,14 @@ export default function ChannelAuditPage() {
         return
       }
       setData(body)
+      if (body.niche_review_required) {
+        setSuggestionsResult(null)
+      } else if (body.active_channel_id) {
+        try {
+          const saved = sessionStorage.getItem(`${SUGGESTIONS_STATE_KEY}_${body.active_channel_id}`)
+          setSuggestionsResult(saved ? JSON.parse(saved) : null)
+        } catch { setSuggestionsResult(null) }
+      }
     } catch {
       setLoadError('Kapcsolati hiba. Próbáld újra később.')
     } finally {
@@ -208,6 +215,10 @@ export default function ChannelAuditPage() {
 
   async function requestSuggestions(forceRefresh = false) {
     setError(null)
+    if (data?.niche_review_required) {
+      setError('Előbb erősítsd meg a Creator Profile niche-t az új csatornához. Ez az ellenőrzés 0 kredit.')
+      return
+    }
     if (!data?.can_generate_suggestions) {
       const relevantCount = data?.relevant_audit_count ?? 0
       const requiredCount = data?.min_relevant_required ?? 3
@@ -252,7 +263,9 @@ export default function ChannelAuditPage() {
         return
       }
       setSuggestionsResult(body)
-      try { sessionStorage.setItem(SUGGESTIONS_STATE_KEY, JSON.stringify(body)) } catch {}
+      try {
+        if (data?.active_channel_id) sessionStorage.setItem(`${SUGGESTIONS_STATE_KEY}_${data.active_channel_id}`, JSON.stringify(body))
+      } catch {}
     } catch {
       setError('Kapcsolati hiba.')
     } finally {
@@ -276,6 +289,24 @@ export default function ChannelAuditPage() {
         <div className="mb-6">
           <ChannelHeaderCard channel={channelProfile} />
         </div>
+      )}
+
+      {data?.niche_review_required && (
+        <div className="card mb-6" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
+          <p className="text-sm font-medium" style={{ color: '#FBBF24' }}>Új YouTube-csatornát választottál.</p>
+          <p className="text-xs mt-1" style={{ color: '#CBD5E1' }}>
+            A jelenlegi Creator Profile niche-t nem módosítottuk, de még nincs megerősítve ehhez a csatornához. A döntésig nem indul fizetős témagenerálás, és 0 kredit fogy.
+          </p>
+          <Link href="/dashboard/profile" className="btn-secondary inline-block text-xs px-3 py-1.5 mt-3">
+            Niche-döntés megnyitása →
+          </Link>
+        </div>
+      )}
+
+      {(data?.legacy_unassigned_audit_count || 0) > 0 && (
+        <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>
+          {data!.legacy_unassigned_audit_count} korábbi, csatornához nem rendelhető auditot nem használtunk az összesítésben.
+        </p>
       )}
 
       {channelConnected === false && (

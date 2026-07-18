@@ -9,6 +9,7 @@ import { MAIN_CATEGORIES, categoryLabel, type MainCategory } from '@/lib/search/
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import type { ChannelUsageMode, ChannelConnectionType, NicheCandidate } from '@/types'
 import type { ChannelSnapshot } from '@/lib/competitor-tracker'
+import { candidatesForActiveChannel, isNicheReviewRequired } from '@/lib/channel-scope'
 
 const channelUsageModes: { value: ChannelUsageMode; label: string; desc: string }[] = [
   { value: 'primary_profile', label: 'A csatornám legyen a fő profilom alapja', desc: 'A WillViral a csatornád eddigi videói alapján személyre szabja az ajánlásokat.' },
@@ -87,6 +88,7 @@ export default function ProfilePage() {
   const [discovering, setDiscovering] = useState(false)
   const [nicheCandidates, setNicheCandidates] = useState<NicheCandidate[] | null>(null)
   const [pickingCandidate, setPickingCandidate] = useState(false)
+  const [nicheNeedsReview, setNicheNeedsReview] = useState(false)
 
   useEffect(() => { loadProfile() }, [])
 
@@ -117,6 +119,13 @@ export default function ProfilePage() {
       setCustomPrompt(data.custom_prompt || '')
 
       setChannelUsageMode((data.channel_usage_mode as ChannelUsageMode) || 'manual')
+      const loadedActiveChannelId = (data.active_channel_id as string | null) || null
+      setNicheNeedsReview(isNicheReviewRequired({
+        storedReviewFlag: Boolean(data.niche_needs_review),
+        validatedForChannelId: (data.niche_validated_for_channel_id as string | null) || null,
+        candidates: data.detected_niche_candidates as NicheCandidate[] | null,
+        activeChannelId: loadedActiveChannelId,
+      }))
       if (data.youtube_channel_id) {
         setConnectedChannel({
           channelId: data.youtube_channel_id,
@@ -131,9 +140,8 @@ export default function ProfilePage() {
       } else {
         setPickerOpen(true)
       }
-      if (Array.isArray(data.detected_niche_candidates) && data.detected_niche_candidates.length > 0) {
-        setNicheCandidates(data.detected_niche_candidates as NicheCandidate[])
-      }
+      const activeCandidates = candidatesForActiveChannel(data.detected_niche_candidates as NicheCandidate[] | null, loadedActiveChannelId)
+      setNicheCandidates(activeCandidates.length > 0 ? activeCandidates : null)
     }
     setLoading(false)
   }
@@ -234,21 +242,32 @@ export default function ProfilePage() {
 
   async function handlePickCandidate(candidate: NicheCandidate) {
     setPickingCandidate(true)
-    setMainCategory(candidate.main_category as MainCategory)
-    setSpecificFocus(candidate.specific_focus)
-    const res = await fetch('/api/profile', {
+    const res = await fetch('/api/youtube/resolve-niche-review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        main_category: candidate.main_category,
-        specific_focus: candidate.specific_focus,
-        niche: candidate.specific_focus,
-        selected_main_niche: candidate.specific_focus,
-        channel_usage_mode: channelUsageMode,
+        action: 'select_candidate',
+        candidate,
       }),
     })
     setPickingCandidate(false)
-    if (res.ok) setNiche(candidate.specific_focus)
+    if (res.ok) {
+      setMainCategory(candidate.main_category as MainCategory)
+      setSpecificFocus(candidate.specific_focus)
+      setNiche(candidate.specific_focus)
+      setNicheNeedsReview(false)
+    }
+  }
+
+  async function handleKeepCurrentNiche() {
+    setPickingCandidate(true)
+    const res = await fetch('/api/youtube/resolve-niche-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'keep_current' }),
+    })
+    setPickingCandidate(false)
+    if (res.ok) setNicheNeedsReview(false)
   }
 
   async function handleResolveMismatch(choice: 'use_oauth' | 'keep_previous' | 'keep_both') {
@@ -404,6 +423,23 @@ export default function ProfilePage() {
               {channelUsageMode === 'manual' && (
                 <p className="text-text-muted text-xs">A rendszer a lentebbi kézi profilbeállításaid alapján dolgozik.</p>
               )}
+            </div>
+          )}
+
+          {nicheNeedsReview && (
+            <div className="mt-4 p-4 rounded-lg" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
+              <p className="text-sm font-medium text-text-primary">Új YouTube-csatornát választottál</p>
+              <p className="text-xs text-text-secondary mt-1">
+                A jelenlegi Creator Profile niche-t nem módosítottuk. Erősítsd meg, hogy megtartod, vagy elemezd újra az új csatorna alapján.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-3">
+                <button type="button" onClick={handleKeepCurrentNiche} disabled={pickingCandidate || discovering} className="btn-secondary text-xs px-3 py-1.5">
+                  Jelenlegi Creator niche megtartása
+                </button>
+                <button type="button" onClick={() => handleDiscoverNiches(false)} disabled={pickingCandidate || discovering} className="btn-secondary text-xs px-3 py-1.5">
+                  {discovering ? 'Elemzés...' : 'Új csatorna alapján újraelemzés'}
+                </button>
+              </div>
             </div>
           )}
 

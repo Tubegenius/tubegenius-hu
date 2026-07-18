@@ -3,6 +3,7 @@ import { getUserId } from '@/lib/credits'
 import { createAdminClient } from '@/lib/supabase-server'
 import { syncChannelProfileFromOAuth } from '@/lib/channel-profile-sync'
 import { getYoutubeOAuthTokens } from '@/lib/youtube-analytics'
+import { requiresNicheReview } from '@/lib/channel-scope'
 
 const VALID_CHOICES = ['use_oauth', 'keep_previous', 'keep_both'] as const
 type Choice = (typeof VALID_CHOICES)[number]
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
     const admin = createAdminClient()
-    const { data: profile } = await admin.from('profiles').select('youtube_channel_id, channel_connection_type').eq('user_id', userId).single()
+    const { data: profile } = await admin.from('profiles').select('youtube_channel_id, active_channel_id, channel_connection_type').eq('user_id', userId).single()
     if (profile?.channel_connection_type !== 'mismatch') {
       return NextResponse.json({ error: 'Nincs feloldandó csatorna-eltérés.' }, { status: 400 })
     }
@@ -43,20 +44,24 @@ export async function POST(request: NextRequest) {
       // A publikus (korabban megadott) csatorna marad az aktiv — az OAuth
       // token es channel_id valtozatlanul megmarad a youtube_oauth_tokens
       // tablaban, csak mar nem "aktiv" azonossagkent kezeljuk.
-      await admin.from('profiles').update({
+      const updateFields: Record<string, unknown> = {
         channel_connection_type: 'public',
         active_channel_id: profile.youtube_channel_id,
-      }).eq('user_id', userId)
+      }
+      if (requiresNicheReview(profile.active_channel_id, profile.youtube_channel_id)) updateFields.niche_needs_review = true
+      await admin.from('profiles').update(updateFields).eq('user_id', userId)
       return NextResponse.json({ connection_type: 'public' })
     }
 
     // keep_both — mindket azonossag megmarad kulon jelolve, nincs felulirast,
     // az active_channel_id valtozatlan (marad a publikus, ha eddig is az volt).
     const oauthTokens = await getYoutubeOAuthTokens(userId)
-    await admin.from('profiles').update({
+    const updateFields: Record<string, unknown> = {
       channel_connection_type: 'mismatch',
       active_channel_id: profile.youtube_channel_id,
-    }).eq('user_id', userId)
+    }
+    if (requiresNicheReview(profile.active_channel_id, profile.youtube_channel_id)) updateFields.niche_needs_review = true
+    await admin.from('profiles').update(updateFields).eq('user_id', userId)
     return NextResponse.json({ connection_type: 'mismatch', oauth_channel_id: oauthTokens?.channel_id || null })
   } catch (error) {
     console.error('[YouTube resolve-mismatch] error:', error)

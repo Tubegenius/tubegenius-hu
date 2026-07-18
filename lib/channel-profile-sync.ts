@@ -20,6 +20,7 @@ import { createAdminClient } from '@/lib/supabase-server'
 import { resolveChannel, type ChannelSnapshot } from '@/lib/competitor-tracker'
 import { fetchOwnChannelInfo, getYoutubeOAuthTokens, type OwnChannelInfo } from '@/lib/youtube-analytics'
 import type { ChannelConnectionType } from '@/types'
+import { requiresNicheReview } from '@/lib/channel-scope'
 
 function deriveHandleAndUrl(customUrl: string | null, channelId: string): { handle: string | null; url: string } {
   if (customUrl) {
@@ -144,8 +145,16 @@ export async function detectChannelConnectionType(userId: string): Promise<Chann
     activeChannelId = publicChannelId
   }
 
+  const updateFields: Record<string, unknown> = {
+    channel_connection_type: connectionType,
+    active_channel_id: activeChannelId,
+  }
+  if (requiresNicheReview(profile?.active_channel_id || null, activeChannelId)) {
+    updateFields.niche_needs_review = true
+  }
+
   const { data: updatedProfile, error: updateError } = await admin.from('profiles')
-    .update({ channel_connection_type: connectionType, active_channel_id: activeChannelId })
+    .update(updateFields)
     .eq('user_id', userId).select('user_id').single()
   if (updateError || !updatedProfile) throw updateError || new Error('Channel connection state update failed')
 
