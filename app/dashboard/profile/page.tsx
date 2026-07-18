@@ -10,6 +10,7 @@ import { validateSpecificFocus } from '@/lib/search/validate-focus'
 import type { ChannelUsageMode, ChannelConnectionType, NicheCandidate } from '@/types'
 import type { ChannelSnapshot } from '@/lib/competitor-tracker'
 import { candidatesForActiveChannel, isNicheReviewRequired } from '@/lib/channel-scope'
+import NicheReviewBanner from '@/components/dashboard/NicheReviewBanner'
 
 const channelUsageModes: { value: ChannelUsageMode; label: string; desc: string }[] = [
   { value: 'primary_profile', label: 'A csatornám legyen a fő profilom alapja', desc: 'A WillViral a csatornád eddigi videói alapján személyre szabja az ajánlásokat.' },
@@ -427,19 +428,12 @@ export default function ProfilePage() {
           )}
 
           {nicheNeedsReview && (
-            <div className="mt-4 p-4 rounded-lg" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
-              <p className="text-sm font-medium text-text-primary">Új YouTube-csatornát választottál</p>
-              <p className="text-xs text-text-secondary mt-1">
-                A jelenlegi Creator Profile niche-t nem módosítottuk. Erősítsd meg, hogy megtartod, vagy elemezd újra az új csatorna alapján.
-              </p>
-              <div className="flex flex-wrap gap-2 mt-3">
-                <button type="button" onClick={handleKeepCurrentNiche} disabled={pickingCandidate || discovering} className="btn-secondary text-xs px-3 py-1.5">
-                  Jelenlegi Creator niche megtartása
-                </button>
-                <button type="button" onClick={() => handleDiscoverNiches(false)} disabled={pickingCandidate || discovering} className="btn-secondary text-xs px-3 py-1.5">
-                  {discovering ? 'Elemzés...' : 'Új csatorna alapján újraelemzés'}
-                </button>
-              </div>
+            <div className="mt-4" id="niche-review">
+              <NicheReviewBanner
+                onKeepCurrent={handleKeepCurrentNiche}
+                onReanalyze={() => handleDiscoverNiches(false)}
+                loading={pickingCandidate || discovering}
+              />
             </div>
           )}
 

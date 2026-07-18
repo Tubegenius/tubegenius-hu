@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import type { CreatorProfile, CreatorMemoryItem, OpportunityTopic } from '@/types'
 
 // ─── Score helpers ────────────────────────────────────────────
@@ -13,6 +13,9 @@ import type { UsageCheckResult } from '@/lib/usage-protection'
 import TrendFeedHistory from '@/components/dashboard/TrendFeedHistory'
 import CreatorIntelligenceSummary from '@/components/dashboard/CreatorIntelligenceSummary'
 import CreatorMemoryPanel from '@/components/dashboard/CreatorMemoryPanel'
+import NicheReviewBanner from '@/components/dashboard/NicheReviewBanner'
+import SetupStatusPanel from '@/components/dashboard/SetupStatusPanel'
+import { isNicheReviewRequired } from '@/lib/channel-scope'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 
 function getGreeting(): string {
@@ -1083,6 +1086,7 @@ interface Props {
 
 export default function DashboardClient({ profile, memoryItems, displayName }: Props) {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const [topics, setTopics] = useState<DashboardOpportunityTopic[]>([])
   const [loading, setLoading] = useState(false)
   const [generated, setGenerated] = useState(false)
@@ -1092,6 +1096,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   const [opportunityError, setOpportunityError] = useState<string | null>(null)
   const [researchCount, setResearchCount] = useState(0)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
+  const [nicheActionLoading, setNicheActionLoading] = useState(false)
 
   useEffect(() => {
     fetch('/api/dashboard-stats').then(r => r.json()).then(setStats).catch(() => {})
@@ -1275,6 +1280,35 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   const showFirstRunLaunchPad = searchParams.get('setup') === 'complete' || stats?.has_data === false
   const showFirstVideoFlow = !!profile?.niche && (showFirstRunLaunchPad || (stats?.total_packages || 0) === 0)
 
+  const nicheNeedsReviewOnCommandCenter = !!profile && isNicheReviewRequired({
+    storedReviewFlag: !!profile.niche_needs_review,
+    validatedForChannelId: profile.niche_validated_for_channel_id,
+    candidates: profile.detected_niche_candidates,
+    activeChannelId: profile.active_channel_id,
+  })
+
+  async function handleKeepCurrentNicheFromCommandCenter() {
+    if (!profile?.active_channel_id) {
+      router.push('/dashboard/profile?onboarding=1#niche-review')
+      return
+    }
+    setNicheActionLoading(true)
+    try {
+      const res = await fetch('/api/youtube/resolve-niche-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'keep_current' }),
+      })
+      if (res.ok) router.refresh()
+    } finally {
+      setNicheActionLoading(false)
+    }
+  }
+
+  function handleGoToNicheReview() {
+    router.push('/dashboard/profile?onboarding=1#niche-review')
+  }
+
   return (
     <div className="max-w-5xl mx-auto animate-fade-in">
       {creditCheck && (
@@ -1291,6 +1325,19 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{getGreeting()}, {displayName}!</h1>
         <p className="text-sm" style={{ color: '#94A3B8' }}>Heti validált téma, gyors validálás, kész videócsomag.</p>
       </div>
+
+      {nicheNeedsReviewOnCommandCenter && (
+        <div className="mb-6">
+          <NicheReviewBanner
+            id="niche-review"
+            onKeepCurrent={handleKeepCurrentNicheFromCommandCenter}
+            onReanalyze={handleGoToNicheReview}
+            loading={nicheActionLoading}
+          />
+        </div>
+      )}
+
+      <SetupStatusPanel profile={profile} hasPackage={(stats?.total_packages || 0) > 0} />
 
       {showFirstRunLaunchPad && (
         <FirstRunLaunchPad
