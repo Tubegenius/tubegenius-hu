@@ -306,9 +306,161 @@ export default function ProfilePage() {
         </div>
       )}
 
-      <form onSubmit={handleSave} className="space-y-6">
-        {/* YouTube csatorna — csatorna-első onboarding + channel_usage_mode */}
+      <form onSubmit={handleSave} className="space-y-8">
+        {/* ══ 1. Creator Profile ══ */}
+        <section>
+          <p className="section-label mb-3">Creator Profile</p>
+          <div className="space-y-6">
+
+        {/* Csatorna neve */}
         <div className="card">
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Csatorna neve</label>
+          <input value={channelName} onChange={e => setChannelName(e.target.value)} placeholder="pl. Mr.MexBrain" className="input" />
+        </div>
+
+        {/* Platform */}
+        <div className="card">
+          <p className="text-sm font-medium text-text-secondary mb-3">Fő platform</p>
+          <div className="grid grid-cols-2 gap-2">
+            {platforms.map(p => (
+              <button key={p.value} type="button" onClick={() => setPlatform(p.value)}
+                className={`flex items-center gap-2.5 px-4 py-3 rounded-lg border text-sm font-medium transition-all duration-150 ${platform === p.value ? 'bg-violet/10 border-violet/40 text-violet' : 'bg-surface-2 border-border text-text-secondary hover:border-border-2'}`}>
+                <span>{p.icon}</span>{p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Tartalomirány — strukturált niche input */}
+        <div className="card">
+          <p className="text-sm font-medium text-text-secondary mb-1">Milyen tartalomirányban keressünk lehetőséget?</p>
+          <p className="text-text-muted text-xs mb-4">Minél konkrétabb a fókusz, annál pontosabb trendtémákat kapsz.</p>
+
+          {/* Fő kategória */}
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Fő kategória</label>
+          <p className="text-text-muted text-xs mb-2">Válassz egy nagy témakört.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-5">
+            {MAIN_CATEGORIES.map(c => (
+              <button key={c.value} type="button" onClick={() => setMainCategory(c.value)}
+                className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all duration-150 ${mainCategory === c.value ? 'bg-violet/10 border-violet/40 text-violet' : 'bg-surface-2 border-border text-text-secondary hover:border-border-2'}`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Specifikus fókusz */}
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Specifikus fókusz</label>
+          <p className="text-text-muted text-xs mb-2">Ne általános kategóriát írj. Egy konkrét tartalomirányt adj meg.</p>
+          <input value={specificFocus} onChange={e => setSpecificFocus(e.target.value)}
+            placeholder="Pl. AI-alapú rákdiagnózis, alvás és agy, James Webb felfedezések" className="input" required />
+          {specificFocus.trim() && (() => {
+            const v = validateSpecificFocus(specificFocus)
+            return (
+              <p className="text-xs mt-2" style={{ color: v.status === 'too_broad' ? '#F59E0B' : '#22C55E' }}>
+                {v.message}
+              </p>
+            )
+          })()}
+          <div className="mt-3 text-xs text-text-muted space-y-1">
+            <p><span style={{ color: '#EF4444' }}>Túl tág:</span> „tudomány, hírek, egészség”</p>
+            <p><span style={{ color: '#F59E0B' }}>Jó:</span> „AI az orvoslásban”</p>
+            <p><span style={{ color: '#22C55E' }}>Még jobb:</span> „AI-alapú rákdiagnózis magyar nézőknek”</p>
+          </div>
+
+          {/* Közönség */}
+          <div className="mt-5">
+            <label className="block text-sm font-medium text-text-secondary mb-1.5">Közönség (opcionális)</label>
+            <input value={audience} onChange={e => setAudience(e.target.value)}
+              placeholder="Pl. laikus magyar nézők, kezdő vállalkozók, fiatal TikTok-közönség" className="input" />
+          </div>
+        </div>
+
+        {/* Narrációs stílus */}
+        <div className="card">
+          <p className="text-sm font-medium text-text-secondary mb-1">Alapértelmezett narrációs stílus</p>
+          <p className="text-text-muted text-xs mb-3">Minden videócsomag generálásnál ezt a stílust használjuk.</p>
+          <div className="grid grid-cols-2 gap-2">
+            {NARRATION_STYLES.map(s => (
+              <button key={s.value} type="button" onClick={() => setNarrationStyle(s.value)}
+                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${narrationStyle === s.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
+                <span className={`font-medium ${narrationStyle === s.value ? 'text-violet' : 'text-text-primary'}`}>{s.label}</span>
+                <span className="text-text-muted text-xs leading-tight">{s.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          {narrationStyle === 'sajat' && (
+            <p className="text-text-muted text-xs mt-3">Az egyéni prompt szövegét a lenti Preferences szekcióban add meg.</p>
+          )}
+        </div>
+
+        {/* Creator szint */}
+        <div className="card">
+          <p className="text-sm font-medium text-text-secondary mb-3">Creator szint</p>
+          <div className="grid grid-cols-2 gap-2">
+            {creatorLevels.map(l => (
+              <button key={l.value} type="button" onClick={() => setCreatorLevel(l.value)}
+                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${creatorLevel === l.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
+                <span className={`font-medium ${creatorLevel === l.value ? 'text-violet' : 'text-text-primary'}`}>{l.label}</span>
+                <span className="text-text-muted text-xs">{l.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Videóhossz */}
+        <div className="card">
+          <p className="text-sm font-medium text-text-secondary mb-3">Videó hossza</p>
+          <div className="grid grid-cols-3 gap-2">
+            {videoLengths.map(l => (
+              <button key={l.value} type="button" onClick={() => setVideoLength(l.value)}
+                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${videoLength === l.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
+                <span className={`font-medium ${videoLength === l.value ? 'text-violet' : 'text-text-primary'}`}>{l.label}</span>
+                <span className="text-text-muted text-xs leading-tight">{l.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Régió */}
+        <div className="card">
+          <p className="text-sm font-medium text-text-secondary mb-3">Piaci fókusz</p>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { value: 'HU', label: '🇭🇺 Magyar', desc: 'HU piac' },
+              { value: 'US', label: '🌍 Globális', desc: 'EN piac' },
+              { value: 'BOTH', label: '🌐 Mindkettő', desc: 'Hamarosan', disabled: true },
+            ].map(r => (
+              <button key={r.value} type="button" onClick={() => {
+                setRegion(r.value as Region)
+                // A régió és a keresési nyelv legyen mindig konzisztens —
+                // eltérő régió/nyelv kombináció gyengítette a Serper/YouTube
+                // találatok minőségét (US régió + hu nyelv keveredés).
+                if (r.value === 'US') setLanguage('en')
+                if (r.value === 'HU') setLanguage('hu')
+              }}
+                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${region === r.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
+                <span className={`font-medium ${region === r.value ? 'text-violet' : 'text-text-primary'}`}>{r.label}</span>
+                <span className="text-text-muted text-xs">{r.desc}</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-text-muted text-xs mt-3">A régió automatikusan beállítja a keresési nyelvet is (Magyar → hu, Globális → en).</p>
+        </div>
+
+        {/* Feliratkozók */}
+        <div className="card">
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Feliratkozók száma (opcionális)</label>
+          <input type="number" value={subscriberCount} onChange={e => setSubscriberCount(e.target.value)} placeholder="pl. 3100" className="input" min="0" />
+        </div>
+
+          </div>
+        </section>
+
+        {/* ══ 2. YouTube Channel ══ */}
+        <section>
+          <p className="section-label mb-3">YouTube Channel</p>
+          <div className="card">
           <p className="text-sm font-medium text-text-secondary mb-1">YouTube csatorna</p>
           <p className="text-text-muted text-xs mb-4">Nem kötelező OAuth — elég a csatornád URL-je vagy @handle-je.</p>
 
@@ -427,8 +579,14 @@ export default function ProfilePage() {
             </div>
           )}
 
+          </div>
+          </section>
+
+        {/* ══ 3. Niche Validation Status ══ */}
+        <section>
+          <p className="section-label mb-3">Niche Validation Status</p>
           {nicheNeedsReview && (
-            <div className="mt-4" id="niche-review">
+            <div id="niche-review" className="mb-4">
               <NicheReviewBanner
                 onKeepCurrent={handleKeepCurrentNiche}
                 onReanalyze={() => handleDiscoverNiches(false)}
@@ -438,7 +596,7 @@ export default function ProfilePage() {
           )}
 
           {nicheCandidates && nicheCandidates.length > 0 && (
-            <div className="mt-4">
+            <div className="card">
               <p className="text-sm font-medium text-text-secondary mb-2">Lehetséges tartalomirányok a csatornád alapján</p>
               <div className="space-y-2">
                 {nicheCandidates.map((c, i) => (
@@ -454,165 +612,43 @@ export default function ProfilePage() {
               </div>
             </div>
           )}
-        </div>
 
-        {/* Csatorna neve */}
-        <div className="card">
-          <label className="block text-sm font-medium text-text-secondary mb-1.5">Csatorna neve</label>
-          <input value={channelName} onChange={e => setChannelName(e.target.value)} placeholder="pl. Mr.MexBrain" className="input" />
-        </div>
-
-        {/* Platform */}
-        <div className="card">
-          <p className="text-sm font-medium text-text-secondary mb-3">Fő platform</p>
-          <div className="grid grid-cols-2 gap-2">
-            {platforms.map(p => (
-              <button key={p.value} type="button" onClick={() => setPlatform(p.value)}
-                className={`flex items-center gap-2.5 px-4 py-3 rounded-lg border text-sm font-medium transition-all duration-150 ${platform === p.value ? 'bg-violet/10 border-violet/40 text-violet' : 'bg-surface-2 border-border text-text-secondary hover:border-border-2'}`}>
-                <span>{p.icon}</span>{p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Tartalomirány — strukturált niche input */}
-        <div className="card">
-          <p className="text-sm font-medium text-text-secondary mb-1">Milyen tartalomirányban keressünk lehetőséget?</p>
-          <p className="text-text-muted text-xs mb-4">Minél konkrétabb a fókusz, annál pontosabb trendtémákat kapsz.</p>
-
-          {/* Fő kategória */}
-          <label className="block text-sm font-medium text-text-secondary mb-1.5">Fő kategória</label>
-          <p className="text-text-muted text-xs mb-2">Válassz egy nagy témakört.</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-5">
-            {MAIN_CATEGORIES.map(c => (
-              <button key={c.value} type="button" onClick={() => setMainCategory(c.value)}
-                className={`px-3 py-2 rounded-lg border text-xs font-medium transition-all duration-150 ${mainCategory === c.value ? 'bg-violet/10 border-violet/40 text-violet' : 'bg-surface-2 border-border text-text-secondary hover:border-border-2'}`}>
-                {c.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Specifikus fókusz */}
-          <label className="block text-sm font-medium text-text-secondary mb-1.5">Specifikus fókusz</label>
-          <p className="text-text-muted text-xs mb-2">Ne általános kategóriát írj. Egy konkrét tartalomirányt adj meg.</p>
-          <input value={specificFocus} onChange={e => setSpecificFocus(e.target.value)}
-            placeholder="Pl. AI-alapú rákdiagnózis, alvás és agy, James Webb felfedezések" className="input" required />
-          {specificFocus.trim() && (() => {
-            const v = validateSpecificFocus(specificFocus)
-            return (
-              <p className="text-xs mt-2" style={{ color: v.status === 'too_broad' ? '#F59E0B' : '#22C55E' }}>
-                {v.message}
-              </p>
-            )
-          })()}
-          <div className="mt-3 text-xs text-text-muted space-y-1">
-            <p><span style={{ color: '#EF4444' }}>Túl tág:</span> „tudomány, hírek, egészség”</p>
-            <p><span style={{ color: '#F59E0B' }}>Jó:</span> „AI az orvoslásban”</p>
-            <p><span style={{ color: '#22C55E' }}>Még jobb:</span> „AI-alapú rákdiagnózis magyar nézőknek”</p>
-          </div>
-
-          {/* Közönség */}
-          <div className="mt-5">
-            <label className="block text-sm font-medium text-text-secondary mb-1.5">Közönség (opcionális)</label>
-            <input value={audience} onChange={e => setAudience(e.target.value)}
-              placeholder="Pl. laikus magyar nézők, kezdő vállalkozók, fiatal TikTok-közönség" className="input" />
-          </div>
-
-          {/* Kerülendő témák */}
-          <div className="mt-5">
-            <label className="block text-sm font-medium text-text-secondary mb-1.5">Kerülendő témák (opcionális)</label>
-            <input value={avoidTopics} onChange={e => setAvoidTopics(e.target.value)}
-              placeholder="Pl. politika, bulvár, egészségügyi tanácsadás" className="input" />
-          </div>
-        </div>
-
-        {/* Narrációs stílus */}
-        <div className="card">
-          <p className="text-sm font-medium text-text-secondary mb-1">Alapértelmezett narrációs stílus</p>
-          <p className="text-text-muted text-xs mb-3">Minden videócsomag generálásnál ezt a stílust használjuk.</p>
-          <div className="grid grid-cols-2 gap-2">
-            {NARRATION_STYLES.map(s => (
-              <button key={s.value} type="button" onClick={() => setNarrationStyle(s.value)}
-                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${narrationStyle === s.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
-                <span className={`font-medium ${narrationStyle === s.value ? 'text-violet' : 'text-text-primary'}`}>{s.label}</span>
-                <span className="text-text-muted text-xs leading-tight">{s.desc}</span>
-              </button>
-            ))}
-          </div>
-
-          {narrationStyle === 'sajat' && (
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-text-secondary mb-1.5">Egyéni prompt</label>
-              <textarea
-                value={customPrompt}
-                onChange={e => setCustomPrompt(e.target.value)}
-                placeholder='pl. "Írj Dylan Page stílusú, laza, pletykás narrációt magyarul."'
-                className="input min-h-[100px] resize-none"
-                rows={3}
-              />
+          {!nicheNeedsReview && !(nicheCandidates && nicheCandidates.length > 0) && (
+            <div className="card flex items-center gap-2">
+              <span className="text-emerald">✓</span>
+              <p className="text-sm text-text-secondary">A niche-ed rendben van, nincs teendő.</p>
             </div>
           )}
-        </div>
+        </section>
 
-        {/* Creator szint */}
-        <div className="card">
-          <p className="text-sm font-medium text-text-secondary mb-3">Creator szint</p>
-          <div className="grid grid-cols-2 gap-2">
-            {creatorLevels.map(l => (
-              <button key={l.value} type="button" onClick={() => setCreatorLevel(l.value)}
-                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${creatorLevel === l.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
-                <span className={`font-medium ${creatorLevel === l.value ? 'text-violet' : 'text-text-primary'}`}>{l.label}</span>
-                <span className="text-text-muted text-xs">{l.desc}</span>
-              </button>
-            ))}
+        {/* ══ 4. Preferences ══ */}
+        <section>
+          <p className="section-label mb-3">Preferences</p>
+          <div className="space-y-6">
+
+            {/* Kerülendő témák */}
+            <div className="card">
+              <label className="block text-sm font-medium text-text-secondary mb-1.5">Kerülendő témák (opcionális)</label>
+              <input value={avoidTopics} onChange={e => setAvoidTopics(e.target.value)}
+                placeholder="Pl. politika, bulvár, egészségügyi tanácsadás" className="input" />
+            </div>
+
+            {narrationStyle === 'sajat' && (
+              <div className="card">
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">Egyéni narrációs prompt</label>
+                <p className="text-text-muted text-xs mb-2">A Creator Profile-nál kiválasztott „Saját” narrációs stílushoz tartozó szöveg.</p>
+                <textarea
+                  value={customPrompt}
+                  onChange={e => setCustomPrompt(e.target.value)}
+                  placeholder='pl. "Írj Dylan Page stílusú, laza, pletykás narrációt magyarul."'
+                  className="input min-h-[100px] resize-none"
+                  rows={3}
+                />
+              </div>
+            )}
+
           </div>
-        </div>
-
-        {/* Videóhossz */}
-        <div className="card">
-          <p className="text-sm font-medium text-text-secondary mb-3">Videó hossza</p>
-          <div className="grid grid-cols-3 gap-2">
-            {videoLengths.map(l => (
-              <button key={l.value} type="button" onClick={() => setVideoLength(l.value)}
-                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${videoLength === l.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
-                <span className={`font-medium ${videoLength === l.value ? 'text-violet' : 'text-text-primary'}`}>{l.label}</span>
-                <span className="text-text-muted text-xs leading-tight">{l.desc}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Régió */}
-        <div className="card">
-          <p className="text-sm font-medium text-text-secondary mb-3">Piaci fókusz</p>
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { value: 'HU', label: '🇭🇺 Magyar', desc: 'HU piac' },
-              { value: 'US', label: '🌍 Globális', desc: 'EN piac' },
-              { value: 'BOTH', label: '🌐 Mindkettő', desc: 'Hamarosan', disabled: true },
-            ].map(r => (
-              <button key={r.value} type="button" onClick={() => {
-                setRegion(r.value as Region)
-                // A régió és a keresési nyelv legyen mindig konzisztens —
-                // eltérő régió/nyelv kombináció gyengítette a Serper/YouTube
-                // találatok minőségét (US régió + hu nyelv keveredés).
-                if (r.value === 'US') setLanguage('en')
-                if (r.value === 'HU') setLanguage('hu')
-              }}
-                className={`flex flex-col items-start px-4 py-3 rounded-lg border text-sm transition-all duration-150 ${region === r.value ? 'bg-violet/10 border-violet/40' : 'bg-surface-2 border-border hover:border-border-2'}`}>
-                <span className={`font-medium ${region === r.value ? 'text-violet' : 'text-text-primary'}`}>{r.label}</span>
-                <span className="text-text-muted text-xs">{r.desc}</span>
-              </button>
-            ))}
-          </div>
-          <p className="text-text-muted text-xs mt-3">A régió automatikusan beállítja a keresési nyelvet is (Magyar → hu, Globális → en).</p>
-        </div>
-
-        {/* Feliratkozók */}
-        <div className="card">
-          <label className="block text-sm font-medium text-text-secondary mb-1.5">Feliratkozók száma (opcionális)</label>
-          <input type="number" value={subscriberCount} onChange={e => setSubscriberCount(e.target.value)} placeholder="pl. 3100" className="input" min="0" />
-        </div>
+        </section>
 
         <button type="submit" disabled={saving} className="btn-primary w-full">
           {saving ? 'Mentés...' : saved ? '✓ Mentve — visszairányítás...' : 'Profil mentése'}
