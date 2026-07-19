@@ -12,7 +12,8 @@ import VideoPackageHero, { type MetaBadge, type QualityMetaDisplay, type SaveSta
 import type { BadgeVariant } from '@/components/ui/Badge'
 import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
-import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film } from 'lucide-react'
+import TagPill from '@/components/video-package/TagPill'
+import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -1396,30 +1397,30 @@ export default function VideoPackagePage() {
           )}
 
           {/* Hashtag csomag */}
-          <Block title="# Hashtag csomag">
+          <SectionCard
+            title="Hashtag csomag"
+            icon={Hash}
+            action={<PackageCopyBtn text={[...result.hashtags.viral, ...result.hashtags.niche, ...result.hashtags.general].join(' ')} label="Összes hashtag másolása" />}
+          >
             <div className="space-y-3">
               {[
-                { label: '🔥 Viral potential', tags: result.hashtags.viral, color: '#EF4444' },
-                { label: '🎯 Niche', tags: result.hashtags.niche, color: '#3B82F6' },
-                { label: '✅ Általános', tags: result.hashtags.general, color: '#CBD5E1' },
+                { label: 'Viral potential', tags: result.hashtags.viral, color: '#EF4444', icon: Flame, variant: 'viral' as const },
+                { label: 'Niche', tags: result.hashtags.niche, color: '#3B82F6', icon: Target, variant: 'niche' as const },
+                { label: 'Általános', tags: result.hashtags.general, color: '#CBD5E1', icon: CheckCircle2, variant: 'general' as const },
               ].map(group => (
                 <div key={group.label}>
-                  <p className="text-xs mb-2" style={{ color: group.color }}>{group.label}</p>
+                  <p className="text-xs mb-2 flex items-center gap-1.5" style={{ color: group.color }}>
+                    <group.icon className="w-3.5 h-3.5" aria-hidden="true" /> {group.label}
+                  </p>
                   <div className="flex flex-wrap gap-1.5">
                     {group.tags.map((tag, i) => (
-                      <span key={i} className="text-xs px-2.5 py-1 rounded-full font-medium"
-                        style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#8B5CF6' }}>
-                        {tag}
-                      </span>
+                      <TagPill key={i} variant={group.variant}>{tag}</TagPill>
                     ))}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="mt-3">
-              <CopyBtn text={[...result.hashtags.viral, ...result.hashtags.niche, ...result.hashtags.general].join(' ')} label="📋 Összes hashtag másolása" />
-            </div>
-          </Block>
+          </SectionCard>
 
           {/* CTA */}
           <SectionCard title="CTA" icon={Megaphone} accent="rgba(34,197,94,0.2)" action={<PackageCopyBtn text={result.cta} label="CTA másolása" />}>
