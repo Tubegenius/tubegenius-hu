@@ -14,7 +14,7 @@ import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
 import TagPill from '@/components/video-package/TagPill'
 import PlatformChecklistCard from '@/components/video-package/PlatformChecklistCard'
-import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2, Image, Pin, Send } from 'lucide-react'
+import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2, Image, Pin, Send, PlayCircle, Globe } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -220,17 +220,6 @@ const GOALS = [
 ]
 
 // ─── Helper components ────────────────────────────────────────
-function CopyBtn({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <button onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
-      className="text-xs px-3 py-1.5 rounded-lg border transition-all"
-      style={{ background: copied ? 'rgba(34,197,94,0.1)' : '#121826', border: copied ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(255,255,255,0.08)', color: copied ? '#22C55E' : '#CBD5E1' }}>
-      {copied ? '✓ Másolva' : label}
-    </button>
-  )
-}
-
 function getQualityMeta(status?: string) {
   if (status === 'verified' || status === 'verified_with_limits') {
     return { label: status === 'verified' ? 'Ellenőrzött' : 'Ellenőrzött, korlátokkal', color: '#22C55E', bg: 'rgba(34,197,94,0.1)' }
@@ -284,15 +273,6 @@ function getProductionBrief(pkg: VideoPackageResult, context: OpportunityPackage
     '- B-roll lista összeszedése',
     '- CTA és leírás átnézése',
   ].join('\n')
-}
-
-function Block({ title, children, accent }: { title: string; children: React.ReactNode; accent?: string }) {
-  return (
-    <div className="rounded-xl p-5" style={{ background: '#0F1420', border: `1px solid ${accent || 'rgba(255,255,255,0.08)'}` }}>
-      <p className="text-xs font-semibold uppercase tracking-widest mb-4" style={{ color: '#94A3B8' }}>{title}</p>
-      {children}
-    </div>
-  )
 }
 
 function SelectGroup({ options, value, onChange }: { options: { value: string; label: string; desc?: string; icon?: string }[]; value: string; onChange: (v: string) => void }) {
@@ -1461,7 +1441,7 @@ export default function VideoPackagePage() {
               gyakran figyelmen kívül hagyja — ezért korábban a fenti "X web ·
               Y video" számláló Y-t mutatott, de sehol nem jelent meg a Y videó). */}
           {opportunityContext?.evidence_videos && opportunityContext.evidence_videos.length > 0 && (
-            <Block title={`🎥 Bizonyíték videók (${opportunityContext.evidence_videos.length})`} accent="rgba(59,130,246,0.15)">
+            <SectionCard title={`Bizonyíték videók (${opportunityContext.evidence_videos.length})`} icon={PlayCircle} accent="rgba(59,130,246,0.15)">
               <p className="text-xs mb-3" style={{ color: '#CBD5E1' }}>
                 Ezek a YouTube-videók igazolják, hogy a témának van piaci/nézettségi jele.
               </p>
@@ -1480,12 +1460,12 @@ export default function VideoPackagePage() {
                   </a>
                 ))}
               </div>
-            </Block>
+            </SectionCard>
           )}
 
           {/* Források */}
           {result.sources_used && result.sources_used.length > 0 && (
-            <Block title="🔍 Felhasznált források" accent="rgba(34,197,94,0.15)">
+            <SectionCard title="Felhasznált források" icon={Globe} accent="rgba(34,197,94,0.15)">
               <p className="text-xs mb-3" style={{ color: '#CBD5E1' }}>
                 A narráció a következő ellenőrzött forrásokból dolgozott. A konkrét adatok, számok ezekből származnak.
               </p>
@@ -1499,11 +1479,12 @@ export default function VideoPackagePage() {
                   </a>
                 ))}
               </div>
-            </Block>
+            </SectionCard>
           )}
           {(!result.sources_used || result.sources_used.length === 0) && (
-            <div className="rounded-xl px-4 py-3 text-xs" style={{ background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.15)', color: '#F59E0B' }}>
-              ⚠️ Nem találtunk ellenőrzött forrást ehhez a témához — a narráció általános koncepció szinten készült, konkrét adatok nélkül. Publikálás előtt érdemes saját kutatást végezni.
+            <div className="rounded-xl px-4 py-3 text-xs flex items-center gap-1.5" style={{ background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.15)', color: '#F59E0B' }}>
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+              Nem találtunk ellenőrzött forrást ehhez a témához — a narráció általános koncepció szinten készült, konkrét adatok nélkül. Publikálás előtt érdemes saját kutatást végezni.
             </div>
           )}
         </div>
