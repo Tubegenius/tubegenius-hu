@@ -8,6 +8,8 @@ import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import { publishCreditBalance } from '@/lib/credit-balance-events'
+import VideoPackageHero, { type MetaBadge, type QualityMetaDisplay, type SaveStatusDisplay } from '@/components/video-package/VideoPackageHero'
+import type { BadgeVariant } from '@/components/ui/Badge'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -977,6 +979,35 @@ export default function VideoPackagePage() {
   const producerBrief = result ? getProductionBrief(result, opportunityContext) : ''
   const fullText = result ? `${producerBrief}\n\n---\n\nTÉMA: ${result.topic}\nPLATFORM: ${result.platform}\nSTÍLUS: ${result.narration_style}\n\nHOOK:\n${result.hook}\n\nNARRÁCIÓ:\n${result.narration}\n\nCÍMEK:\n${result.title_variations.join('\n')}\n\nLEÍRÁS:\n${result.description}\n\nHASHTAGEK:\n${[...result.hashtags.viral, ...result.hashtags.niche, ...result.hashtags.general].join(' ')}\n\nCTA:\n${result.cta}` : ''
 
+  // A VideoPackageHero kizárólag props-alapú — az alábbi értékeket itt,
+  // a page.tsx-ben számítjuk ki a már meglévő getQualityMeta/getSourceCounts
+  // helperekkel, a Hero csak megjeleníti a kész eredményt.
+  const heroContext = result ? (result.opportunity_context || opportunityContext) : null
+  const heroQuality = result ? getQualityMeta(result.quality_status) : null
+  const heroQualityVariant: BadgeVariant =
+    heroQuality?.color === '#22C55E' ? 'success' :
+    heroQuality?.color === '#F59E0B' ? 'warning' :
+    heroQuality?.color === '#EF4444' ? 'danger' : 'neutral'
+  const heroQualityMeta: QualityMetaDisplay = { label: heroQuality?.label || '', variant: heroQualityVariant }
+  const heroSourceCounts = result ? getSourceCounts(result, opportunityContext) : { webSourceCount: 0, videoEvidenceCount: 0 }
+  const heroSaveStatus: SaveStatusDisplay | null = !result ? null :
+    result.from_paid_result
+      ? { label: 'Mentett eredmény, kredit nélkül megnyitva', variant: 'success' }
+      : reopenedWithoutCharge
+      ? { label: 'Mentett csomag megnyitva — nem vontunk le új kreditet.', variant: 'success' }
+      : saved
+      ? { label: 'A gyártási csomag elkészült és mentésre került.', variant: 'success' }
+      : null
+  const heroCreditsRemaining = result && typeof result._credits_remaining === 'number' && Number.isFinite(result._credits_remaining)
+    ? result._credits_remaining
+    : null
+  const heroMetaBadges: MetaBadge[] = result ? [
+    { label: 'Platform', value: PLATFORMS.find(p => p.value === result.platform)?.label || result.platform },
+    { label: 'Hossz', value: result.video_length },
+    { label: 'Stílus', value: NARRATION_STYLES.find(s => s.value === result.narration_style)?.label || result.narration_style },
+    { label: 'Intenzitás', value: result.intensity },
+  ] : []
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-6">
@@ -1188,113 +1219,38 @@ export default function VideoPackagePage() {
 
       {result && (
         <div className="space-y-4">
-          {/* Header */}
-          <div className="rounded-xl p-5" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(139,92,246,0.08))', border: '1px solid rgba(59,130,246,0.2)' }}>
-            <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div>
-                <h2 className="font-bold text-lg mb-2" style={{ color: '#F8FAFC' }}>{result.topic}</h2>
-                <div className="flex gap-2 flex-wrap">
-                  {[
-                    PLATFORMS.find(p => p.value === result.platform)?.label,
-                    result.video_length,
-                    NARRATION_STYLES.find(s => s.value === result.narration_style)?.label,
-                    result.intensity,
-                  ].filter(Boolean).map((tag, i) => (
-                    <span key={i} className="text-xs px-2.5 py-1 rounded-full font-medium"
-                      style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#3B82F6' }}>
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-col items-end gap-2">
-                {result.from_paid_result ? (
-                  <span className="text-xs" style={{ color: '#22C55E' }}>
-                    Mentett eredmény, kredit nélkül megnyitva
-                  </span>
-                ) : result._credits_remaining !== undefined && (
-                  <span className="text-xs" style={{ color: '#94A3B8' }}>
-                    Maradék kredit: <span style={{ color: '#3B82F6' }}>{result._credits_remaining.toFixed(1)}</span>
-                  </span>
-                )}
-                <div className="flex gap-2 flex-wrap">
-                <CopyBtn text={fullText} label="📋 Teljes csomag" />
-                <button onClick={saveToCalendar} disabled={calendarStatus === 'saving' || calendarStatus === 'saved'}
-                  className="text-xs px-3 py-1.5 rounded-lg border transition-all"
-                  style={{
-                    background: calendarStatus === 'saved' ? 'rgba(34,197,94,0.1)' : calendarStatus === 'error' ? 'rgba(239,68,68,0.1)' : '#121826',
-                    border: calendarStatus === 'saved' ? '1px solid rgba(34,197,94,0.3)' : calendarStatus === 'error' ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(255,255,255,0.08)',
-                    color: calendarStatus === 'saved' ? '#22C55E' : calendarStatus === 'error' ? '#EF4444' : '#CBD5E1',
-                  }}>
-                  {calendarStatus === 'saved' ? '✓ Naptárba mentve' : calendarStatus === 'saving' ? 'Mentés...' : calendarStatus === 'error' ? 'Hiba, próbáld újra' : '📅 Naptárba mentés'}
-                </button>
-                <span className="text-xs px-3 py-1.5 rounded-lg border"
-                  style={{ background: saved ? 'rgba(34,197,94,0.1)' : '#121826', border: saved ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(255,255,255,0.08)', color: saved ? '#22C55E' : '#CBD5E1' }}>
-                  {saved ? '✓ Automatikusan elmentve' : 'Mentés...'}
-                </span>
-                </div>
-              </div>
-            </div>
+          <VideoPackageHero
+            topic={result.topic}
+            metaBadges={heroMetaBadges}
+            qualityMeta={heroQualityMeta}
+            productionStatusLabel={heroContext?.ready_to_produce_label || null}
+            preparationModeNote={heroContext?.preparation_mode ? 'Előkészítő csomag: a téma még validálást igényel, ezért publikálás előtt ellenőrizd a forrásokat és a videós jeleket.' : null}
+            intensityNote={result.intensity_downgraded ? (result.intensity_downgrade_reason || 'factual téma miatt óvatosabb megfogalmazás szükséges.') : null}
+            riskFlags={heroContext?.risk_flags || []}
+            sourceCounts={{ webCount: heroSourceCounts.webSourceCount, videoCount: heroSourceCounts.videoEvidenceCount }}
+            targetLengthLabel={result.estimated_duration || result.video_length}
+            saveStatus={heroSaveStatus}
+            creditsRemaining={heroCreditsRemaining}
+            calendarStatus={calendarStatus}
+            onSaveToCalendar={saveToCalendar}
+          />
+
+          <div className="flex justify-end">
+            <CopyBtn text={fullText} label="📋 Teljes csomag" />
           </div>
 
-          {/* Producer brief */}
+          {/* Producer brief — checklist + saját CopyBtn, a fő státusz-adatok a Hero-ban jelennek meg */}
           <Block title="🎛 Producer brief" accent="rgba(34,197,94,0.2)">
-            {(() => {
-              const quality = getQualityMeta(result.quality_status)
-              const context = result.opportunity_context || opportunityContext
-              const riskFlags = context?.risk_flags || []
-              const { webSourceCount, videoEvidenceCount } = getSourceCounts(result, opportunityContext)
-              return (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    <div className="rounded-lg p-3" style={{ background: quality.bg, border: `1px solid ${quality.color}30` }}>
-                      <p className="text-xs mb-1" style={{ color: quality.color }}>Minőség</p>
-                      <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{quality.label}</p>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-                      <p className="text-xs mb-1" style={{ color: '#CBD5E1' }}>Gyártási státusz</p>
-                      <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{context?.ready_to_produce_label || 'Kézi ellenőrzés'}</p>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-                      <p className="text-xs mb-1" style={{ color: '#CBD5E1' }}>Források</p>
-                      <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{webSourceCount} web · {videoEvidenceCount} video</p>
-                    </div>
-                    <div className="rounded-lg p-3" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
-                      <p className="text-xs mb-1" style={{ color: '#CBD5E1' }}>Célhossz</p>
-                      <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{result.estimated_duration || result.video_length}</p>
-                    </div>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                {['Forrás check', 'Narráció próba', 'B-roll lista', 'Thumbnail', 'CTA'].map(item => (
+                  <div key={item} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#CBD5E1' }}>
+                    ✓ {item}
                   </div>
-                  {context?.preparation_mode && (
-                    <p className="text-xs rounded-lg px-3 py-2" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.18)', color: '#93C5FD' }}>
-                      Előkészítő csomag: a téma még validálást igényel, ezért publikálás előtt ellenőrizd a forrásokat és a videós jeleket.
-                    </p>
-                  )}
-                  {result.intensity_downgraded && (
-                    <p className="text-xs rounded-lg px-3 py-2" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.18)', color: '#F59E0B' }}>
-                      Intenzitás visszavéve: {result.intensity_downgrade_reason || 'factual téma miatt óvatosabb megfogalmazás szükséges.'}
-                    </p>
-                  )}
-                  {riskFlags.length > 0 && (
-                    <div className="rounded-lg px-3 py-2" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
-                      <p className="text-xs font-semibold mb-1" style={{ color: '#F59E0B' }}>Figyelendő pontok</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {riskFlags.map(flag => (
-                          <span key={flag} className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#121826', color: '#CBD5E1', border: '1px solid rgba(255,255,255,0.08)' }}>{flag}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                    {['Forrás check', 'Narráció próba', 'B-roll lista', 'Thumbnail', 'CTA'].map(item => (
-                      <div key={item} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#CBD5E1' }}>
-                        ✓ {item}
-                      </div>
-                    ))}
-                  </div>
-                  <CopyBtn text={producerBrief} label="📋 Producer brief másolása" />
-                </div>
-              )
-            })()}
+                ))}
+              </div>
+              <CopyBtn text={producerBrief} label="📋 Producer brief másolása" />
+            </div>
           </Block>
 
           {/* Feltöltési időszak */}
