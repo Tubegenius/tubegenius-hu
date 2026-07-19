@@ -13,7 +13,7 @@ import type { BadgeVariant } from '@/components/ui/Badge'
 import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
 import TagPill from '@/components/video-package/TagPill'
-import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2 } from 'lucide-react'
+import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2, Image, Pin } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -1360,18 +1360,18 @@ export default function VideoPackagePage() {
           </SectionCard>
 
           {/* Thumbnail / Overlay szövegek */}
-          <Block title={isShorts ? '📱 Overlay / Caption szövegek' : '🖼 Thumbnail szövegek'}>
+          <SectionCard title={isShorts ? 'Overlay / Caption szövegek' : 'Thumbnail szövegek'} icon={Image}>
             {result.thumbnail_concept && (
               <p className="text-xs leading-relaxed mb-3" style={{ color: '#94A3B8' }}>💡 {result.thumbnail_concept}</p>
             )}
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {result.thumbnail_texts.map((text, i) => (
                 <div key={i} className="rounded-lg p-3 text-center font-bold text-sm" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#F8FAFC' }}>
                   {text}
                 </div>
               ))}
             </div>
-          </Block>
+          </SectionCard>
 
           {/* Cím variációk */}
           <SectionCard title="5 cím variáció" icon={Type}>
@@ -1429,10 +1429,9 @@ export default function VideoPackagePage() {
 
           {/* Kitűzhető komment */}
           {result.pinned_comment && (
-            <Block title="📌 Kitűzhető komment">
+            <SectionCard title="Kitűzhető komment" icon={Pin} action={<PackageCopyBtn text={result.pinned_comment} label="Komment másolása" />}>
               <p className="text-sm leading-relaxed" style={{ color: '#D1D9E6' }}>{result.pinned_comment}</p>
-              <div className="mt-3"><CopyBtn text={result.pinned_comment} label="📋 Komment másolása" /></div>
-            </Block>
+            </SectionCard>
           )}
 
           {/* Platform-natív feltöltési checklist */}
@@ -1552,7 +1551,7 @@ export default function VideoPackagePage() {
 
           {/* Gyártási checklist */}
           {result.production_checklist && result.production_checklist.length > 0 && (
-            <Block title="✅ Gyártási checklist">
+            <SectionCard title="Gyártási checklist" icon={CheckCircle2}>
               <ul className="space-y-1.5">
                 {result.production_checklist.map((step, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm" style={{ color: '#CBD5E1' }}>
@@ -1560,7 +1559,7 @@ export default function VideoPackagePage() {
                   </li>
                 ))}
               </ul>
-            </Block>
+            </SectionCard>
           )}
 
           {/* Bizonyíték videók — a valós opportunityContext.evidence_videos tömbből,
