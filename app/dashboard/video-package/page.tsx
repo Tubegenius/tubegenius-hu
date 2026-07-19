@@ -12,7 +12,7 @@ import VideoPackageHero, { type MetaBadge, type QualityMetaDisplay, type SaveSta
 import type { BadgeVariant } from '@/components/ui/Badge'
 import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
-import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video } from 'lucide-react'
+import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -1243,18 +1243,15 @@ export default function VideoPackagePage() {
           </div>
 
           {/* Producer brief — checklist + saját CopyBtn, a fő státusz-adatok a Hero-ban jelennek meg */}
-          <Block title="🎛 Producer brief" accent="rgba(34,197,94,0.2)">
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                {['Forrás check', 'Narráció próba', 'B-roll lista', 'Thumbnail', 'CTA'].map(item => (
-                  <div key={item} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#CBD5E1' }}>
-                    ✓ {item}
-                  </div>
-                ))}
-              </div>
-              <CopyBtn text={producerBrief} label="📋 Producer brief másolása" />
+          <SectionCard title="Producer brief" icon={ListChecks} accent="rgba(34,197,94,0.2)" action={<PackageCopyBtn text={producerBrief} label="Producer brief másolása" />}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+              {['Forrás check', 'Narráció próba', 'B-roll lista', 'Thumbnail', 'CTA'].map(item => (
+                <div key={item} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#CBD5E1' }}>
+                  ✓ {item}
+                </div>
+              ))}
             </div>
-          </Block>
+          </SectionCard>
 
           {/* Feltöltési időszak */}
           {result.upload_times && (
@@ -1322,7 +1319,7 @@ export default function VideoPackagePage() {
           </SectionCard>
 
           {/* Jelenetek */}
-          <Block title="🎬 Jelenetstruktúra">
+          <SectionCard title="Jelenetstruktúra" icon={Film}>
             <div className="space-y-3">
               {result.scene_structure.map(scene => (
                 <div key={scene.number} className="rounded-lg p-4" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -1337,7 +1334,7 @@ export default function VideoPackagePage() {
                 </div>
               ))}
             </div>
-          </Block>
+          </SectionCard>
 
           {/* Timestamps (csak long videónál) */}
           {!isShorts && result.timestamps && result.timestamps.length > 0 && (
