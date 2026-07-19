@@ -12,7 +12,7 @@ import VideoPackageHero, { type MetaBadge, type QualityMetaDisplay, type SaveSta
 import type { BadgeVariant } from '@/components/ui/Badge'
 import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
-import { Mic, Type, FileText, Megaphone } from 'lucide-react'
+import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -1258,8 +1258,8 @@ export default function VideoPackagePage() {
 
           {/* Feltöltési időszak */}
           {result.upload_times && (
-            <Block title="⏰ Ajánlott feltöltési időszak" accent="rgba(245,158,11,0.2)">
-              <div className="grid grid-cols-2 gap-3">
+            <SectionCard title="Ajánlott feltöltési időszak" icon={Clock} accent="rgba(245,158,11,0.2)">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-lg p-3" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
                   <p className="text-xs mb-1" style={{ color: '#F59E0B' }}>🥇 Elsődleges</p>
                   <p className="font-bold" style={{ color: '#F8FAFC' }}>{result.upload_times.primary}</p>
@@ -1270,35 +1270,36 @@ export default function VideoPackagePage() {
                 </div>
               </div>
               <p className="text-xs mt-2" style={{ color: '#CBD5E1' }}>ℹ️ {result.upload_times.reason}</p>
-            </Block>
+            </SectionCard>
           )}
 
           {/* Hook */}
-          <Block title="🎣 Hook" accent="rgba(139,92,246,0.2)">
+          <SectionCard title="Hook" icon={Zap} accent="rgba(139,92,246,0.2)" action={<PackageCopyBtn text={result.hook} label="Hook másolása" />}>
             <p className="text-sm leading-relaxed font-medium" style={{ color: '#F8FAFC' }}>{result.hook}</p>
-            <div className="mt-3"><CopyBtn text={result.hook} label="📋 Hook másolása" /></div>
             {result.hook_variations && result.hook_variations.length > 0 && (
               <div className="mt-4 pt-4 space-y-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <p className="text-xs" style={{ color: '#94A3B8' }}>Alternatív hook-ok, ha másik szöget akarsz</p>
                 {result.hook_variations.map((variant, i) => (
                   <div key={i} className="flex items-center justify-between gap-3 rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
                     <span className="text-sm" style={{ color: '#D1D9E6' }}>{variant}</span>
-                    <CopyBtn text={variant} label="📋" />
+                    <PackageCopyBtn text={variant} label="Hook másolása" compact />
                   </div>
                 ))}
               </div>
             )}
-          </Block>
+          </SectionCard>
 
           {/* Miért működhet + kockázatok */}
           {(result.why_it_works || (result.risks && result.risks.length > 0)) && (
-            <Block title="🎯 Miért működhet ez" accent="rgba(34,197,94,0.2)">
+            <SectionCard title="Miért működhet ez" icon={Target} accent="rgba(34,197,94,0.2)">
               {result.why_it_works && (
                 <p className="text-sm leading-relaxed mb-3" style={{ color: '#F8FAFC' }}>{result.why_it_works}</p>
               )}
               {result.risks && result.risks.length > 0 && (
                 <div>
-                  <p className="text-xs mb-2" style={{ color: '#F59E0B' }}>⚠️ Kockázatok, amikre figyelj</p>
+                  <p className="text-xs mb-2 flex items-center gap-1.5" style={{ color: '#F59E0B' }}>
+                    <AlertTriangle className="w-3.5 h-3.5" aria-hidden="true" /> Kockázatok, amikre figyelj
+                  </p>
                   <ul className="space-y-1">
                     {result.risks.map((risk, i) => (
                       <li key={i} className="text-xs flex items-start gap-2" style={{ color: '#CBD5E1' }}>
@@ -1308,7 +1309,7 @@ export default function VideoPackagePage() {
                   </ul>
                 </div>
               )}
-            </Block>
+            </SectionCard>
           )}
 
           {/* Narráció */}
@@ -1340,18 +1341,17 @@ export default function VideoPackagePage() {
 
           {/* Timestamps (csak long videónál) */}
           {!isShorts && result.timestamps && result.timestamps.length > 0 && (
-            <Block title="⏱ Időbélyegek">
+            <SectionCard title="Időbélyegek" icon={Timer} action={<PackageCopyBtn text={result.timestamps.join('\n')} label="Időbélyegek másolása" />}>
               <div className="space-y-1">
                 {result.timestamps.map((ts, i) => (
                   <p key={i} className="text-sm font-mono" style={{ color: '#D1D9E6' }}>{ts}</p>
                 ))}
               </div>
-              <div className="mt-3"><CopyBtn text={result.timestamps.join('\n')} label="📋 Időbélyegek másolása" /></div>
-            </Block>
+            </SectionCard>
           )}
 
           {/* B-roll */}
-          <Block title="🎥 B-roll ötletek">
+          <SectionCard title="B-roll ötletek" icon={Video}>
             <ul className="space-y-1.5">
               {result.broll_ideas.map((idea, i) => (
                 <li key={i} className="flex items-start gap-2 text-sm" style={{ color: '#CBD5E1' }}>
@@ -1359,7 +1359,7 @@ export default function VideoPackagePage() {
                 </li>
               ))}
             </ul>
-          </Block>
+          </SectionCard>
 
           {/* Thumbnail / Overlay szövegek */}
           <Block title={isShorts ? '📱 Overlay / Caption szövegek' : '🖼 Thumbnail szövegek'}>
