@@ -10,6 +10,9 @@ import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import { publishCreditBalance } from '@/lib/credit-balance-events'
 import VideoPackageHero, { type MetaBadge, type QualityMetaDisplay, type SaveStatusDisplay } from '@/components/video-package/VideoPackageHero'
 import type { BadgeVariant } from '@/components/ui/Badge'
+import SectionCard from '@/components/video-package/SectionCard'
+import PackageCopyBtn from '@/components/video-package/CopyBtn'
+import { Mic, Type, FileText, Megaphone } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -1236,7 +1239,7 @@ export default function VideoPackagePage() {
           />
 
           <div className="flex justify-end">
-            <CopyBtn text={fullText} label="📋 Teljes csomag" />
+            <PackageCopyBtn text={fullText} label="Teljes csomag" />
           </div>
 
           {/* Producer brief — checklist + saját CopyBtn, a fő státusz-adatok a Hero-ban jelennek meg */}
@@ -1309,10 +1312,13 @@ export default function VideoPackagePage() {
           )}
 
           {/* Narráció */}
-          <Block title={isShorts ? '🎙 Narráció (shorts)' : '🎙 Teljes narráció'}>
+          <SectionCard
+            title={isShorts ? 'Narráció (shorts)' : 'Teljes narráció'}
+            icon={Mic}
+            action={<PackageCopyBtn text={result.narration} label="Narráció másolása" />}
+          >
             <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: '#D1D9E6' }}>{result.narration}</p>
-            <div className="mt-3"><CopyBtn text={result.narration} label="📋 Narráció másolása" /></div>
-          </Block>
+          </SectionCard>
 
           {/* Jelenetek */}
           <Block title="🎬 Jelenetstruktúra">
@@ -1370,28 +1376,26 @@ export default function VideoPackagePage() {
           </Block>
 
           {/* Cím variációk */}
-          <Block title="✏️ 5 cím variáció">
+          <SectionCard title="5 cím variáció" icon={Type}>
             <div className="space-y-2">
               {result.title_variations.map((title, i) => (
                 <div key={i} className="flex items-center justify-between gap-3 rounded-lg px-4 py-2.5" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <span className="text-sm" style={{ color: '#F8FAFC' }}>{i + 1}. {title}</span>
-                  <CopyBtn text={title} label="📋" />
+                  <PackageCopyBtn text={title} label="Cím másolása" compact />
                 </div>
               ))}
             </div>
-          </Block>
+          </SectionCard>
 
           {/* Caption (shorts) vagy Leírás (long) */}
           {isShorts ? (
-            <Block title="📝 Caption">
+            <SectionCard title="Caption" icon={FileText} action={<PackageCopyBtn text={result.caption} label="Caption másolása" />}>
               <p className="text-sm leading-relaxed" style={{ color: '#D1D9E6' }}>{result.caption}</p>
-              <div className="mt-3"><CopyBtn text={result.caption} label="📋 Caption másolása" /></div>
-            </Block>
+            </SectionCard>
           ) : (
-            <Block title="📝 Leírás">
+            <SectionCard title="Leírás" icon={FileText} action={<PackageCopyBtn text={result.description} label="Leírás másolása" />}>
               <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: '#D1D9E6' }}>{result.description}</p>
-              <div className="mt-3"><CopyBtn text={result.description} label="📋 Leírás másolása" /></div>
-            </Block>
+            </SectionCard>
           )}
 
           {/* Hashtag csomag */}
@@ -1421,10 +1425,9 @@ export default function VideoPackagePage() {
           </Block>
 
           {/* CTA */}
-          <Block title="📢 CTA" accent="rgba(34,197,94,0.2)">
+          <SectionCard title="CTA" icon={Megaphone} accent="rgba(34,197,94,0.2)" action={<PackageCopyBtn text={result.cta} label="CTA másolása" />}>
             <p className="text-sm leading-relaxed" style={{ color: '#F8FAFC' }}>{result.cta}</p>
-            <div className="mt-3"><CopyBtn text={result.cta} label="📋 CTA másolása" /></div>
-          </Block>
+          </SectionCard>
 
           {/* Kitűzhető komment */}
           {result.pinned_comment && (
