@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { CreditCard } from 'lucide-react'
 import CreditsHero from '@/components/credits/CreditsHero'
@@ -59,14 +59,6 @@ function toBucketValue(v: unknown): number | null {
 }
 
 export default function CreditsPage() {
-  return (
-    <Suspense fallback={<div className="max-w-5xl mx-auto"><div className="card mb-6 animate-pulse h-40" /></div>}>
-      <CreditsPageContent />
-    </Suspense>
-  )
-}
-
-function CreditsPageContent() {
   const [tab, setTab] = useState<'subscription' | 'topup'>('subscription')
   const [credits, setCredits] = useState<CreditInfo | null>(null)
   const [loadError, setLoadError] = useState(false)
