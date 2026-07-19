@@ -1,4 +1,4 @@
-import { Activity, Flame, Package, Lightbulb, PlayCircle, Brain, type LucideIcon } from 'lucide-react'
+import { Activity, Flame, Package, Lightbulb, PlayCircle, Brain, CreditCard, type LucideIcon } from 'lucide-react'
 
 export type FeatureKey =
   | 'channel-audit'
@@ -7,6 +7,7 @@ export type FeatureKey =
   | 'opportunity'
   | 'similar-videos'
   | 'memory'
+  | 'credits'
 
 const FEATURE_ICON_MAP: Record<FeatureKey, LucideIcon> = {
   'channel-audit': Activity,
@@ -15,6 +16,7 @@ const FEATURE_ICON_MAP: Record<FeatureKey, LucideIcon> = {
   opportunity: Lightbulb,
   'similar-videos': PlayCircle,
   memory: Brain,
+  credits: CreditCard,
 }
 
 interface FeatureIconProps {
