@@ -216,18 +216,20 @@ export default function TranscriptPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2 block">Fájl</label>
-                <label className="block rounded-xl border border-dashed border-border bg-surface-2 p-5 cursor-pointer hover:border-cyan/40 transition-all">
-                  <input
-                    type="file"
-                    accept={ACCEPTED_FILES}
-                    className="hidden"
-                    onChange={e => {
-                      const selected = e.target.files?.[0] || null
-                      setFile(selected)
-                      if (selected && !title.trim()) setTitle(selected.name.replace(/\.[^.]+$/, ''))
-                    }}
-                    disabled={loading}
-                  />
+                <input
+                  id="transcript-file"
+                  type="file"
+                  accept={ACCEPTED_FILES}
+                  className="peer sr-only"
+                  onChange={e => {
+                    const selected = e.target.files?.[0] || null
+                    setFile(selected)
+                    if (selected && !title.trim()) setTitle(selected.name.replace(/\.[^.]+$/, ''))
+                  }}
+                  disabled={loading}
+                />
+                <label htmlFor="transcript-file"
+                  className="block rounded-xl border border-dashed border-border bg-surface-2 p-5 cursor-pointer hover:border-cyan/40 transition-all peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-4 peer-focus-visible:outline-[#3B82F6]">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: 'rgba(6,182,212,0.12)' }}>
                       <i className="ti ti-upload" style={{ color: '#22D3EE' }} />

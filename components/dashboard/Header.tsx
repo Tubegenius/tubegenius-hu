@@ -59,8 +59,9 @@ export default function DashboardHeader({ user, profile }: HeaderProps) {
           <span className="absolute top-1 right-1 w-2 h-2 rounded-full" style={{ background: '#3B82F6' }} />
         </button>
 
-        {/* Avatar */}
-        <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-surface-2 transition-colors">
+        {/* Avatar — nem interaktív profilazonosító, a profil a Sidebar "Profilom" linkjén érhető el */}
+        <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-2 transition-colors">
+          <span className="sr-only">Bejelentkezett felhasználó</span>
           <div className="rounded-full flex items-center justify-center text-xs font-bold"
             style={{ width: 36, height: 36, background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
             {initials}
@@ -68,7 +69,6 @@ export default function DashboardHeader({ user, profile }: HeaderProps) {
           <span className="text-sm font-medium text-text-primary hidden sm:block">
             {profile?.channel_name || user.email?.split('@')[0]}
           </span>
-          <i className="ti ti-chevron-down text-text-muted text-xs" />
         </div>
       </div>
     </header>
