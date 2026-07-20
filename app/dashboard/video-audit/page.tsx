@@ -399,7 +399,7 @@ export default function VideoAuditPage() {
                 value={videoUrl}
                 onChange={e => setVideoUrl(e.target.value)}
                 placeholder="https://youtube.com/watch?v=..."
-                className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] outline-none focus:border-[#3B82F6]/40 transition-colors"
+                className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] focus:border-[#3B82F6]/40 transition-colors"
               />
             </div>
           ) : (
@@ -415,7 +415,7 @@ export default function VideoAuditPage() {
                     value={(manualData as Record<string, unknown>)[key] as string}
                     onChange={e => setManualData(d => ({ ...d, [key]: e.target.value }))}
                     placeholder={placeholder}
-                    className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] outline-none focus:border-[#3B82F6]/40 transition-colors"
+                    className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] focus:border-[#3B82F6]/40 transition-colors"
                   />
                 </div>
               ))}
@@ -433,7 +433,7 @@ export default function VideoAuditPage() {
                     type="number"
                     value={(manualData as Record<string, unknown>)[key] as number}
                     onChange={e => setManualData(d => ({ ...d, [key]: parseInt(e.target.value) || 0 }))}
-                    className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-[#3B82F6]/40 transition-colors"
+                    className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white focus:border-[#3B82F6]/40 transition-colors"
                   />
                 </div>
               ))}
@@ -444,7 +444,7 @@ export default function VideoAuditPage() {
                   value={manualData.hashtags}
                   onChange={e => setManualData(d => ({ ...d, hashtags: e.target.value }))}
                   placeholder="#egészség, #tudomány"
-                  className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] outline-none focus:border-[#3B82F6]/40 transition-colors"
+                  className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] focus:border-[#3B82F6]/40 transition-colors"
                 />
               </div>
             </div>
