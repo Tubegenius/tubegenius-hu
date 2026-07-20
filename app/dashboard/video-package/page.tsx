@@ -1358,7 +1358,7 @@ export default function VideoPackagePage() {
           <SectionCard title="5 cím variáció" icon={Type}>
             <div className="space-y-2">
               {result.title_variations.map((title, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 rounded-lg px-4 py-2.5" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div key={i} className="flex items-center justify-between gap-3 flex-wrap rounded-lg px-4 py-2.5" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <span className="text-sm" style={{ color: '#F8FAFC' }}>{i + 1}. {title}</span>
                   <PackageCopyBtn text={title} label="Cím másolása" compact />
                 </div>
