@@ -1,6 +1,8 @@
 'use client'
 
+import { useId } from 'react'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import { useFocusTrap } from '@/lib/useFocusTrap'
 
 interface Props {
   check: UsageCheckResult
@@ -10,6 +12,8 @@ interface Props {
 }
 
 export default function CreditConfirmModal({ check, onConfirm, onCancel, loading }: Props) {
+  const titleId = useId()
+  const containerRef = useFocusTrap(onCancel)
   const featureLabels: Record<string, string> = {
     similar_videos: 'Piaci bizonyítékok',
     opportunity_engine: 'Videólehetőségek',
@@ -27,8 +31,9 @@ export default function CreditConfirmModal({ check, onConfirm, onCancel, loading
   if (!check.canRun) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(8,11,18,0.7)' }} onClick={onCancel}>
-        <div className="rounded-2xl p-6 max-w-sm w-full" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
-          <h3 className="font-semibold text-lg mb-2" style={{ color: '#F8FAFC' }}>
+        <div ref={containerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId}
+          className="rounded-2xl p-6 max-w-sm w-full" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+          <h3 id={titleId} className="font-semibold text-lg mb-2" style={{ color: '#F8FAFC' }}>
             {check.reason === 'hard_limit' ? 'Napi limit elérve' : 'Nincs elég kredited'}
           </h3>
           <p className="text-sm mb-4" style={{ color: '#CBD5E1' }}>{check.message}</p>
@@ -61,8 +66,9 @@ export default function CreditConfirmModal({ check, onConfirm, onCancel, loading
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(8,11,18,0.7)' }} onClick={onCancel}>
-      <div className="rounded-2xl p-6 max-w-sm w-full" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
-        <h3 className="font-semibold text-lg mb-2" style={{ color: '#F8FAFC' }}>
+      <div ref={containerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        className="rounded-2xl p-6 max-w-sm w-full" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <h3 id={titleId} className="font-semibold text-lg mb-2" style={{ color: '#F8FAFC' }}>
           {featureName} futtatása
         </h3>
         <p className="text-sm mb-4" style={{ color: '#CBD5E1' }}>{check.message}</p>

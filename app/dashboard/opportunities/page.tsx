@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
 import { createClient } from '@/lib/supabase'
 import { useSearchParams } from 'next/navigation'
 import { SCORE_LABELS, REJECT_REASONS } from '@/types'
@@ -10,6 +10,7 @@ import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
+import { useFocusTrap } from '@/lib/useFocusTrap'
 
 // ── Score komponensek ─────────────────────────────────────────
 
@@ -63,10 +64,13 @@ function ScoreBar({ label, value, weight }: { label: string; value: number; weig
 }
 
 function RejectReasonModal({ onSelect, onClose }: { onSelect: (reason: RejectReason) => void; onClose: () => void }) {
+  const titleId = useId()
+  const containerRef = useFocusTrap(onClose)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(8,11,18,0.7)' }} onClick={onClose}>
-      <div className="rounded-2xl p-5 max-w-sm w-full" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
-        <h3 className="font-semibold mb-1" style={{ color: '#F8FAFC' }}>Miért nem jó ez a téma?</h3>
+      <div ref={containerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId}
+        className="rounded-2xl p-5 max-w-sm w-full" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }} onClick={e => e.stopPropagation()}>
+        <h3 id={titleId} className="font-semibold mb-1" style={{ color: '#F8FAFC' }}>Miért nem jó ez a téma?</h3>
         <p className="text-xs mb-4" style={{ color: '#CBD5E1' }}>Ez segít, hogy a jövőben jobb ajánlásokat adjunk.</p>
         <div className="space-y-1.5">
           {REJECT_REASONS.map(reason => (
