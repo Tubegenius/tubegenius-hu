@@ -18,14 +18,6 @@ import SetupStatusPanel from '@/components/dashboard/SetupStatusPanel'
 import { isNicheReviewRequired } from '@/lib/channel-scope'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 
-function getGreeting(): string {
-  const hour = new Date().getHours()
-  if (hour >= 5 && hour < 10) return 'Jó reggelt'
-  if (hour >= 10 && hour < 18) return 'Szia'
-  if (hour >= 18 && hour < 23) return 'Jó estét'
-  return 'Szia'
-}
-
 function getTrendFeedWeekKey(): string {
   const now = new Date()
   const day = now.getDay() || 7
@@ -1097,6 +1089,20 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   const [researchCount, setResearchCount] = useState(0)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [nicheActionLoading, setNicheActionLoading] = useState(false)
+  const [greeting, setGreeting] = useState('Szia')
+
+  // A koszontes napszak-fuggo, de a szerver es a kliens ora eltero
+  // idozonaban/oraban futhat — ezert az elso (szerver+kliens) render
+  // mindig a fix 'Szia' alapertekkel tortenik, es csak hidratacio UTAN,
+  // ebben a kulon effectben szamitjuk at a tenyleges helyi oranak
+  // megfeleloen. Igy a szerver es a kliens elso renderje sosem terhet el.
+  useEffect(() => {
+    const hour = new Date().getHours()
+    if (hour >= 5 && hour < 10) setGreeting('Jó reggelt')
+    else if (hour >= 10 && hour < 18) setGreeting('Szia')
+    else if (hour >= 18 && hour < 23) setGreeting('Jó estét')
+    else setGreeting('Szia')
+  }, [])
 
   useEffect(() => {
     fetch('/api/dashboard-stats').then(r => r.json()).then(setStats).catch(() => {})
@@ -1322,7 +1328,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
 
       {/* 1. Greeting */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{getGreeting()}, {displayName}!</h1>
+        <h1 className="text-2xl font-bold" style={{ color: '#F8FAFC' }}>{greeting}, {displayName}!</h1>
         <p className="text-sm" style={{ color: '#94A3B8' }}>Heti validált téma, gyors validálás, kész videócsomag.</p>
       </div>
 
