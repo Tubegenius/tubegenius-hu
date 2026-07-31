@@ -34,6 +34,10 @@ export async function POST(req: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       customer: creditRow.stripe_customer_id,
       mode: 'payment',
+      // Card-only, szandekosan — ld. create-subscription-session/route.ts
+      // ugyanezen megjegyzese: kizarja a delayed fizetesi modokat, amiket
+      // a webhook jelenleg nem kezel kulon async esemenykent.
+      payment_method_types: ['card'],
       line_items: [{ price: topupConfig.priceId, quantity: 1 }],
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?success=true`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?canceled=true`,

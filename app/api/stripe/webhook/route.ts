@@ -6,7 +6,10 @@ import {
   canClaimFailedWebhook,
   getInvoiceSubscriptionId,
   isInitialSubscriptionInvoice,
+  isSettledSubscriptionCheckout,
   isSettledTopupCheckout,
+  resolveSubscriptionSkipReason,
+  resolveTopupSkipReason,
 } from '@/lib/stripe-event-policy'
 
 export const runtime = 'nodejs'
@@ -69,6 +72,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Terminalis allapot minden case-en tul — alapertelmezetten 'completed'.
+  // A checkout.session.completed csak akkor allitja 'skipped'-re (indoklassal
+  // egyutt), ha a fizetes NEM 'paid' — igy egy fizetetlen/ki nem fizetett
+  // checkoutot sem hamis 'completed'-kent (mintha kredit jart volna erte),
+  // sem felrevezeto 'failed'-kent (mintha hiba tortent volna) nem zarunk le.
+  let skipReason: string | null = null
+
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -80,6 +90,14 @@ export async function POST(req: NextRequest) {
           const plan = session.metadata?.plan as PlanKey
           const planConfig = PLANS[plan]
           if (!planConfig) break
+
+          if (!isSettledSubscriptionCheckout(session.payment_status)) {
+            // Card-only Checkout (payment_method_types: ['card']) mellett ez
+            // vedekezo ag — a delayed fizetesi modok mar a Checkout-letrehozasnal
+            // ki vannak zarva, tehat ide gyakorlatban nem varhato erkezes.
+            skipReason = resolveSubscriptionSkipReason(session.payment_status)
+            break
+          }
 
           const { error: ensureCreditRowError } = await admin.from('user_credits').upsert({
             user_id: userId,
@@ -105,7 +123,15 @@ export async function POST(req: NextRequest) {
           })
           if (initialCreditError || !initialCredit) throw initialCreditError || new Error('Initial subscription credit mutation returned no balance')
         } else if (session.mode === 'payment') {
-          if (!isSettledTopupCheckout(session.mode, session.payment_status)) throw new Error('Top-up checkout is not paid')
+          if (!isSettledTopupCheckout(session.mode, session.payment_status)) {
+            // Korabban itt egy throw futott, ami 'failed'-kent zarta le az
+            // esemenyt — az azonban felrevezeto volt: az incidenskezeles minden
+            // 'failed' checkout.session.completed-et azonnali incidensnek
+            // tekint, holott egy nem fizetett checkout nem hiba, csak szandekosan
+            // kihagyott. Card-only Checkout mellett ez is vedekezo ag.
+            skipReason = resolveTopupSkipReason(session.payment_status)
+            break
+          }
           const pkg = session.metadata?.package as TopupKey
           const topupConfig = TOPUPS[pkg]
           if (!topupConfig) break
@@ -218,8 +244,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const completionUpdate = skipReason
+      ? { status: 'skipped', skip_reason: skipReason, processed_at: new Date().toISOString() }
+      : { status: 'completed', processed_at: new Date().toISOString() }
+
     const { data: completedEvent, error: completionError } = await admin.from('stripe_webhook_events')
-      .update({ status: 'completed', processed_at: new Date().toISOString() })
+      .update(completionUpdate)
       .eq('event_id', event.id).eq('status', 'processing').select('event_id').single()
     if (completionError || !completedEvent) throw completionError || new Error('Webhook completion status update failed')
   } catch (err: any) {

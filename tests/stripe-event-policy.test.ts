@@ -3,7 +3,10 @@ import {
   canClaimFailedWebhook,
   getInvoiceSubscriptionId,
   isInitialSubscriptionInvoice,
+  isSettledSubscriptionCheckout,
   isSettledTopupCheckout,
+  resolveSubscriptionSkipReason,
+  resolveTopupSkipReason,
 } from '@/lib/stripe-event-policy'
 
 describe('Stripe event policy', () => {
@@ -34,5 +37,29 @@ describe('Stripe event policy', () => {
     expect(isInitialSubscriptionInvoice('subscription_create')).toBe(true)
     expect(isInitialSubscriptionInvoice('subscription_cycle')).toBe(false)
     expect(isInitialSubscriptionInvoice(null)).toBe(false)
+  })
+
+  it('credits subscription checkouts only when payment_status is exactly paid', () => {
+    expect(isSettledSubscriptionCheckout('paid')).toBe(true)
+    expect(isSettledSubscriptionCheckout('unpaid')).toBe(false)
+    expect(isSettledSubscriptionCheckout('no_payment_required')).toBe(false)
+    expect(isSettledSubscriptionCheckout(null)).toBe(false)
+    expect(isSettledSubscriptionCheckout(undefined)).toBe(false)
+    // Whitelist, not blacklist: an unrecognized future Stripe status must also be unsettled.
+    expect(isSettledSubscriptionCheckout('some_future_status')).toBe(false)
+  })
+
+  it('maps subscription checkout payment_status to a closed skip-reason set', () => {
+    expect(resolveSubscriptionSkipReason('unpaid')).toBe('unpaid_subscription_checkout')
+    expect(resolveSubscriptionSkipReason('no_payment_required')).toBe('no_payment_required_subscription')
+    expect(resolveSubscriptionSkipReason('some_future_status')).toBe('unsupported_payment_status')
+    expect(resolveSubscriptionSkipReason(null)).toBe('unsupported_payment_status')
+  })
+
+  it('maps top-up checkout payment_status to a closed skip-reason set', () => {
+    expect(resolveTopupSkipReason('unpaid')).toBe('unpaid_topup_checkout')
+    expect(resolveTopupSkipReason('no_payment_required')).toBe('no_payment_required_topup')
+    expect(resolveTopupSkipReason('some_future_status')).toBe('unsupported_topup_payment_status')
+    expect(resolveTopupSkipReason(null)).toBe('unsupported_topup_payment_status')
   })
 })

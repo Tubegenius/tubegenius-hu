@@ -56,6 +56,11 @@ export async function POST(req: NextRequest) {
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: 'subscription',
+      // Card-only, szandekosan: kizarja a Dashboard dinamikus/delayed
+      // fizetesi modjait (pl. SEPA, OXXO), amik payment_status='unpaid'-del
+      // completed-elnek es csak kesobb, kulon async_payment_succeeded
+      // esemennyel fizetodnenek ki — ezt a webhook jelenleg nem kezeli.
+      payment_method_types: ['card'],
       line_items: [{ price: planConfig.priceId, quantity: 1 }],
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?success=true`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?canceled=true`,
