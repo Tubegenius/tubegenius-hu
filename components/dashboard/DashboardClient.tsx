@@ -1171,8 +1171,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   }
 
   async function loadOpportunities(cacheOnly = false, forceRefresh = false) {
-    if (!profile?.niche) { console.log('[Dashboard] No niche, skipping'); return }
-    console.log(`[Dashboard] loadOpportunities cacheOnly=${cacheOnly} forceRefresh=${forceRefresh} niche="${profile.niche}"`)
+    if (!profile?.niche) return
     setLoading(true)
     setOpportunityMessage(null)
     setOpportunityError(null)
@@ -1223,10 +1222,8 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       }
 
       const allTopics = (data.topics || []) as DashboardOpportunityTopic[]
-      console.log(`[Dashboard] API response: ${allTopics.length} topics, cached: ${data.cached}, charged: ${data.charged}, credits: ${data.credits_charged}`)
 
       if (cacheOnly && allTopics.length === 0 && !forceRefresh) {
-        console.log('[Dashboard] Cache empty (possible engine version change), retrying with fresh search')
         loadOpportunities(false, false)
         return
       }
