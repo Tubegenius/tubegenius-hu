@@ -12,6 +12,7 @@ import {
   type TrendCandidate,
 } from '@/lib/trend-radar'
 import { createRequestBudgetContext } from '@/lib/youtube-service'
+import { captureOpportunitySignals } from '@/lib/emerging-signal/capture'
 import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion, recommendedFormatForExpansion, hookPatternForExpansion } from '@/lib/topic-expansion'
 import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection, type BroadDiscoveryPack } from '@/lib/broad-niche-discovery'
 import { buildNicheExpansion } from '@/lib/niche-expansion'
@@ -574,10 +575,18 @@ export async function POST(request: NextRequest) {
     if (trendCacheReadError) throw new Error(`Trend candidate cache read failed: ${trendCacheReadError.message}`)
 
     let trendCandidates: TrendCandidate[]
+    // Emerging Signal capture (PFM-2B) csak FRISSEN szamolt TrendCandidate-
+    // eken fut, cache-hitkor nem — egy cache-hit nem uj mereset jelent,
+    // hanem egy korabbi (esetleg orak elotti) meres visszajatszasat; ha
+    // ilyenkor is irnank observation-t `bucket_start=most`-tal, az hamisan
+    // azt allitana, hogy EPP MOST mertunk, holott az ertek regi. Ld. a
+    // PFM-2B zarojelentes "cache-hit dontes" szekciojat.
+    let isFreshTrendData = false
 
     if (cachedTrend && !force_refresh) {
       trendCandidates = cachedTrend.candidates as TrendCandidate[]
     } else {
+      isFreshTrendData = true
       if (broadDiscoveryPacks.length > 0) {
         const broadResults = await Promise.all(broadDiscoveryPacks.map(pack =>
           buildTrendCandidates({
@@ -632,6 +641,23 @@ export async function POST(request: NextRequest) {
           generated_at: new Date().toISOString(),
           expires_at: new Date(Date.now() + cacheHours * 3600000).toISOString(),
         })
+      }
+    }
+
+    // Emerging Signal capture (PFM-2B) — best-effort, awaited, nulla uj
+    // kulso hivas: kizarolag a MAR elkeszult trendCandidates-t es a mar
+    // meglevo budgetContext.requestId-t olvassa. Hibaja nem valtoztathatja
+    // meg a valasz HTTP statuszat vagy payloadjat — ezert sajat try/catch
+    // vedi, es a captureOpportunitySignals() maga sem dob (mindig egy
+    // eredmeny-objektumot ad vissza), ez a catch csak vedekezo tobbletreteg.
+    if (isFreshTrendData) {
+      try {
+        const captureResult = await captureOpportunitySignals({ candidates: trendCandidates, requestId: budgetContext.requestId })
+        if (captureResult.outcome === 'failed') {
+          console.error(`[Opportunity] Emerging signal capture run failed (non-blocking): completed=${captureResult.clustersCompleted} skipped=${captureResult.clustersSkipped} failed=${captureResult.clustersFailed}`)
+        }
+      } catch {
+        console.error('[Opportunity] Emerging signal capture threw unexpectedly (non-blocking)')
       }
     }
 
