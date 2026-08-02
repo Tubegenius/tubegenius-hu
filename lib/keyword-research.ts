@@ -4,7 +4,7 @@
 // Cel: ne csak SEO-lista legyen, hanem creator dontesi eszkoz — valos
 // YouTube+web jelekbol, nem talalt szamokbol.
 
-import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
+import { youtubeSearch, youtubeStats, createRequestBudgetContext } from '@/lib/youtube-service'
 import type { YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import { fetchExternal } from '@/lib/external-fetch'
 
@@ -12,15 +12,19 @@ const SERPER_API_KEY = process.env.SERPER_API_KEY
 
 // Megosztott YouTube-adatgyujto — a Keyword Research es a Content Gap Finder
 // (Phase 2 #1 es #10) is ugyanezt hasznalja egy kulcsszo/tema valos
-// YouTube-jelenletenek felmereserehez.
+// YouTube-jelenletenek felmereserehez. Egyetlen, sajat contextet hoz letre
+// erre a ket (kereses + stats) hivasra — igy a hivo (content-gap/keyword-
+// research route) nem kell tudjon a budget-context letezeserol, de a ket
+// belso hivas megis ugyanazt a contextet osztja meg.
 export async function fetchSeedVideoStats(seedKeyword: string, region: string): Promise<{ videos: YouTubeVideoStats[]; totalResults: number }> {
+  const context = createRequestBudgetContext()
   const regionCode = region === 'HU' ? 'HU' : 'US'
   const language = region === 'HU' ? 'hu' : 'en'
-  const items = await youtubeSearch(seedKeyword, regionCode, language, 365, 25, 'manualTopicSearch')
+  const items = await youtubeSearch(seedKeyword, regionCode, language, 365, 25, 'manualTopicSearch', context)
   if (items.length === 0) return { videos: [], totalResults: 0 }
 
   const videoIds = items.map(i => i.id.videoId)
-  const statsMap = await youtubeStats(videoIds)
+  const statsMap = await youtubeStats(videoIds, context)
 
   const videos: YouTubeVideoStats[] = items.map(item => {
     const stats = statsMap.get(item.id.videoId)

@@ -7,7 +7,7 @@ import type { SimilarVideo } from '@/types'
 import { getUserId, logUsage, chargeFeature, checkPaidFeatureAccess, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 import type { ViralScoreResult, ViralScoreConfidence } from '@/types'
-import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
+import { youtubeSearch, youtubeStats, createRequestBudgetContext } from '@/lib/youtube-service'
 import { fetchSerperNews, computeSerperFreshness, getSerperHealthStatus, type SerperResult } from '@/lib/trend-radar'
 import { buildViralScoreHash, normalizeTopic, cacheStatusFor, getCachedViralScore, touchLastOpened, saveViralScoreResult } from '@/lib/viral-score-cache'
 import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
@@ -74,11 +74,11 @@ function isTopicRelevant(text: string, words: string[]): boolean {
 // feltetelezett webskalahoz, kulonben a sub-score soha nem tud magas erteket adni.
 const MAX_REALISTIC_RESULTS = 40
 
-async function fetchYouTubeData(topic: string, region: string) {
+async function fetchYouTubeData(topic: string, region: string, context: ReturnType<typeof createRequestBudgetContext>) {
   const regionCode = region === 'HU' ? 'HU' : region === 'US' ? 'US' : 'HU'
   const language = region === 'HU' ? 'hu' : 'en'
 
-  const items = await youtubeSearch(topic, regionCode, language, 180, MAX_REALISTIC_RESULTS, 'manualTopicSearch')
+  const items = await youtubeSearch(topic, regionCode, language, 180, MAX_REALISTIC_RESULTS, 'manualTopicSearch', context)
   if (items.length === 0) return null
 
   const words = topicRelevanceWords(topic)
@@ -86,7 +86,7 @@ async function fetchYouTubeData(topic: string, region: string) {
   if (relevantItems.length === 0) return null
 
   const videoIds = relevantItems.map(item => item.id.videoId)
-  const statsMap = await youtubeStats(videoIds)
+  const statsMap = await youtubeStats(videoIds, context)
 
   return {
     videos: relevantItems,
@@ -347,8 +347,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Nincs elegendő kredited ehhez a művelethez.' }, { status: 402 })
     }
 
+    // Egyetlen, a teljes kereshez tartozo koltseg/health-context — a YouTube
+    // es a Serper hivas is ugyanezt hasznalja (ld. lib/youtube-service.ts
+    // RequestBudgetContext).
+    const budgetContext = createRequestBudgetContext()
+
     // YouTube adatok lekérése
-    const ytData = await fetchYouTubeData(topic, region || 'HU')
+    const ytData = await fetchYouTubeData(topic, region || 'HU', budgetContext)
     // Csak olyan találat bizonyíték, amelyhez valódi, ép stats rekord is érkezett.
     const videoStats: YouTubeVideoStats[] = (ytData?.videos || []).flatMap((v: { id: { videoId: string }; snippet: { title: string; channelTitle: string; publishedAt: string; thumbnails: { medium?: { url: string }; default?: { url: string } } } }) => {
       const statsItem = (ytData?.stats || []).find((s: { id: string }) => s.id === v.id.videoId)
@@ -426,10 +431,10 @@ export async function POST(request: NextRequest) {
     // nem bántjuk, csak kiegészítjük velük (lásd calcBackendViralScore). Ha a
     // Serper API nem elérhető, webBuzzScore marad null, és a formula az
     // eredeti, tisztán YouTube-alapú súlyozásra esik vissza.
-    const rawSerperResults = await fetchSerperNews(topic, region || 'HU')
+    const rawSerperResults = await fetchSerperNews(topic, region || 'HU', budgetContext)
     const topicWords = topicRelevanceWords(topic)
     const serperResults = rawSerperResults.filter(r => isTopicRelevant(`${r.title} ${r.snippet}`, topicWords))
-    const serperHealth = getSerperHealthStatus()
+    const serperHealth = getSerperHealthStatus(budgetContext)
     const webBuzzScore = serperHealth.unavailable ? null : calcWebBuzzScore(serperResults)
 
     // ─── Backend számolja a score-t — ugyanazokkal a komponensekkel mint az Opportunity Engine ───

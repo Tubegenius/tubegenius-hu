@@ -9,7 +9,7 @@
 // törheti el a hívó fő funkciót (mentés, csomaggenerálás, opportunity lekérés).
 
 import { createServerClient } from '@supabase/ssr'
-import { youtubeStats } from '@/lib/youtube-service'
+import { youtubeStats, createRequestBudgetContext, type RequestBudgetContext } from '@/lib/youtube-service'
 import { classifyTrendVelocity } from '@/lib/trend-alerts'
 
 function adminClient() {
@@ -115,6 +115,10 @@ const FAILURE_RETRY_HOURS = 1
 export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise<RefreshResult> {
   const result: RefreshResult = { processed: 0, updated: 0, failed: 0, skipped: 0 }
   const admin = adminClient()
+  // Egyetlen, a teljes cron-futasra vonatkozo context — a batch-ben szereplo
+  // OSSZES candidate stats-hivasa ebbe aggregalodik, nem candidate-enkent
+  // ujraindulva (ld. lib/youtube-service.ts RequestBudgetContext).
+  const context = createRequestBudgetContext()
 
   let due: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null }[] = []
   try {
@@ -135,7 +139,7 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
   for (const candidate of due) {
     result.processed++
     try {
-      await refreshOneCandidate(admin, candidate)
+      await refreshOneCandidate(admin, candidate, context)
       result.updated++
     } catch (e) {
       result.failed++
@@ -156,6 +160,7 @@ export async function refreshDueCandidates(limit = DEFAULT_BATCH_LIMIT): Promise
 async function refreshOneCandidate(
   admin: ReturnType<typeof adminClient>,
   candidate: { id: string; candidate_topic: string; youtube_video_ids: string[]; web_source_ids?: unknown[]; created_at: string; opportunity_score: number | null; confidence: string | null },
+  context: RequestBudgetContext,
   resetBaseline = false,
 ) {
   const videoIds = (candidate.youtube_video_ids || []).filter(Boolean)
@@ -166,7 +171,7 @@ async function refreshOneCandidate(
   let relevantCount = 0
 
   if (videoIds.length > 0) {
-    const stats = await youtubeStats(videoIds)
+    const stats = await youtubeStats(videoIds, context)
     for (const item of stats.values()) {
       relevantCount++
       totalViews += Number(item.statistics?.viewCount || 0)
@@ -249,5 +254,5 @@ export async function refreshTrackedCandidateNow(candidateId: string, options?: 
     throw new Error('Tracked candidate not found')
   }
 
-  await refreshOneCandidate(admin, candidate, options?.resetBaseline === true)
+  await refreshOneCandidate(admin, candidate, createRequestBudgetContext(), options?.resetBaseline === true)
 }

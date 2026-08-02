@@ -8,7 +8,7 @@ import {
   type YouTubeVideoStats,
 } from '@/lib/opportunity-scoring'
 import { decideSimilarVideo } from '@/lib/scoring/willviral-decision-engine'
-import { youtubeSearch, youtubeStats, getEffectiveBudget, quotaSummary, startNewRequest, type YouTubeSearchItem as YTSearchItem, type YouTubeStatsItem as YTStatsItem } from '@/lib/youtube-service'
+import { youtubeSearch, youtubeStats, getEffectiveBudget, quotaSummary, createRequestBudgetContext, type RequestBudgetContext, type YouTubeSearchItem as YTSearchItem, type YouTubeStatsItem as YTStatsItem } from '@/lib/youtube-service'
 import { generateSimilarVideoQueries } from '@/lib/similar-query-expansion'
 import { calculateNicheFit } from '@/lib/niche-fit'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
@@ -430,16 +430,16 @@ function calcNicheFit(video: { title: string; description?: string; channelTitle
   return { score: 0, label: 'Nem niche-specifikus', reason: `Nem kapcsolódik közvetlenül: ${niche}. Globálisan érdekes, de adaptálni kell.` }
 }
 
-async function fetchYouTube(query: string, region: Region, publishedAfterDays: number, maxResults: number) {
+async function fetchYouTube(query: string, region: Region, publishedAfterDays: number, maxResults: number, context: RequestBudgetContext) {
   const regionCode = region === 'US' ? 'US' : 'HU'
   const lang = region === 'US' ? 'en' : 'hu'
-  return youtubeSearch(query, regionCode, lang, publishedAfterDays, maxResults, 'similarVideos')
+  return youtubeSearch(query, regionCode, lang, publishedAfterDays, maxResults, 'similarVideos', context)
 }
 
-async function hydrateStats(items: YouTubeSearchItem[]) {
+async function hydrateStats(items: YouTubeSearchItem[], context: RequestBudgetContext) {
   const ids = unique(items.map(item => item.id.videoId))
   if (ids.length === 0) return new Map<string, YouTubeStatsItem>()
-  return youtubeStats(ids)
+  return youtubeStats(ids, context)
 }
 
 function safeYouTubeCount(value: string | undefined): number {
@@ -577,7 +577,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    startNewRequest(`similar-${Date.now()}`)
+    const budgetContext = createRequestBudgetContext()
     let regionCode: Region = region === 'US' ? 'US' : 'HU'
     const topicIsEnglish = !looksHungarian(topic) && /^[a-zA-Z0-9\s\-.,!?'"()]+$/.test(topic.trim())
     if (regionCode === 'HU' && topicIsEnglish) {
@@ -597,7 +597,7 @@ export async function POST(request: NextRequest) {
     const allResults = await Promise.all(queries.map(async query => {
       const isEnQuery = /^[a-zA-Z0-9\s\-.,!?'"()]+$/.test(query.trim())
       const queryRegion: Region = isEnQuery ? 'US' : regionCode
-      const items = await fetchYouTube(query, queryRegion, 180, 8)
+      const items = await fetchYouTube(query, queryRegion, 180, 8, budgetContext)
       return items.map(item => ({ ...item, query }))
     }))
     let searchItems = allResults.flat()
@@ -605,7 +605,7 @@ export async function POST(request: NextRequest) {
     // Ha kevés eredmény, bővítjük 365 napra
     if (searchItems.length < 4 && queries.length > 0) {
       freshness_window_days = 365
-      const fallbackItems = await fetchYouTube(queries[0], regionCode === 'HU' && topicIsEnglish ? 'US' : regionCode, 365, 10)
+      const fallbackItems = await fetchYouTube(queries[0], regionCode === 'HU' && topicIsEnglish ? 'US' : regionCode, 365, 10, budgetContext)
       searchItems = [...searchItems, ...fallbackItems.map(item => ({ ...item, query: queries[0] }))]
     }
 
@@ -615,7 +615,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ videos: [], queries_used: queries, freshness_window_days, debug: { searchItems: searchItems.length, region: regionCode, topicIsEnglish } })
     }
 
-    const statsMap = await hydrateStats(deduped)
+    const statsMap = await hydrateStats(deduped, budgetContext)
     const baseVideos = deduped.map(item => {
       const stats = statsMap.get(item.id.videoId)
       return {

@@ -5,7 +5,7 @@
 
 import type { NicheCategory } from './niche-seeds'
 
-import { youtubeSearch, youtubeStats, getEffectiveBudget, startNewRequest, type YouTubeSearchItem as YTSearchItem } from './youtube-service'
+import { youtubeSearch, youtubeStats, getEffectiveBudget, type RequestBudgetContext, type YouTubeSearchItem as YTSearchItem } from './youtube-service'
 import { recordVideoSnapshots, recordTrendCandidates } from './youtube-snapshot'
 import { callAIProvider, extractJson } from './services/ai-provider-service'
 import { MODELS } from './models'
@@ -20,29 +20,62 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!
 // nézett ki, mintha "nincs friss trend" vagy "túl tág niche" lenne, holott
 // valójában a web-evidence pipeline volt leállva. Ezt most követjük, hogy
 // a hívó (opportunity route) meg tudja különböztetni a két esetet.
-let serperAttempts = 0
-let serperFailures = 0
-let serperLastErrorMessage: string | null = null
+//
+// Request-szkopolt (a RequestBudgetContext-en el, lib/youtube-service.ts) —
+// korabban ez is modul-szintu (serperAttempts/serperFailures/
+// serperLastErrorMessage) valtozo volt, ugyanazzal a packek/userek kozotti
+// keveredesi kockazattal, mint a YouTube budget (ld. RequestBudgetContext
+// dokumentacioja). Mind az 5 broad-discovery pack ugyanabba a megosztott
+// contextbe irja a sajat Serper-kiserleteit, igy a health-allapot a teljes
+// HTTP requestre aggregalodik, nem packenkent/veletlenszeruen nullazodva.
+// Az attempts/failures szamlalok onmagukban nem kulonboztetik meg a "meg
+// nem probaltuk" es a "hianyzik a kulcs, ezert soha nem is probalkozunk"
+// esetet — mindketto attempts=0-t ad. Korabban ez azt jelentette, hogy
+// SERPER_API_KEY hianyaban a health status latszolag "egeszsegesnek"
+// (unavailable:false) tunt, es a hivo (opportunity route) ezt osszekeverte
+// a "nincs eleg friss trend" niche-mineosegi kovetkeztetessel — holott a
+// valodi ok egy konfiguracios hiany volt, nem a niche gyengesege.
+export type SerperHealthState =
+  | 'available'        // volt legalabb 1 kiserlet, egy sem hibazott
+  | 'partial_failure'  // volt legalabb 1 kiserlet, resz szerint hibaztak
+  | 'unavailable'      // volt legalabb 1 kiserlet, MIND hibazott
+  | 'not_configured'   // SERPER_API_KEY hianyzik — soha nem is probalkozhatott
+  | 'not_attempted'    // kulcs van, de ebben a requestben meg nem hivtuk
 
-export function resetSerperHealth() {
-  serperAttempts = 0
-  serperFailures = 0
-  serperLastErrorMessage = null
+export interface SerperHealthStatus {
+  state: SerperHealthState
+  // Visszafele kompatibilis mezo a meglevo hivoknak (opportunity/viral-score
+  // route) — true a ket "nincs hasznalhato web-evidence" allapotra
+  // (unavailable ES not_configured), false a tobbire.
+  unavailable: boolean
+  attempts: number
+  failures: number
+  lastError: string | null
 }
 
-export function getSerperHealthStatus(): { unavailable: boolean; attempts: number; failures: number; lastError: string | null } {
-  // "unavailable" — ha volt legalább egy hívás, és MIND hibázott
-  const unavailable = serperAttempts > 0 && serperFailures === serperAttempts
-  return { unavailable, attempts: serperAttempts, failures: serperFailures, lastError: serperLastErrorMessage }
+export function getSerperHealthStatus(context: RequestBudgetContext): SerperHealthStatus {
+  if (!SERPER_API_KEY) {
+    return { state: 'not_configured', unavailable: true, attempts: context.serperAttempts, failures: context.serperFailures, lastError: context.lastSerperError }
+  }
+  if (context.serperAttempts === 0) {
+    return { state: 'not_attempted', unavailable: false, attempts: 0, failures: 0, lastError: null }
+  }
+  if (context.serperFailures === 0) {
+    return { state: 'available', unavailable: false, attempts: context.serperAttempts, failures: 0, lastError: context.lastSerperError }
+  }
+  if (context.serperFailures === context.serperAttempts) {
+    return { state: 'unavailable', unavailable: true, attempts: context.serperAttempts, failures: context.serperFailures, lastError: context.lastSerperError }
+  }
+  return { state: 'partial_failure', unavailable: false, attempts: context.serperAttempts, failures: context.serperFailures, lastError: context.lastSerperError }
 }
 
-function recordSerperAttempt() {
-  serperAttempts++
+function recordSerperAttempt(context: RequestBudgetContext) {
+  context.serperAttempts++
 }
 
-function recordSerperFailure(message: string) {
-  serperFailures++
-  serperLastErrorMessage = message
+function recordSerperFailure(context: RequestBudgetContext, message: string) {
+  context.serperFailures++
+  context.lastSerperError = message
   console.warn(`[Serper] hiba: ${message}`)
 }
 
@@ -109,9 +142,9 @@ export interface TrendCandidate {
 
 // ── Serper API hívások ────────────────────────────────────────
 
-export async function fetchSerperNews(query: string, region: string): Promise<SerperResult[]> {
+export async function fetchSerperNews(query: string, region: string, context: RequestBudgetContext): Promise<SerperResult[]> {
   if (!SERPER_API_KEY) return []
-  recordSerperAttempt()
+  recordSerperAttempt(context)
   try {
     const gl = region === 'HU' ? 'hu' : 'us'
     const hl = region === 'HU' ? 'hu' : 'en'
@@ -122,7 +155,7 @@ export async function fetchSerperNews(query: string, region: string): Promise<Se
     })
     const data = await res.json()
     if (!res.ok || data.statusCode || data.message) {
-      recordSerperFailure(data.message || `HTTP ${res.status}`)
+      recordSerperFailure(context, data.message || `HTTP ${res.status}`)
       return []
     }
     return (data.news || []).map((item: { title?: string; link?: string; snippet?: string; date?: string; source?: string }) => {
@@ -143,14 +176,14 @@ export async function fetchSerperNews(query: string, region: string): Promise<Se
       }
     })
   } catch (e) {
-    recordSerperFailure(e instanceof Error ? e.message : 'network error')
+    recordSerperFailure(context, e instanceof Error ? e.message : 'network error')
     return []
   }
 }
 
-async function fetchSerperWeb(query: string, region: string): Promise<SerperResult[]> {
+async function fetchSerperWeb(query: string, region: string, context: RequestBudgetContext): Promise<SerperResult[]> {
   if (!SERPER_API_KEY) return []
-  recordSerperAttempt()
+  recordSerperAttempt(context)
   try {
     const gl = region === 'HU' ? 'hu' : 'us'
     const hl = region === 'HU' ? 'hu' : 'en'
@@ -161,7 +194,7 @@ async function fetchSerperWeb(query: string, region: string): Promise<SerperResu
     })
     const data = await res.json()
     if (!res.ok || data.statusCode || data.message) {
-      recordSerperFailure(data.message || `HTTP ${res.status}`)
+      recordSerperFailure(context, data.message || `HTTP ${res.status}`)
       return []
     }
     return (data.organic || []).slice(0, 5).map((item: { title?: string; link?: string; snippet?: string; date?: string; displayLink?: string }) => ({
@@ -172,7 +205,7 @@ async function fetchSerperWeb(query: string, region: string): Promise<SerperResu
       source: item.displayLink,
     }))
   } catch (e) {
-    recordSerperFailure(e instanceof Error ? e.message : 'network error')
+    recordSerperFailure(context, e instanceof Error ? e.message : 'network error')
     return []
   }
 }
@@ -184,13 +217,14 @@ async function fetchYouTubeForTopic(
   regionCode: string,
   relevanceLanguage: string,
   publishedAfterDays: number,
+  context: RequestBudgetContext,
   maxResults = 8,
 ): Promise<YouTubeVideoRaw[]> {
-  const items = await youtubeSearch(query, regionCode, relevanceLanguage, publishedAfterDays, maxResults, 'opportunityEngine')
+  const items = await youtubeSearch(query, regionCode, relevanceLanguage, publishedAfterDays, maxResults, 'opportunityEngine', context)
   if (items.length === 0) return []
 
   const videoIds = items.map(i => i.id.videoId)
-  const statsMap = await youtubeStats(videoIds)
+  const statsMap = await youtubeStats(videoIds, context)
 
   return items.map(item => {
     const stats = statsMap.get(item.id.videoId)
@@ -313,9 +347,12 @@ function isBadSearchQuery(query: string): boolean {
 // ── Haiku-alapú query rewrite — CSAK query rövidítés, nem trendgenerálás ──
 // Költségvédelem: max HAIKU_REWRITE_BUDGET hívás egy Opportunity Engine/Trend
 // Radar futásban, és in-memory cache, hogy ugyanarra a hírcímre ne hívjuk
-// újra (cache kulcs: title+language+region hash).
-const HAIKU_REWRITE_BUDGET = 8
-let haikuRewriteUsedThisRequest = 0
+// újra (cache kulcs: title+language+region hash). A hívásszám-korlát a
+// RequestBudgetContext.haikuRewriteCount-ban él (nem modul-szintu allapotban,
+// lasd lib/youtube-service.ts hasonlo javitasa) — a cache viszont szandekosan
+// modul-szintu marad, mint a YouTube search cache: ez publikus, nem
+// felhasznalo-specifikus adat, megosztasa kerek kozott helyes.
+export const HAIKU_REWRITE_BUDGET = 8
 
 interface HaikuRewriteResult {
   display_topic: string
@@ -337,27 +374,24 @@ function haikuRewriteCacheKey(title: string, language: string, region: string): 
   return `${language}:${region}:${simpleHash(title)}`
 }
 
-export function resetHaikuRewriteBudget() {
-  haikuRewriteUsedThisRequest = 0
-}
-
-async function rewriteTopicWithHaiku(
+export async function rewriteTopicWithHaiku(
   originalTitle: string,
   snippet: string,
   mainCategory: string,
   specificFocus: string,
   region: 'HU' | 'US',
   language: string,
+  context: RequestBudgetContext,
   onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void,
 ): Promise<HaikuRewriteResult | null> {
   const cacheKey = haikuRewriteCacheKey(originalTitle, language, region)
   const cached = haikuRewriteCache.get(cacheKey)
   if (cached) return cached
 
-  if (haikuRewriteUsedThisRequest >= HAIKU_REWRITE_BUDGET) return null
+  if (context.haikuRewriteCount >= HAIKU_REWRITE_BUDGET) return null
   if (!ANTHROPIC_API_KEY) return null
 
-  haikuRewriteUsedThisRequest++
+  context.haikuRewriteCount++
 
   const prompt = `Feladatod KIZÁRÓLAG query rövidítés — NEM trendkeresés, NEM validálás, NEM új tény kitalálása.
 
@@ -437,6 +471,7 @@ async function extractTrendTopicsFromSerper(
   seedKeyword: string,
   region: 'HU' | 'US',
   freshnessWindowDays: number,
+  context: RequestBudgetContext,
   mainCategory = '',
   specificFocus = '',
   language = 'hu',
@@ -555,6 +590,7 @@ async function extractTrendTopicsFromSerper(
       specificFocus,
       region,
       language,
+      context,
       onAIUsage,
     )
     if (rewritten) {
@@ -852,12 +888,16 @@ export interface TrendRadarInput {
   specificFocus?: string
   language?: string
   onAIUsage?: (usage: { inputTokens: number; outputTokens: number; estimatedCost: number }) => void
+  // Kotelezo — a hivo (jelenleg kizarolag app/api/opportunity/route.ts) hozza
+  // letre EGYSZER a teljes HTTP requestre, es ugyanazt a peldanyt adja at
+  // minden buildTrendCandidates hivasnak (beleertve mind az 5 broad-discovery
+  // packet) — igy a YouTube/Haiku/Serper koltsegkeret es health-allapot a
+  // teljes requestre aggregalodik, nem hivasonkent/packenkent nullazodik.
+  context: RequestBudgetContext
 }
 
 export async function buildTrendCandidates(input: TrendRadarInput): Promise<TrendCandidate[]> {
-  startNewRequest(`trend-${Date.now()}`)
-  resetSerperHealth()
-  resetHaikuRewriteBudget()
+  const context = input.context
   const { seeds, category, region, freshnessWindowDays, maxCandidates = 6, discoveryMode = 'trend', mainCategory = '', specificFocus = '', language = region === 'HU' ? 'hu' : 'en' } = input
   const regionCode = region === 'HU' ? 'HU' : 'US'
   const relevanceLanguage = region === 'HU' ? 'hu' : 'en'
@@ -877,8 +917,8 @@ export async function buildTrendCandidates(input: TrendRadarInput): Promise<Tren
     const batchResults = await Promise.all(
       batch.map(async seed => {
         const [serperNews, serperWeb] = await Promise.all([
-          fetchSerperNews(seed, region),
-          fetchSerperWeb(seed, region),
+          fetchSerperNews(seed, region, context),
+          fetchSerperWeb(seed, region, context),
         ])
         return { seed, serperResults: [...serperNews, ...serperWeb] }
       })
@@ -895,7 +935,7 @@ export async function buildTrendCandidates(input: TrendRadarInput): Promise<Tren
   for (const { seed, serperResults } of seedResults) {
     if (serperResults.length === 0) continue
 
-    const extractedTopics = await extractTrendTopicsFromSerper(serperResults, seed, region, freshnessWindowDays, mainCategory, specificFocus, language, input.onAIUsage)
+    const extractedTopics = await extractTrendTopicsFromSerper(serperResults, seed, region, freshnessWindowDays, context, mainCategory, specificFocus, language, input.onAIUsage)
 
     for (const topic of extractedTopics.slice(0, 2)) { // max 2 topic per seed
       topicsToValidate.push({ seed, topic, serperResults })
@@ -952,7 +992,7 @@ export async function buildTrendCandidates(input: TrendRadarInput): Promise<Tren
 
       let youtubeVideos: Awaited<ReturnType<typeof fetchYouTubeForTopic>> = []
       for (const q of queriesToTry) {
-        youtubeVideos = await fetchYouTubeForTopic(q, ytRegion, ytLang, freshnessWindowDays, 8)
+        youtubeVideos = await fetchYouTubeForTopic(q, ytRegion, ytLang, freshnessWindowDays, context, 8)
         if (youtubeVideos.length > 0) break
       }
 

@@ -82,29 +82,75 @@ export function getEffectiveBudget(endpoint: EndpointType): number {
   return baseBudget
 }
 
-// Per-request budget tracking
-let currentRequestId = ''
-const requestSearchCounts = new Map<string, number>()
-
-export function startNewRequest(requestId: string) {
-  currentRequestId = requestId
-  requestSearchCounts.set(requestId, 0)
+// ── Per-request budget context ──────────────────────────────
+// Korabban ez modul-szintu, megosztott mutabilis allapot volt
+// (currentRequestId/requestSearchCounts) — egyetlen kozos valtozo, amit
+// barmelyik konkurens hivas felulirhatott. Broad discovery modban (5 pack
+// egyidejuleg, Promise.all-lal) ez bizonyithatoan packek kozotti
+// budget-keveredest okozott: mind az 5 pack szinkron hivta a
+// startNewRequest()-et (meg az elso await elott), igy mire barmelyik pack
+// folytatasa lefutott, a megosztott "aktualis kereses" mar egy MASIK
+// pak-e volt. Ugyanez a mintazat elvben barmely ket konkurens felhasznaloi
+// requestet is erintette, ha a runtime egy meleg instance-ot ujrahasznalt.
+//
+// A javitas: nincs tobb modul-szintu "aktualis kereses" valtozo. Minden
+// hivo egy explicit, sajat RequestBudgetContext-et hoz letre — ez egy sima
+// objektum, nem megosztott allapot, tehat konkurens hivasok kozott
+// termeszetesen izolalt.
+//
+// FONTOS — a context KOTELEZO parameter youtubeSearch/youtubeStats-on
+// (nincs tobb "ha nem adsz at, csinalok egyet" fallback): egy korabbi
+// valtozat opcionalis, alapertelmezett contextet adott, ha a hivo nem
+// adott sajatot — ez azonban pontosan azt a hibaosztalyt engedte volna
+// vissza csusszani, amit ez a fix ki akar zarni: egy tobblepeses muvelet
+// (pl. kereses + stats, vagy egy ciklus tobb elemen) VELETLENUL minden
+// egyes hivasnal uj, egymastol izolalt contextet kaphatott volna, ha a
+// hivo elfelejti expliciten megadni es megosztani a sajatjat — ekkor a
+// budget/megfigyeles latszolag mukodne, de hivasonkent nullazodna, nem a
+// teljes logikai muveletre (pl. egy HTTP request) osszesitve. A tsc ezert
+// most minden hivasi helyet kikenyszerit: ha valahol elfelejtenenk atadni
+// a contextet, az fordítási hiba, nem csendes futasidejü hiba.
+export interface RequestBudgetContext {
+  requestId: string
+  createdAt: number
+  youtubeSearchCounts: Partial<Record<EndpointType, number>>
+  youtubeStatsCalls: number
+  cacheHits: number
+  externalAttempts: number
+  backupKeyRetries: number
+  haikuRewriteCount: number
+  // Serper health — request-szkopolt (korabban modul-szintu volt lib/trend-radar.ts-ben,
+  // ugyanazzal a packek/userek kozotti keveredesi kockazattal, mint a YouTube budget).
+  serperAttempts: number
+  serperFailures: number
+  lastSerperError: string | null
 }
 
-function getRequestSearchCount(endpoint: string): number {
-  return requestSearchCounts.get(currentRequestId) || 0
+export function createRequestBudgetContext(requestId?: string): RequestBudgetContext {
+  return {
+    requestId: requestId || `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: Date.now(),
+    youtubeSearchCounts: {},
+    youtubeStatsCalls: 0,
+    cacheHits: 0,
+    externalAttempts: 0,
+    backupKeyRetries: 0,
+    haikuRewriteCount: 0,
+    serperAttempts: 0,
+    serperFailures: 0,
+    lastSerperError: null,
+  }
 }
 
-function recordSearch(endpoint: string) {
+function getRequestSearchCount(context: RequestBudgetContext, endpoint: EndpointType): number {
+  return context.youtubeSearchCounts[endpoint] || 0
+}
+
+function recordSearch(context: RequestBudgetContext, endpoint: EndpointType) {
   resetIfNewDay()
   quotaState.searchCount++
   quotaState.endpointCounts[endpoint] = (quotaState.endpointCounts[endpoint] || 0) + 1
-  requestSearchCounts.set(currentRequestId, (requestSearchCounts.get(currentRequestId) || 0) + 1)
-  // Cleanup old request IDs
-  if (requestSearchCounts.size > 50) {
-    const keys = Array.from(requestSearchCounts.keys())
-    keys.slice(0, keys.length - 20).forEach(k => requestSearchCounts.delete(k))
-  }
+  context.youtubeSearchCounts[endpoint] = (context.youtubeSearchCounts[endpoint] || 0) + 1
 }
 
 function recordStats() {
@@ -311,6 +357,12 @@ export async function youtubeSearch(
   publishedAfterDays: number,
   maxResults: number,
   endpoint: EndpointType,
+  // Kotelezo — lasd a RequestBudgetContext fenti dokumentaciojat: minden
+  // hivo maga hozza letre (egyetlen onallo hivasnal helyben, tobblepeses
+  // muveletnel a hivo fuggveny elejen, egyszer, es azt osztja meg az
+  // osszes belso hivassal). Nincs "ha nem adsz at, csinalok egyet"
+  // alapertelmezes.
+  context: RequestBudgetContext,
   options?: { category?: string },
 ): Promise<YouTubeSearchItem[]> {
   resetIfNewDay()
@@ -319,19 +371,27 @@ export async function youtubeSearch(
   const cacheKey = buildCacheKey(query, regionCode, lang, publishedAfterDays)
   const cached = getCachedSearch(cacheKey)
   if (cached) {
+    context.cacheHits++
     console.log(`[YouTube] Cache hit: "${query}" (${cached.length} items)`)
     return cached
   }
 
-  // Budget check — per request, nem per day
+  // Budget check + foglalas — MEG AZ ELSO await ELOTT, egyetlen szinkron
+  // szakaszban. Ha a szamlalo novelese az await utan tortenne (mint korabban),
+  // tobb, ugyanazt a contextet hasznalo konkurens hivas mind ugyanazt a
+  // (meg nem novelt) "usedThisRequest" erteket olvashatna ki, mielott
+  // barmelyikuk novelne — igy a budget-ellenorzes check-then-act race
+  // miatt tobb hivas is atjuthatna, mint a tenyleges keret. A foglalas itt,
+  // meg az await elott, ezt zarja ki (JS egyszalu vegrehajtasa miatt ez a
+  // szakasz atomikus).
   const budget = getEffectiveBudget(endpoint)
-  const usedThisRequest = getRequestSearchCount(endpoint)
+  const usedThisRequest = getRequestSearchCount(context, endpoint)
   if (usedThisRequest >= budget) {
     console.log(`[YouTube] Budget exhausted for ${endpoint} this request: ${usedThisRequest}/${budget}`)
     return []
   }
 
-  // Quota exhausted — try backup key
+  // Quota exhausted — try backup key (meg mindig szinkron, meg a foglalas elott)
   if (quotaState.quotaExceededAt && !quotaState.usingBackupKey) {
     if (!switchToBackupKey()) {
       console.log('[YouTube] Quota exceeded, no backup key available')
@@ -339,11 +399,21 @@ export async function youtubeSearch(
     }
   }
 
+  recordSearch(context, endpoint)
+
   // Execute search — dev módban ellenőrzi, hogy a primary kulcs él-e
   const apiKey = await ensureActiveKey()
-  if (!apiKey) return []
+  if (!apiKey) {
+    // A foglalast vissza kell vonni — nem tortent tenyleges kiserlet, a
+    // viselkedes (nincs kulcs -> [] es nem szamit bele semmibe) igy marad
+    // pontosan olyan, mint a fixet megelozoen volt.
+    context.youtubeSearchCounts[endpoint] = Math.max(0, (context.youtubeSearchCounts[endpoint] || 1) - 1)
+    quotaState.searchCount = Math.max(0, quotaState.searchCount - 1)
+    quotaState.endpointCounts[endpoint] = Math.max(0, (quotaState.endpointCounts[endpoint] || 1) - 1)
+    return []
+  }
 
-  recordSearch(endpoint)
+  context.externalAttempts++
   const { items, quotaExceeded } = await rawYouTubeSearch(query, regionCode, lang, publishedAfterDays, maxResults, apiKey)
 
   if (quotaExceeded) {
@@ -351,6 +421,8 @@ export async function youtubeSearch(
     // Try backup key in development
     if (!quotaState.usingBackupKey && switchToBackupKey()) {
       const backup = getBackupKey()
+      context.backupKeyRetries++
+      context.externalAttempts++
       const retry = await rawYouTubeSearch(query, regionCode, lang, publishedAfterDays, maxResults, backup)
       if (!retry.quotaExceeded && retry.items.length > 0) {
         setCachedSearch(cacheKey, retry.items, options?.category)
@@ -369,7 +441,11 @@ export async function youtubeSearch(
   return items
 }
 
-export async function youtubeStats(videoIds: string[]): Promise<Map<string, YouTubeStatsItem>> {
+export async function youtubeStats(
+  videoIds: string[],
+  // Kotelezo — ugyanaz az indoklas, mint youtubeSearch-nel fentebb.
+  context: RequestBudgetContext,
+): Promise<Map<string, YouTubeStatsItem>> {
   if (videoIds.length === 0) return new Map()
   const apiKey = getActiveKey()
   if (!apiKey) return new Map()
@@ -377,6 +453,8 @@ export async function youtubeStats(videoIds: string[]): Promise<Map<string, YouT
   const ids = videoIds.join(',')
   try {
     recordStats()
+    context.youtubeStatsCalls++
+    context.externalAttempts++
     const res = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${apiKey}`)
     const data = await res.json()
     if (data.error) {
@@ -385,6 +463,8 @@ export async function youtubeStats(videoIds: string[]): Promise<Map<string, YouT
         recordQuotaExceeded()
         if (!quotaState.usingBackupKey && switchToBackupKey()) {
           const backup = getBackupKey()
+          context.backupKeyRetries++
+          context.externalAttempts++
           const retry = await fetchExternal('YouTube', `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${backup}`)
           const retryData = await retry.json()
           if (!retryData.error) {

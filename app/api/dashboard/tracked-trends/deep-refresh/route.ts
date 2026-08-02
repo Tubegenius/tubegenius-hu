@@ -3,7 +3,7 @@ import { fetchExternal } from '@/lib/external-fetch'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { chargeFeature, checkPaidFeatureAccess, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
-import { youtubeSearch, youtubeStats } from '@/lib/youtube-service'
+import { youtubeSearch, youtubeStats, createRequestBudgetContext } from '@/lib/youtube-service'
 import { recordVideoSnapshots } from '@/lib/youtube-snapshot'
 import { calcSearchRelevance, type YouTubeVideoStats } from '@/lib/opportunity-scoring'
 import { refreshTrackedCandidateNow, sameEvidenceSet } from '@/lib/trend-tracking'
@@ -173,9 +173,10 @@ export async function POST(request: NextRequest) {
   const existingVideoIds = parseVideoIds(row.youtube_video_ids)
   const existingWebSources = parseWebSources(row.web_source_ids)
 
-  const searchItems = await youtubeSearch(topic, settings.youtubeRegion, settings.youtubeLang, 30, 10, 'dashboardRefresh')
+  const budgetContext = createRequestBudgetContext()
+  const searchItems = await youtubeSearch(topic, settings.youtubeRegion, settings.youtubeLang, 30, 10, 'dashboardRefresh', budgetContext)
   const searchIds = searchItems.map(item => item.id?.videoId).filter(Boolean)
-  const stats = await youtubeStats(searchIds)
+  const stats = await youtubeStats(searchIds, budgetContext)
 
   const freshVideos: YouTubeVideoStats[] = searchItems.map(item => {
     const id = item.id.videoId

@@ -11,6 +11,7 @@ import {
   getSerperHealthStatus,
   type TrendCandidate,
 } from '@/lib/trend-radar'
+import { createRequestBudgetContext } from '@/lib/youtube-service'
 import { expandTopicQueries, suggestSpecificTopics, recommendedAngleForExpansion, recommendedFormatForExpansion, hookPatternForExpansion } from '@/lib/topic-expansion'
 import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsForDirection, type BroadDiscoveryPack } from '@/lib/broad-niche-discovery'
 import { buildNicheExpansion } from '@/lib/niche-expansion'
@@ -176,6 +177,11 @@ interface OpportunityRequestBody {
 }
 
 export async function POST(request: NextRequest) {
+  // Egyetlen, a teljes HTTP kereshez tartozo koltseg-context — a broad
+  // discovery 5 pack-je (lentebb, Promise.all) ugyanezt a peldanyt kapja,
+  // igy a YouTube/Haiku budget a teljes requestre ervenyesul, nem
+  // pack-enkent ujraindulva (lasd lib/youtube-service.ts RequestBudgetContext).
+  const budgetContext = createRequestBudgetContext()
   try {
     const parsedBody: unknown = await request.json().catch(() => null)
     if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody)) {
@@ -585,6 +591,7 @@ export async function POST(request: NextRequest) {
             specificFocus: specific_focus || '',
             language: language || 'hu',
             onAIUsage: collectAiUsage,
+            context: budgetContext,
           })
         ))
         trendCandidates = broadResults
@@ -606,6 +613,7 @@ export async function POST(request: NextRequest) {
           specificFocus: specific_focus || '',
           language: language === 'en' ? 'en' : 'hu',
           onAIUsage: collectAiUsage,
+          context: budgetContext,
         })
       }
 
@@ -643,9 +651,10 @@ export async function POST(request: NextRequest) {
       // Ha a Serper web-evidence forrás teljesen elérhetetlen volt (pl. elfogyott
       // kredit, API hiba), ne "túl tág niche"-t írjunk — az félrevezető. Ez nem a
       // niche minőségének a hibája, hanem ideiglenes szolgáltatás-kimaradás.
-      const serperHealth = getSerperHealthStatus()
+      const serperHealth = getSerperHealthStatus(budgetContext)
       if (serperHealth.unavailable) {
-        console.error(`[Opportunity] Serper unavailable (${serperHealth.failures}/${serperHealth.attempts} kérés hibázott): ${serperHealth.lastError}`)
+        // Csak allapot es szamlalok — SOHA nem a kulcs/config ertek.
+        console.error(`[Opportunity] Serper ${serperHealth.state} (${serperHealth.failures}/${serperHealth.attempts} kérés hibázott): ${serperHealth.lastError}`)
       }
 
       if (!isDrilldown && fallbackTopics.length > 0) {
