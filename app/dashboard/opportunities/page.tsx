@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useId } from 'react'
 import { createClient } from '@/lib/supabase'
 import { useSearchParams } from 'next/navigation'
 import { SCORE_LABELS, REJECT_REASONS } from '@/types'
-import type { OpportunityTopic, CreatorProfile, SimilarVideo, RejectReason } from '@/types'
+import type { OpportunityTopic, CreatorProfile, SimilarVideo, RejectReason, OpportunityApiResponse } from '@/types'
 import { scoreColor as getScoreColor, scoreLabel, scoreLabelColor, regionLabel, platformLabel } from '@/lib/score-utils'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
@@ -922,6 +922,17 @@ export default function OpportunitiesPage() {
   const [cached, setCached] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  // Két, egymástól független stale-forrás (PFM-2E): a paid_results hash-találat
+  // lejárt mentése ('saved_paid_result', van explicit paid_result_id az újranyitáshoz)
+  // és az opportunity_cache 7 napos, nap-váltás-toleráns fallback lejárt találata
+  // ('opportunity_cache', nincs stabil, kliensnek átadott azonosítója — csak
+  // metaadat, tartalom nélkül). Mindkettő ugyanazt a banner-UI-t használja,
+  // a "Korábbi eredmény megnyitása" gomb csak a paid_result-ágon jelenik meg.
+  const [staleState, setStaleState] = useState<
+    | { kind: 'saved_paid_result'; paidResultId: string; niche: string }
+    | { kind: 'opportunity_cache'; niche: string }
+    | null
+  >(null)
   const [activeDrilldown, setActiveDrilldown] = useState<string | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [pendingGenerate, setPendingGenerate] = useState<{ profile?: CreatorProfile; options?: Record<string, unknown> } | null>(null)
@@ -971,11 +982,24 @@ export default function OpportunitiesPage() {
               paidResultId: paidResultId || undefined,
             }),
           })
-          const cacheData = await cacheRes.json()
-          if (cacheRes.ok && (cacheData.cached || cacheData.from_paid_result) && (cacheData.topics?.length > 0 || cacheData.pool_topics?.length > 0)) {
+          const cacheData: OpportunityApiResponse = await cacheRes.json()
+          if (cacheRes.ok && (cacheData.cached || cacheData.from_paid_result) && ((cacheData.topics?.length || 0) > 0 || (cacheData.pool_topics?.length || 0) > 0)) {
             setTopics(cacheData.topics || [])
             setPoolTopics(cacheData.pool_topics || [])
             setCached(true)
+            return
+          }
+          // Lejárt mentett/cache-elt eredmény: NE indítsunk automatikusan friss
+          // keresést — csak jelezzük, a nyitást/frissítést explicit user-akcióra
+          // bízzuk (PFM-2E — korábban ez a fallback automatikusan generálást
+          // indított, ami credit-check-kapun ment ugyan át, de a stale
+          // állapotot sosem jelezte a felhasználónak).
+          if (cacheRes.ok && cacheData.stale_saved_available && cacheData.paid_result_id) {
+            setStaleState({ kind: 'saved_paid_result', paidResultId: cacheData.paid_result_id, niche: nicheParam })
+            return
+          }
+          if (cacheRes.ok && cacheData.stale_cache_available) {
+            setStaleState({ kind: 'opportunity_cache', niche: nicheParam })
             return
           }
         } catch {}
@@ -1092,8 +1116,8 @@ export default function OpportunitiesPage() {
           paidResultId: paidResultId || undefined,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) { setError(data.error); return }
+      const data: OpportunityApiResponse = await res.json()
+      if (!res.ok) { setError(data.error || null); return }
       setSearchDirections(Array.isArray(data.search_directions) ? data.search_directions : [])
 
       // Van elég kredit, de a user MÉG NEM erősítette meg — mutassuk a modalt,
@@ -1141,6 +1165,45 @@ export default function OpportunitiesPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Korábbi (lejárt) mentett paid_results eredmény explicit megnyitása
+  // paidResultId-vel — frissségtől függetlenül, keresés és kreditművelet
+  // nélkül (PFM-2E, döntés #1). Az opportunity_cache stale ágnak NINCS
+  // ilyen stabil, kliensnek átadott azonosítója — ott csak a "Friss keresés"
+  // CTA érhető el (ld. startFreshSearchFromStale).
+  async function openStaleSavedResult() {
+    if (!staleState || staleState.kind !== 'saved_paid_result') return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/opportunity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          niche: staleState.niche,
+          paidResultId: staleState.paidResultId,
+          cache_only: true,
+        }),
+      })
+      const data: OpportunityApiResponse = await res.json()
+      if (!res.ok) { setError(data.error || 'Nem sikerült megnyitni a korábbi eredményt.'); return }
+      setTopics(data.topics || [])
+      setPoolTopics(data.pool_topics || [])
+      setCached(true)
+      setStaleState(null)
+    } catch {
+      setError('Kapcsolati hiba.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function startFreshSearchFromStale() {
+    // A `niche` állapot ekkor már a nicheParam-ra van állítva (ld. init()),
+    // ezért a generate() saját `p?.niche || niche` fallbackja a helyes témát
+    // választja a profil explicit felülírása nélkül.
+    setStaleState(null)
+    void handleGenerateWithCreditCheck(profile || undefined)
   }
 
   // "Mutass mást" csak akkor kér kredit-megerősítést, ha a pool következő
@@ -1353,6 +1416,26 @@ export default function OpportunitiesPage() {
         </div>
       )}
 
+      {staleState && (
+        <div className="rounded-xl px-5 py-4 mb-6 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+          style={{ background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.2)', color: '#CBD5E1' }}>
+          <span>
+            {staleState.kind === 'saved_paid_result'
+              ? 'A korábbi eredményed elérhető, de már nem számít frissnek.'
+              : 'Korábbi, már nem friss cache-elt ajánlásod volt ehhez a témához.'}
+          </span>
+          <div className="flex gap-2 flex-shrink-0">
+            {staleState.kind === 'saved_paid_result' && (
+              <button onClick={openStaleSavedResult} disabled={loading} className="btn-secondary text-xs whitespace-nowrap px-3 py-2">
+                Korábbi eredmény megnyitása
+              </button>
+            )}
+            <button onClick={startFreshSearchFromStale} disabled={loading} className="btn-primary text-xs whitespace-nowrap px-3 py-2">
+              Friss keresés
+            </button>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="bg-rose/10 border border-rose/20 rounded-xl px-5 py-4 text-rose text-sm mb-6">{error}</div>
       )}

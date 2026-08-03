@@ -30,7 +30,7 @@ import {
   type ViralCandidate,
 } from '@/lib/core-trust-engine'
 import { buildCacheKey, buildTrendCacheKey } from '@/lib/core-trust-engine/cache'
-import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, getPaidResultByHash, getPaidResultById, normalizePaidResultInput, openPaidResult, paidCacheStatus, paidResultResponseMeta, savePaidResult } from '@/lib/paid-results/paid-results-service'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 
 // ── Fallback topic builders (research lanes, broad discovery) ────
@@ -326,16 +326,57 @@ export async function POST(request: NextRequest) {
     }
 
     try {
+    const explicitPaidResultId = paidResultId || paid_result_id
     if (!force_refresh) {
-      const paidById = await getPaidResultById(user.id, paidResultId || paid_result_id)
-      const paid = paidById || await getPaidResultByHash({ userId: user.id, toolType: 'opportunity_engine', inputHash: paidInputHash })
-      if (paid) {
-        const opened = await openPaidResult(paid)
-        return NextResponse.json({
-          ...(opened.result_json as object),
-          cached: true,
-          ...paidResultResponseMeta(opened),
-        })
+      if (explicitPaidResultId) {
+        // Explicit paidResultId/paid_result_id: tudatos történeti megnyitás —
+        // frissségtől függetlenül visszaadható, nincs keresés/kredit/writer.
+        const paidById = await getPaidResultById(user.id, explicitPaidResultId)
+        if (paidById) {
+          const opened = await openPaidResult(paidById)
+          return NextResponse.json({
+            ...(opened.result_json as object),
+            cached: true,
+            ...paidResultResponseMeta(opened),
+          })
+        }
+      } else {
+        // Nincs explicit ID — a hash-találatnál a frissesség dönt (PFM-2E).
+        // Korábban ez a blokk frissségtől függetlenül visszatért egy hash-
+        // találatnál, ami egy örökre lejárt eredményt is "cached:true"-ként
+        // adott vissza, és sose engedte át a friss keresést force_refresh nélkül.
+        const paidByHash = await getPaidResultByHash({ userId: user.id, toolType: 'opportunity_engine', inputHash: paidInputHash })
+        if (paidByHash) {
+          if (paidCacheStatus(paidByHash) === 'fresh') {
+            const opened = await openPaidResult(paidByHash)
+            return NextResponse.json({
+              ...(opened.result_json as object),
+              cached: true,
+              opportunity_cache_state: 'fresh_paid_result',
+              ...paidResultResponseMeta(opened),
+            })
+          }
+          if (cache_only) {
+            // Lejárt mentett eredmény + cache_only: biztonságos, egyértelműen
+            // jelzett early return. NEM hívjuk az openPaidResult()-ot (nem
+            // módosítjuk a last_opened_at-ot egy olyan eredményen, amit nem
+            // is jelenítünk meg aktuálisként), és nem adjuk vissza a lejárt
+            // result_json topics/pool_topics tartalmát friss találatként.
+            return NextResponse.json({
+              topics: [],
+              pool_topics: [],
+              cached: false,
+              stale_saved_available: true,
+              opportunity_cache_state: 'stale_saved_paid_result',
+              cache_status: 'stale_saved',
+              paid_result_id: paidByHash.id,
+              requires_credit: false,
+              message: 'Nincs friss gyorsítótárazott eredmény, de egy korábbi mentett eredmény elérhető.',
+            })
+          }
+          // cache_only=false: nincs cache-return, a normál usage/credit
+          // döntés dönt tovább lejjebb (friss keresés vagy needs_confirmation).
+        }
       }
     }
 
@@ -381,6 +422,7 @@ export async function POST(request: NextRequest) {
             topics: visibleTopics,
             pool_topics: poolTopics,
             cached: true,
+            opportunity_cache_state: 'fresh_opportunity_cache',
             generated_at: oppCached.generated_at,
           })
         }
@@ -416,12 +458,23 @@ export async function POST(request: NextRequest) {
           const visibleTopics = allTopics.filter(t => !t.needs_explanation)
           const poolTopics = allTopics.filter(t => t.needs_explanation)
           if (visibleTopics.length > 0 || poolTopics.length > 0) {
+            // PFM-2E korrekció: ez a találat MÁR lejárt (a fenti pontos
+            // kulcsú, expires_at-tal védett fresh check nem talált rá — csak
+            // ez a nap-váltás-toleráns, 7 napos, generated_at-alapú fallback).
+            // A paid_results stale_saved ágával EGYSÉGESÍTVE: NEM játsszuk
+            // vissza a régi topics/pool_topics tartalmat friss találatként —
+            // csak jelezzük, hogy van korábbi (nem friss) ajánlás, tartalom
+            // nélkül. A kliensnek explicit "Friss keresés" CTA-t kell mutatnia,
+            // a meglévő credit-check kapun át (ld. session jegyzőkönyv).
             return NextResponse.json({
-              topics: visibleTopics,
-              pool_topics: poolTopics,
-              cached: true,
-              stale: true,
+              topics: [],
+              pool_topics: [],
+              cached: false,
+              stale_cache_available: true,
+              opportunity_cache_state: 'stale_opportunity_cache',
               generated_at: fallbackCached.generated_at,
+              requires_credit: false,
+              message: 'Nincs friss gyorsítótárazott eredmény, de egy korábbi (nem friss) ajánlás elérhető.',
             })
           }
         }
@@ -431,6 +484,7 @@ export async function POST(request: NextRequest) {
         topics: [],
         pool_topics: [],
         cached: false,
+        opportunity_cache_state: 'miss',
         message: 'A trendadatok frissítése folyamatban van. Kattints a Lehetőségek gombra a friss kereséshez.',
       })
     }

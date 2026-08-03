@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
-import type { CreatorProfile, CreatorMemoryItem, OpportunityTopic } from '@/types'
+import type { CreatorProfile, CreatorMemoryItem, OpportunityTopic, OpportunityApiResponse } from '@/types'
+import { checkManualRefreshCredit } from '@/lib/dashboard/manual-refresh-credit'
 
 // ─── Score helpers ────────────────────────────────────────────
 import { scoreColor, scoreLabel, scoreLabelColor } from '@/lib/score-utils'
@@ -1135,39 +1136,50 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
   async function handleManualRefresh() {
     // Dashboard kézi frissítés MINDIG 2 kreditbe kerül
     const cost = 2
-    try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = credits.balance ?? 0
+    setOpportunityError(null)
+    const check = await checkManualRefreshCredit()
 
-      if (balance < cost) {
-        setCreditCheck({
-          feature: 'Trend Feed frissítés',
-          cost,
-          currency: 'credit',
-          currentCredits: Math.round(balance),
-          remainingCreditsAfterRun: balance,
-          requiresConfirmation: true,
-          canRun: false,
-          reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
-        })
-        return
-      }
+    if (!check.ok) {
+      // Fail-CLOSED, nem fail-open: a kredit-előellenőrzés bármilyen hibája
+      // (hálózati hiba, non-2xx válasz, JSON-feldolgozási hiba) esetén SOSE
+      // induljon Opportunity keresés/force_refresh — korábban itt egy
+      // loadOpportunities(false, true) hívás futott a catch-ágban, ami
+      // force_refresh=true keresést indíthatott sikertelen kredit-ellenőrzés
+      // mellett is (kredit-preflight nélkül). A checkManualRefreshCredit()
+      // sosem hívja az Opportunity route-ot, ezért ez az ág garantáltan 0
+      // /api/opportunity hívást jelent. A `loading` állapotot ez a függvény
+      // sosem állítja true-ra, tehát nincs mit "visszaállítani" — a user
+      // kézzel, bármikor újra megnyomhatja a gombot, nincs automatikus retry.
+      setOpportunityError('Nem sikerült ellenőrizni a kredit-egyenleget. Próbáld újra egy kicsit később.')
+      return
+    }
 
+    const balance = check.balance
+    if (balance < cost) {
       setCreditCheck({
         feature: 'Trend Feed frissítés',
         cost,
         currency: 'credit',
         currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
+        remainingCreditsAfterRun: balance,
         requiresConfirmation: true,
-        canRun: true,
-        message: `Új trendtémák keresése ${cost} kreditbe kerül. A heti Top Opportunity ajánlás ingyenes, az extra keresés kredites.`,
+        canRun: false,
+        reason: 'insufficient_credits',
+        message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
       })
-    } catch {
-      loadOpportunities(false, true)
+      return
     }
+
+    setCreditCheck({
+      feature: 'Trend Feed frissítés',
+      cost,
+      currency: 'credit',
+      currentCredits: Math.round(balance),
+      remainingCreditsAfterRun: Math.round(balance - cost),
+      requiresConfirmation: true,
+      canRun: true,
+      message: `Új trendtémák keresése ${cost} kreditbe kerül. A heti Top Opportunity ajánlás ingyenes, az extra keresés kredites.`,
+    })
   }
 
   async function loadOpportunities(cacheOnly = false, forceRefresh = false) {
@@ -1194,7 +1206,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
           exclude_titles: forceRefresh ? topics.map(t => t.title) : [],
         }),
       })
-      const data = await res.json()
+      const data: OpportunityApiResponse = await res.json()
       if (!res.ok) {
         setOpportunityError(data.error || 'Nem sikerült betölteni a lehetőségeket.')
         setTopics([])
@@ -1223,8 +1235,21 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
 
       const allTopics = (data.topics || []) as DashboardOpportunityTopic[]
 
-      if (cacheOnly && allTopics.length === 0 && !forceRefresh) {
-        loadOpportunities(false, false)
+      // Egy cache_only hívás sosem indíthat automatikusan friss keresést —
+      // ha nincs friss cache (üres vagy a mentett eredmény lejárt), csak
+      // jelezzük az állapotot; a friss keresést kizárólag explicit
+      // user-akció (lentebb az "Extra keresés" gomb, credit-check kapun át)
+      // indíthatja (PFM-2E, korábban itt egy automatikus, nem cache_only
+      // hívás futott, ami csendben elfogyaszthatta a heti ingyenes futást).
+      if (cacheOnly && allTopics.length === 0) {
+        setTopics([])
+        setResearchCount(0)
+        setOpportunityMessage(
+          data.stale_saved_available || data.stale_cache_available
+            ? 'A korábbi Trend Feed ajánlásod elérhető, de már nem számít frissnek. Kérj extra keresést a friss témákhoz.'
+            : data.message || null
+        )
+        setGenerated(true)
         return
       }
 
@@ -1238,8 +1263,6 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       setOpportunityMessage(
         productionTopics.length > 0
           ? data.message || null
-          : cacheOnly && allTopics.length === 0
-          ? null
           : data.message || (researchTopics.length > 0
               ? 'Találtunk kutatási irányokat, de ezen a héten nincs elég erős gyártható téma. Nyisd meg a Videólehetőségeket a továbbszűkítéshez.'
               : null)
@@ -1364,6 +1387,17 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       <TrendFeedHistory />
       <CreatorPipelineStrip />
       <CreatorCommandCenter summary={summary} />
+
+      {/* A bestTopic-mentes üres állapot (lentebb) már megjeleníti az
+          opportunityError-t a saját üzenetében — ez a banner kizárólag arra
+          az esetre kell, amikor MÁR van megjelenített ajánlás, de az "Extra
+          keresés" gomb kredit-előellenőrzése (handleManualRefresh) hibázott,
+          és enélkül a hiba láthatatlan maradna a felhasználó számára. */}
+      {opportunityError && bestTopic && (
+        <div className="rounded-xl px-5 py-4 mb-6 text-sm" style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#F87171' }}>
+          {opportunityError}
+        </div>
+      )}
 
       {/* 2. Main Recommendation Card */}
       {loading && (

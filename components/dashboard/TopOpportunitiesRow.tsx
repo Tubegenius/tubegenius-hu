@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import type { CreatorProfile, OpportunityTopic } from '@/types'
+import type { CreatorProfile, OpportunityApiResponse, OpportunityTopic } from '@/types'
 import { scoreColor } from '@/lib/score-utils'
 
 const PANEL_STYLE: React.CSSProperties = {
@@ -71,8 +71,14 @@ export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfi
       }),
     })
       .then(r => r.json())
-      .then(data => {
-        const all = (data.topics || []) as OpportunityTopic[]
+      .then((data: OpportunityApiResponse) => {
+        // stale_saved_available (paid_results) ÉS stale_cache_available
+        // (opportunity_cache) esetén is a topics mindig üres (ld. route.ts,
+        // PFM-2E egységesített döntés) — ez a kártya sosem jelenít meg lejárt
+        // eredményt friss toplistaként, és sosem indít automatikus keresést,
+        // csak a semleges üres állapotot mutatja, függetlenül attól, hogy a
+        // "miss" vagy valamelyik stale ág adta-e vissza az üres topics-ot.
+        const all = data.topics || []
         const production = all.filter(isProductionCandidate)
         setTopics((production.length > 0 ? production : all).slice(0, 4))
         setGeneratedAt(data.generated_at || null)
@@ -101,6 +107,9 @@ export default function TopOpportunitiesRow({ profile }: { profile: CreatorProfi
         <p className="text-xs mt-2" style={{ color: '#64748B' }}>
           Még nincs friss, validált találat. Tölts be egy ajánlást a Trend Feed-en vagy a Videólehetőségeknél.
         </p>
+        <Link href="/dashboard/opportunities" className="inline-block text-xs font-medium mt-3" style={{ color: '#3B82F6' }}>
+          Videólehetőségek megnyitása →
+        </Link>
       </div>
     )
   }

@@ -192,6 +192,77 @@ export interface OpportunityTopic {
   needs_explanation?: boolean
 }
 
+// A /api/opportunity route cache/paid-result döntési állapottere (PFM-2E,
+// pontosítva a kliensoldali stale-egységesítés körében). Ez az ÖT, egymást
+// kizáró állapot fedi le, amit a route egy adott kérésre autonóm cache-
+// döntésként visszaadhat (a `force_refresh:true` explicit, user-jóváhagyott
+// frissítés és az explicit `paidResultId`-s tudatos megnyitás NEM ez a
+// döntéstér — azok mindig a saját, meglévő szabályaik szerint futnak):
+//
+// - 'fresh_paid_result'        — paid_results hash-találat, MÉG friss
+//                                 (fresh_until a jövőben). cached:true,
+//                                 topics/pool_topics a VALÓDI, friss tartalom.
+// - 'stale_saved_paid_result'  — paid_results hash-találat, LEJÁRT.
+//                                 cached:false, topics/pool_topics ÜRES,
+//                                 stale_saved_available:true, paid_result_id
+//                                 kitöltve (külön, explicit megnyitáshoz).
+// - 'fresh_opportunity_cache'  — opportunity_cache pontos (mai) kulcs,
+//                                 expires_at még nem járt le. cached:true,
+//                                 topics/pool_topics a VALÓDI, friss tartalom.
+// - 'stale_opportunity_cache'  — opportunity_cache 7 napos, nap-váltás-
+//                                 toleráns fallback találat, de MÁR lejárt
+//                                 (expires_at a múltban). cached:false,
+//                                 topics/pool_topics ÜRES (a régi tartalom
+//                                 NEM játszódik vissza friss találatként —
+//                                 ez a paid_results stale ágával egységesített,
+//                                 tudatos döntés, ld. session jegyzőkönyv),
+//                                 stale_cache_available:true.
+// - 'miss'                     — semmilyen cache/paid-result nem található.
+//                                 cached:false, topics/pool_topics ÜRES,
+//                                 mindkét stale_*_available:false/hiányzik.
+//
+// KÖTELEZŐ INVARIÁNS: sosem fordulhat elő olyan válasz, ahol `cached:true` ÉS
+// (`stale_saved_available:true` VAGY `stale_cache_available:true`) egyszerre
+// igaz — ha bármelyik stale flag igaz, a topics/pool_topics MINDIG üres tömb,
+// sosem a korábbi találat tartalma.
+export type OpportunityCacheState =
+  | 'fresh_paid_result'
+  | 'stale_saved_paid_result'
+  | 'fresh_opportunity_cache'
+  | 'stale_opportunity_cache'
+  | 'miss'
+
+export interface OpportunityApiResponse {
+  topics?: OpportunityTopic[]
+  pool_topics?: OpportunityTopic[]
+  cached?: boolean
+  // A fenti OpportunityCacheState — csak az automatikus cache/paid-result
+  // döntési ágakon van kitöltve (ld. a típus feletti dokumentáció). Explicit
+  // paidResultId-s megnyitásnál és force_refresh-nél nincs kitöltve.
+  opportunity_cache_state?: OpportunityCacheState
+  // Megosztott, más paid-results feature-ök (viral_score, similar_videos, stb.)
+  // által is használt generikus mező — NE keverd össze az opportunity_cache_state-tel,
+  // ez a lib/paid-results/paid-results-service.ts paidCacheStatus()-ából jön,
+  // és csak a paid_results-alapú ágakon (explicit ID, hash fresh/stale) jelenik meg.
+  cache_status?: 'fresh' | 'stale_saved' | 'miss'
+  stale_saved_available?: boolean
+  stale_cache_available?: boolean
+  paid_result_id?: string | null
+  from_paid_result?: boolean
+  requires_credit?: boolean
+  charged?: boolean
+  credits_charged?: number
+  usage_blocked?: boolean
+  needs_confirmation?: boolean
+  confirmation_cost?: number
+  error?: string
+  message?: string
+  generated_at?: string
+  search_directions?: string[]
+  search_mode?: OpportunitySearchMode | null
+  trend_summary?: Record<string, unknown>
+}
+
 export type FeedbackType = 'save' | 'reject' | 'complete' | 'request_similar' | 'request_different'
 
 export const REJECT_REASONS = [
