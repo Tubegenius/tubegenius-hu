@@ -20,7 +20,17 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 
 function readSource(relativePath: string): string {
-  return readFileSync(join(process.cwd(), ...relativePath.split('/')), 'utf-8')
+  // \r\n -> \n normalizálás — a working tree line-endingje a git core.autocrlf
+  // beállítástól függően CRLF is lehet (Windows checkout), a lenti tesztek
+  // viszont LF-alapú, többsoros literál mintákat keresnek a forrásban.
+  return readFileSync(join(process.cwd(), ...relativePath.split('/')), 'utf-8').replace(/\r\n/g, '\n')
+}
+
+// Csak a tényleges kódsorokat adja vissza — a magyarázó megjegyzések
+// szándékosan említhetik régi függvénynevet (pl. a levált hiba dokumentálásához),
+// ez nem szabad, hogy egy naiv "not.toContain" ellenőrzést tévesen elbuktasson.
+function stripComments(block: string): string {
+  return block.split('\n').filter(line => !line.trim().startsWith('//')).join('\n')
 }
 
 describe('DashboardClient.tsx — no automatic cache_only -> real search transition', () => {
@@ -100,27 +110,8 @@ describe('DashboardClient.tsx — handleManualRefresh credit-check is fail-close
   })
 })
 
-describe('opportunities/page.tsx — stale_saved_available handled without an automatic credit-check-bypassing search', () => {
+describe('opportunities/page.tsx — stale/miss states never trigger an automatic search', () => {
   const src = readSource('app/dashboard/opportunities/page.tsx')
-
-  it('the nicheParam cache_only flow checks stale_saved_available BEFORE the handleGenerateWithCreditCheck fallback', () => {
-    const staleCheckIdx = src.indexOf('cacheData.stale_saved_available')
-    const fallbackIdx = src.indexOf('if (prof) await handleGenerateWithCreditCheck({ ...prof, niche: nicheParam })')
-    expect(staleCheckIdx).toBeGreaterThan(-1)
-    expect(fallbackIdx).toBeGreaterThan(-1)
-    expect(staleCheckIdx).toBeLessThan(fallbackIdx)
-  })
-
-  it('the stale_saved_available branch returns before reaching the auto-generate fallback', () => {
-    const staleCheckIdx = src.indexOf('if (cacheRes.ok && cacheData.stale_saved_available')
-    expect(staleCheckIdx).toBeGreaterThan(-1)
-    // Rögzített hosszúságú szelet (nem zárójel-párosítás, mert a blokk törzse
-    // maga is tartalmaz egy beágyazott { } objektum-literált, amit egy naiv
-    // "első záró kapcsos zárójel" keresés tévesen a blokk végének nézne).
-    const block = src.slice(staleCheckIdx, staleCheckIdx + 250)
-    expect(block).toContain('return')
-    expect(block).not.toContain('handleGenerateWithCreditCheck')
-  })
 
   it('openStaleSavedResult() never sends force_refresh (explicit-ID open stays freshness-independent, not a paid refresh)', () => {
     const idx = src.indexOf('async function openStaleSavedResult()')
@@ -131,30 +122,99 @@ describe('opportunities/page.tsx — stale_saved_available handled without an au
     expect(fnBody).toContain('paidResultId')
   })
 
-  it('the "fresh search" action from the stale banner routes through handleGenerateWithCreditCheck (the credit-check gate)', () => {
+  it('the "fresh search" action from the stale/miss banner routes through handleGenerateWithCreditCheck (the credit-check gate) — only reachable via the button\'s onClick, never from the mount effect', () => {
     const idx = src.indexOf('function startFreshSearchFromStale()')
     expect(idx).toBeGreaterThan(-1)
     const endIdx = src.indexOf('\n\n', idx)
     const fnBody = src.slice(idx, endIdx)
     expect(fnBody).toContain('handleGenerateWithCreditCheck')
+    // Ez a függvény csak a banner onClick-jéből hívódik, sose az useEffect-ből —
+    // ezt a "mount never auto-generates" describe blokk saját tesztjei bizonyítják.
   })
 
-  it('the nicheParam cache_only flow ALSO checks stale_cache_available (opportunity_cache stale) before the auto-generate fallback', () => {
-    const staleCacheCheckIdx = src.indexOf('cacheData.stale_cache_available')
-    const fallbackIdx = src.indexOf('if (prof) await handleGenerateWithCreditCheck({ ...prof, niche: nicheParam })')
-    expect(staleCacheCheckIdx).toBeGreaterThan(-1)
-    expect(fallbackIdx).toBeGreaterThan(-1)
-    expect(staleCacheCheckIdx).toBeLessThan(fallbackIdx)
-    const block = src.slice(src.indexOf('if (cacheRes.ok && cacheData.stale_cache_available'), staleCacheCheckIdx + 200)
-    expect(block).toContain('return')
-    expect(block).not.toContain('handleGenerateWithCreditCheck')
-  })
-
-  it('the opportunity_cache-stale kind never renders the paid-result-only "reopen" button', () => {
+  it('the opportunity_cache-stale and miss kinds never render the paid-result-only "reopen" button', () => {
     const bannerIdx = src.indexOf("staleState.kind === 'saved_paid_result' && (")
     expect(bannerIdx).toBeGreaterThan(-1)
     const block = src.slice(bannerIdx, bannerIdx + 200)
     expect(block).toContain('openStaleSavedResult')
+  })
+
+  it('the banner shows a distinct, neutral message for the miss state (never implies a fresh/current recommendation)', () => {
+    const idx = src.indexOf("staleState.kind === 'opportunity_cache'")
+    expect(idx).toBeGreaterThan(-1)
+    const block = src.slice(idx, idx + 200)
+    expect(block).toContain('Még nincs validált ajánlásod')
+  })
+})
+
+describe('opportunities/page.tsx — mount never auto-generates a real search (PFM-2E production incident fix)', () => {
+  const src = readSource('app/dashboard/opportunities/page.tsx')
+
+  it('the mount useEffect guards against re-running its body via initRanRef (defense-in-depth against any future double-invoke)', () => {
+    const idx = src.indexOf('useEffect(() => {\n    if (initRanRef.current) return\n    initRanRef.current = true')
+    expect(idx).toBeGreaterThan(-1)
+  })
+
+  it('the ENTIRE mount effect body never calls handleGenerateWithCreditCheck or generate() directly — only tryCacheOnlyLookup', () => {
+    const effectIdx = src.indexOf('useEffect(() => {\n    if (initRanRef.current) return')
+    expect(effectIdx).toBeGreaterThan(-1)
+    const effectEndIdx = src.indexOf('\n  }, [])', effectIdx)
+    expect(effectEndIdx).toBeGreaterThan(effectIdx)
+    const effectBody = stripComments(src.slice(effectIdx, effectEndIdx))
+    expect(effectBody).not.toMatch(/handleGenerateWithCreditCheck/)
+    expect(effectBody).not.toMatch(/\bgenerate\(/)
+    expect(effectBody.match(/tryCacheOnlyLookup\(/g)?.length).toBe(2) // nicheParam ág + profil-niche ág
+  })
+
+  it('tryCacheOnlyLookup always sends cache_only:true, never force_refresh, never calls /api/credit-check', () => {
+    const fnIdx = src.indexOf('async function tryCacheOnlyLookup(')
+    expect(fnIdx).toBeGreaterThan(-1)
+    const fnEndIdx = src.indexOf('\n\n  // Keresési előzmény visszaállítása', fnIdx)
+    expect(fnEndIdx).toBeGreaterThan(fnIdx)
+    const fnBody = src.slice(fnIdx, fnEndIdx)
+    expect(fnBody).toMatch(/cache_only:\s*true/)
+    expect(fnBody).not.toContain('force_refresh')
+    expect(fnBody).not.toContain('/api/credit-check')
+  })
+
+  it('tryCacheOnlyLookup sets a "miss" staleState instead of ever falling through to a real search when nothing is found', () => {
+    const fnIdx = src.indexOf('async function tryCacheOnlyLookup(')
+    const fnEndIdx = src.indexOf('\n\n  // Keresési előzmény visszaállítása', fnIdx)
+    const fnBody = src.slice(fnIdx, fnEndIdx)
+    expect(fnBody).toMatch(/setStaleState\(\{\s*kind:\s*'miss'/)
+  })
+
+  it('the nicheParam mount branch calls tryCacheOnlyLookup and nothing else — no inline fetch, no auto-generate fallback', () => {
+    const idx = src.indexOf('if (nicheParam) {')
+    expect(idx).toBeGreaterThan(-1)
+    const block = src.slice(idx, idx + 250)
+    expect(block).toContain('tryCacheOnlyLookup(nicheParam')
+    expect(block).not.toContain('handleGenerateWithCreditCheck')
+    expect(block).not.toContain("fetch('/api/opportunity'")
+  })
+
+  it('the profile-niche (no nicheParam) mount branch — the EXACT branch that caused the production incident — only calls tryCacheOnlyLookup', () => {
+    const idx = src.indexOf('if (prof?.niche) {')
+    expect(idx).toBeGreaterThan(-1)
+    const block = stripComments(src.slice(idx, idx + 900))
+    expect(block).toContain('tryCacheOnlyLookup(prof.niche')
+    expect(block).not.toContain('handleGenerateWithCreditCheck')
+  })
+
+  it('generate() has a re-entrancy guard (generateInFlightRef) preventing overlapping/duplicate POSTs from any caller', () => {
+    const fnIdx = src.indexOf('async function generate(')
+    expect(fnIdx).toBeGreaterThan(-1)
+    const nearby = stripComments(src.slice(fnIdx, fnIdx + 900))
+    expect(nearby).toMatch(/if\s*\(generateInFlightRef\.current\)\s*return/)
+    expect(nearby).toContain('generateInFlightRef.current = true')
+  })
+
+  it('generate() always resets generateInFlightRef in a finally block (never stays locked after completion or error)', () => {
+    const fnIdx = src.indexOf('async function generate(')
+    const fnEndIdx = src.indexOf('\n\n  // Korábbi (lejárt) mentett paid_results', fnIdx)
+    expect(fnEndIdx).toBeGreaterThan(fnIdx)
+    const fnBody = src.slice(fnIdx, fnEndIdx)
+    expect(fnBody).toMatch(/finally\s*\{[^}]*generateInFlightRef\.current = false/)
   })
 })
 

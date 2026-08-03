@@ -922,15 +922,19 @@ export default function OpportunitiesPage() {
   const [cached, setCached] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  // Két, egymástól független stale-forrás (PFM-2E): a paid_results hash-találat
-  // lejárt mentése ('saved_paid_result', van explicit paid_result_id az újranyitáshoz)
-  // és az opportunity_cache 7 napos, nap-váltás-toleráns fallback lejárt találata
+  // Három, egymástól független "nincs friss találat" forrás (PFM-2E, production
+  // incidens utáni korrekció): a paid_results hash-találat lejárt mentése
+  // ('saved_paid_result', van explicit paid_result_id az újranyitáshoz), az
+  // opportunity_cache 7 napos, nap-váltás-toleráns fallback lejárt találata
   // ('opportunity_cache', nincs stabil, kliensnek átadott azonosítója — csak
-  // metaadat, tartalom nélkül). Mindkettő ugyanazt a banner-UI-t használja,
-  // a "Korábbi eredmény megnyitása" gomb csak a paid_result-ágon jelenik meg.
+  // metaadat, tartalom nélkül), és a teljes cache-miss ('miss', se paid_results,
+  // se opportunity_cache találat). Mindhárom ugyanazt a banner-UI-t használja,
+  // a "Korábbi eredmény megnyitása" gomb csak a paid_result-ágon jelenik meg —
+  // egyik ág sem indít automatikus keresést, csak explicit CTA-t mutat.
   const [staleState, setStaleState] = useState<
     | { kind: 'saved_paid_result'; paidResultId: string; niche: string }
     | { kind: 'opportunity_cache'; niche: string }
+    | { kind: 'miss'; niche: string }
     | null
   >(null)
   const [activeDrilldown, setActiveDrilldown] = useState<string | null>(null)
@@ -939,9 +943,72 @@ export default function OpportunitiesPage() {
   const [replaceCreditCheck, setReplaceCreditCheck] = useState<UsageCheckResult | null>(null)
   const [pendingReplaceIndex, setPendingReplaceIndex] = useState<number | null>(null)
   const replaceInFlightRef = useRef(false)
+  // Mount-effekt egyszeri-futás védelem (PFM-2E production incidens, defense-
+  // in-depth) — még ha a komponens valamilyen jövőbeli okból kétszer futtatná
+  // az effektet, az init() törzse csak egyszer indulhat el.
+  const initRanRef = useRef(false)
+  // A generate() (a tényleges /api/opportunity hívás) egyetlen belépési pontja
+  // minden hívónak (mount-CTA, "Friss keresés", CreditConfirmModal onConfirm,
+  // drilldown, "Mutass mást" stb.) — ez a ref garantálja, hogy egy adott
+  // pillanatban legfeljebb EGY ilyen hívás lehet folyamatban, duplakattintás
+  // vagy véletlen kétszeri meghívás esetén a második csendben no-op.
+  const generateInFlightRef = useRef(false)
+
+  // Cache_only lekérdezés + stale/miss állapot beállítása, tartalom nélküli
+  // visszajátszás nélkül — mindkét mount-ág (nicheParam-os deep-link ÉS a sima
+  // profil-niche-es közvetlen oldalbetöltés) ugyanezt a függvényt használja.
+  // Visszatérési érték: true = talált és megjelenített valamit (fresh vagy
+  // stale/miss állapotot állított be), false = a hívónak kell eldöntenie mi
+  // történjen (ez a jelenlegi kódban sosem fordul elő, mindig true-t ad).
+  async function tryCacheOnlyLookup(
+    nicheValue: string,
+    prof: CreatorProfile | null,
+    explicitPaidResultId?: string,
+  ): Promise<boolean> {
+    try {
+      const cacheRes = await fetch('/api/opportunity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          niche: nicheValue, platform: prof?.platform || 'youtube',
+          language: prof?.language || 'hu', region: prof?.region || 'HU',
+          main_category: prof?.main_category, specific_focus: prof?.specific_focus,
+          cache_only: true,
+          paidResultId: explicitPaidResultId || undefined,
+        }),
+      })
+      const cacheData: OpportunityApiResponse = await cacheRes.json()
+      if (cacheRes.ok && (cacheData.cached || cacheData.from_paid_result) && ((cacheData.topics?.length || 0) > 0 || (cacheData.pool_topics?.length || 0) > 0)) {
+        setTopics(cacheData.topics || [])
+        setPoolTopics(cacheData.pool_topics || [])
+        setCached(true)
+        return true
+      }
+      // Lejárt mentett/cache-elt eredmény VAGY teljes cache-miss: NE induljon
+      // automatikusan friss keresés — csak jelezzük az állapotot, a
+      // nyitást/frissítést explicit user-akcióra (a banner "Friss keresés"
+      // gombjára) bízzuk. (PFM-2E production incidens korrekció: korábban a
+      // sima, paraméter nélküli oldalbetöltés ÉS a nicheParam-os deep-link
+      // "nincs cache" ága is automatikusan meghívta a
+      // handleGenerateWithCreditCheck-et — ez élesben egy heti ingyenes futás
+      // csendes, kattintás nélküli lefutásához vezetett.)
+      if (cacheRes.ok && cacheData.stale_saved_available && cacheData.paid_result_id) {
+        setStaleState({ kind: 'saved_paid_result', paidResultId: cacheData.paid_result_id, niche: nicheValue })
+        return true
+      }
+      if (cacheRes.ok && cacheData.stale_cache_available) {
+        setStaleState({ kind: 'opportunity_cache', niche: nicheValue })
+        return true
+      }
+    } catch {}
+    setStaleState({ kind: 'miss', niche: nicheValue })
+    return true
+  }
 
   // Keresési előzmény visszaállítása — de ha a profil niche változott, újra keresünk
   useEffect(() => {
+    if (initRanRef.current) return
+    initRanRef.current = true
+
     async function init() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
@@ -966,44 +1033,12 @@ export default function OpportunitiesPage() {
       }
 
       // Ha a "Legutóbbi történeted" panelről érkezünk egy korábbi niche-szel,
-      // előbb ingyenesen megnézzük, van-e még érvényes mentett eredmény —
-      // ha van, azt mutatjuk kredit-ellenőrzés és megerősítő modal nélkül.
-      // Csak akkor megy a normál, kredit-gated útra, ha nincs cache.
+      // ingyenesen megnézzük (cache_only), van-e még érvényes mentett vagy
+      // cache-elt eredmény. Se automatikus friss keresés, se kredit-ellenőrzés
+      // nem indul itt — csak a tryCacheOnlyLookup fresh/stale/miss állapota.
       if (nicheParam) {
         setNiche(nicheParam)
-        try {
-          const cacheRes = await fetch('/api/opportunity', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              niche: nicheParam, platform: prof?.platform || 'youtube',
-              language: prof?.language || 'hu', region: prof?.region || 'HU',
-              main_category: prof?.main_category, specific_focus: prof?.specific_focus,
-              cache_only: true,
-              paidResultId: paidResultId || undefined,
-            }),
-          })
-          const cacheData: OpportunityApiResponse = await cacheRes.json()
-          if (cacheRes.ok && (cacheData.cached || cacheData.from_paid_result) && ((cacheData.topics?.length || 0) > 0 || (cacheData.pool_topics?.length || 0) > 0)) {
-            setTopics(cacheData.topics || [])
-            setPoolTopics(cacheData.pool_topics || [])
-            setCached(true)
-            return
-          }
-          // Lejárt mentett/cache-elt eredmény: NE indítsunk automatikusan friss
-          // keresést — csak jelezzük, a nyitást/frissítést explicit user-akcióra
-          // bízzuk (PFM-2E — korábban ez a fallback automatikusan generálást
-          // indított, ami credit-check-kapun ment ugyan át, de a stale
-          // állapotot sosem jelezte a felhasználónak).
-          if (cacheRes.ok && cacheData.stale_saved_available && cacheData.paid_result_id) {
-            setStaleState({ kind: 'saved_paid_result', paidResultId: cacheData.paid_result_id, niche: nicheParam })
-            return
-          }
-          if (cacheRes.ok && cacheData.stale_cache_available) {
-            setStaleState({ kind: 'opportunity_cache', niche: nicheParam })
-            return
-          }
-        } catch {}
-        if (prof) await handleGenerateWithCreditCheck({ ...prof, niche: nicheParam })
+        await tryCacheOnlyLookup(nicheParam, prof, paidResultId)
         return
       }
 
@@ -1026,10 +1061,14 @@ export default function OpportunitiesPage() {
       }
 
       if (prof?.niche) {
-        // Mindig a kredit-ellenőrzésen (handleGenerateWithCreditCheck) keresztül —
-        // soha ne induljon automatikus generálás, ami esetleg kreditbe kerülne,
-        // felugró megerősítés nélkül.
-        await handleGenerateWithCreditCheck(prof)
+        // PFM-2E production incidens korrekció: a közvetlen, paraméter nélküli
+        // oldalbetöltés SOHA nem hívhatja automatikusan a
+        // handleGenerateWithCreditCheck-et, mert az — ha volt még heti
+        // ingyenes futás — megerősítés nélkül azonnal valódi keresést
+        // indított élesben. Csak cache_only:true lekérdezés; fresh/stale/miss
+        // esetén a felhasználónak explicit CTA-t (banner "Friss keresés"
+        // gombja) kell megnyomnia a friss kereséshez.
+        await tryCacheOnlyLookup(prof.niche, prof)
       }
     }
     init()
@@ -1085,11 +1124,17 @@ export default function OpportunitiesPage() {
   }
 
   async function generate(p?: CreatorProfile, options?: { discoveryMode?: 'drilldown'; parentNiche?: string; skipCache?: boolean; confirmed?: boolean }) {
+    // Egyetlen belépési pont a tényleges /api/opportunity hívásra minden
+    // hívó számára — duplakattintás vagy véletlen kétszeri meghívás esetén a
+    // második próbálkozás csendben no-op (PFM-2E production incidens,
+    // defense-in-depth kliensoldali deduplikáció).
+    if (generateInFlightRef.current) return
     const prof = p || profile
     const nicheToUse = p?.niche || niche
     // discovery_random módban nem kötelező a szöveges input — a szerver a
     // profil/csatorna-jelekből választ kiindulási irányt.
     if (searchMode !== 'discovery_random' && !nicheToUse.trim()) return
+    generateInFlightRef.current = true
 
     setLoading(true)
     setError(null)
@@ -1164,6 +1209,7 @@ export default function OpportunitiesPage() {
       setError('Kapcsolati hiba.')
     } finally {
       setLoading(false)
+      generateInFlightRef.current = false
     }
   }
 
@@ -1422,7 +1468,9 @@ export default function OpportunitiesPage() {
           <span>
             {staleState.kind === 'saved_paid_result'
               ? 'A korábbi eredményed elérhető, de már nem számít frissnek.'
-              : 'Korábbi, már nem friss cache-elt ajánlásod volt ehhez a témához.'}
+              : staleState.kind === 'opportunity_cache'
+              ? 'Korábbi, már nem friss cache-elt ajánlásod volt ehhez a témához.'
+              : 'Még nincs validált ajánlásod ehhez a témához.'}
           </span>
           <div className="flex gap-2 flex-shrink-0">
             {staleState.kind === 'saved_paid_result' && (
