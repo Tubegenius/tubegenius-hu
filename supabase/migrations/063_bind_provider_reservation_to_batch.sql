@@ -180,7 +180,7 @@ $body$;
         AND p.prosecdef IS TRUE
         AND r.rolname = 'postgres'
         AND (SELECT string_agg(cfg, ';') FROM unnest(p.proconfig) cfg) = 'search_path=public, pg_temp'
-        AND md5(p.prosrc) = '1373cae28319ed700bab226b6a4f7744'
+        AND md5(replace(p.prosrc, E'\r\n', E'\n')) = '1373cae28319ed700bab226b6a4f7744'
     ) THEN
       RAISE EXCEPTION '063 drift: bind_provider_reservation_to_batch definition does not match exactly';
     END IF;
