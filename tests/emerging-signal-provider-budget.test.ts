@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SignalAdminClient } from '@/lib/emerging-signal/collection-types'
 import {
+  bindProviderReservationToBatch,
   commitProviderUnits,
   expireStaleProviderReservations,
   markProviderAttemptStarted,
@@ -81,6 +82,18 @@ describe('provider budget wrappers', () => {
   })
 
   it('covers started, unknown, release and stale-expiry RPC contracts', async () => {
+    const bindClient = clientWithRpc(async () => ({ data: true, error: null }))
+    expect((await bindProviderReservationToBatch(
+      RESERVATION_ID,
+      '33333333-3333-4333-8333-333333333333',
+      'worker-a',
+      bindClient,
+    )).outcome).toBe('success')
+    expect(bindClient.rpc).toHaveBeenCalledWith('bind_provider_reservation_to_batch', {
+      p_reservation_id: RESERVATION_ID,
+      p_batch_id: '33333333-3333-4333-8333-333333333333',
+      p_lease_owner: 'worker-a',
+    })
     expect((await markProviderAttemptStarted(RESERVATION_ID, clientWithRpc(async () => ({ data: true, error: null })))).outcome).toBe('success')
     expect((await markProviderOutcomeUnknown(RESERVATION_ID, clientWithRpc(async () => ({
       data: { reservation_id: RESERVATION_ID, status: 'committed_unknown', duplicate: false }, error: null,

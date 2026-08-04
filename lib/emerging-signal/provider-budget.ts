@@ -149,6 +149,28 @@ export async function markProviderAttemptStarted(
   return { outcome: 'success', duplicateSafe: true }
 }
 
+export async function bindProviderReservationToBatch(
+  reservationId: string,
+  batchId: string,
+  leaseOwner: string,
+  client?: SignalAdminClient,
+): Promise<BooleanRpcResult> {
+  if (!isUuid(reservationId)) return invalid('reservationId must be a UUID.')
+  if (!isUuid(batchId)) return invalid('batchId must be a UUID.')
+  if (!leaseOwner.trim() || leaseOwner.length > 200) {
+    return invalid('leaseOwner is required and must be at most 200 characters.')
+  }
+  const operation = 'bind_provider_reservation_to_batch'
+  const rpc = await callRpc(operation, {
+    p_reservation_id: reservationId,
+    p_batch_id: batchId,
+    p_lease_owner: leaseOwner.trim(),
+  }, client)
+  if (!rpc.ok) return rpc.failure
+  if (rpc.data !== true) return { outcome: 'invalid_rpc_response', operation }
+  return { outcome: 'success', duplicateSafe: true }
+}
+
 function parseSettlement(
   operation: string,
   data: unknown,

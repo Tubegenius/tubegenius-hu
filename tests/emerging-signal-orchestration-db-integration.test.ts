@@ -34,6 +34,9 @@ const RUNS = {
   budgetB: '31000000-0000-4000-8000-000000000006',
   budgetC: '31000000-0000-4000-8000-000000000007',
   budgetD: '31000000-0000-4000-8000-000000000008',
+  bindMismatch: '31000000-0000-4000-8000-000000000009',
+  bindExpired: '31000000-0000-4000-8000-000000000010',
+  bindCrossDay: '31000000-0000-4000-8000-000000000011',
 } as const
 
 function cleanFixtures() {
@@ -147,6 +150,20 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
       runId: RUNS.batches, phase: 'observation', idempotencyKey: reservationKey, units: 1,
     })
     expect(reservation.outcome).toBe('reserved')
+    if (reservation.outcome === 'reserved') {
+      expect((await budget.bindProviderReservationToBatch(reservation.reservationId, first.batch.id, 'not-the-owner')).outcome)
+        .toBe('invalid_transition')
+      const [bindA, bindB] = await Promise.all([
+        budget.bindProviderReservationToBatch(reservation.reservationId, first.batch.id, winner),
+        budget.bindProviderReservationToBatch(reservation.reservationId, first.batch.id, winner),
+      ])
+      expect(bindA.outcome).toBe('success')
+      expect(bindB.outcome).toBe('success')
+      expect(dockerPsql(`
+        select count(*) from signal_provider_budget_reservations
+        where id='${reservation.reservationId}' and batch_id='${first.batch.id}';
+      `).trim()).toBe('1')
+    }
     const history = await listBatchReservations(first.batch.id)
     expect(history.outcome).toBe('success')
     if (history.outcome === 'success') expect(history.reservations).toHaveLength(1)
@@ -157,6 +174,10 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     const completed = await completeCollectionBatch(first.batch.id, winner)
     expect(completed.outcome).toBe('success')
     if (completed.outcome === 'success') expect(completed.batch.completed_item_count).toBe(3)
+    if (reservation.outcome === 'reserved') {
+      expect((await budget.bindProviderReservationToBatch(reservation.reservationId, first.batch.id, winner)).outcome)
+        .toBe('success')
+    }
   })
 
   it('deduplicates concurrent reservations and enforces the 300-unit discovery ceiling', async () => {
@@ -187,6 +208,104 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     expect(results.filter(result => result.outcome === 'reserved')).toHaveLength(2)
     expect(results.filter(result => result.outcome === 'budget_exhausted')).toHaveLength(1)
     expect(dockerPsql(`select reserved_units + committed_units from signal_provider_daily_budgets where usage_type='discovery_search';`).trim()).toBe('300')
+  })
+
+  it('refuses to bind a reservation whose canonical key does not identify the batch attempt', async () => {
+    insertRun(RUNS.bindMismatch, 'bind-mismatch')
+    const { ensureRunPhases } = await import('@/lib/emerging-signal/run-phases')
+    const { ensureCollectionBatch, claimCollectionBatch } = await import('@/lib/emerging-signal/batches')
+    const budget = await import('@/lib/emerging-signal/provider-budget')
+    const phases = await ensureRunPhases(RUNS.bindMismatch)
+    if (phases.outcome !== 'success') throw new Error(JSON.stringify(phases))
+    const discovery = phases.phases.find(row => row.phase === 'discovery')!
+    const batch = await ensureCollectionBatch({
+      runPhaseId: discovery.id, phase: 'discovery', bucket: 'bind-mismatch', provider: 'youtube',
+      operation: 'youtube.search.list', itemIds: ['seed-mismatch'],
+    })
+    if (batch.outcome !== 'success') throw new Error(JSON.stringify(batch))
+    expect((await claimCollectionBatch({ batchId: batch.batch.id, leaseOwner: 'bind-worker' })).outcome).toBe('claimed')
+    const reservation = await budget.reserveProviderUnits({
+      provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
+      runId: RUNS.bindMismatch, phase: 'discovery', idempotencyKey: 'wrong-key', units: 100,
+    })
+    if (reservation.outcome !== 'reserved') throw new Error(JSON.stringify(reservation))
+    expect((await budget.bindProviderReservationToBatch(reservation.reservationId, batch.batch.id, 'bind-worker')).outcome)
+      .toBe('invalid_transition')
+    expect(dockerPsql(`select coalesce(batch_id::text, 'NULL') from signal_provider_budget_reservations where id='${reservation.reservationId}';`).trim())
+      .toBe('NULL')
+    expect((await budget.releaseProviderUnits(reservation.reservationId)).outcome).toBe('success')
+  })
+
+  it('refuses binding after the batch lease has expired', async () => {
+    insertRun(RUNS.bindExpired, 'bind-expired')
+    const { ensureRunPhases } = await import('@/lib/emerging-signal/run-phases')
+    const { ensureCollectionBatch, claimCollectionBatch, buildProviderReservationIdempotencyKey } = await import('@/lib/emerging-signal/batches')
+    const budget = await import('@/lib/emerging-signal/provider-budget')
+    const phases = await ensureRunPhases(RUNS.bindExpired)
+    if (phases.outcome !== 'success') throw new Error(JSON.stringify(phases))
+    const discovery = phases.phases.find(row => row.phase === 'discovery')!
+    const batch = await ensureCollectionBatch({
+      runPhaseId: discovery.id, phase: 'discovery', bucket: 'bind-expired', provider: 'youtube',
+      operation: 'youtube.search.list', itemIds: ['seed-expired'],
+    })
+    if (batch.outcome !== 'success') throw new Error(JSON.stringify(batch))
+    const past = new Date(Date.now() - 10 * 60_000)
+    expect((await claimCollectionBatch({ batchId: batch.batch.id, leaseOwner: 'expired-bind-worker', leaseSeconds: 1, now: past })).outcome)
+      .toBe('claimed')
+    const reservation = await budget.reserveProviderUnits({
+      provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
+      runId: RUNS.bindExpired, phase: 'discovery',
+      idempotencyKey: buildProviderReservationIdempotencyKey(batch.batch.id, 1)!, units: 100,
+    })
+    if (reservation.outcome !== 'reserved') throw new Error(JSON.stringify(reservation))
+    expect((await budget.bindProviderReservationToBatch(reservation.reservationId, batch.batch.id, 'expired-bind-worker')).outcome)
+      .toBe('invalid_transition')
+    expect((await budget.releaseProviderUnits(reservation.reservationId)).outcome).toBe('success')
+  })
+
+  it('rejects a second reservation for the same batch attempt across quota dates', async () => {
+    insertRun(RUNS.bindCrossDay, 'bind-cross-day')
+    const { ensureRunPhases } = await import('@/lib/emerging-signal/run-phases')
+    const { ensureCollectionBatch, claimCollectionBatch, buildProviderReservationIdempotencyKey } = await import('@/lib/emerging-signal/batches')
+    const budget = await import('@/lib/emerging-signal/provider-budget')
+    const phases = await ensureRunPhases(RUNS.bindCrossDay)
+    if (phases.outcome !== 'success') throw new Error(JSON.stringify(phases))
+    const discovery = phases.phases.find(row => row.phase === 'discovery')!
+    const batch = await ensureCollectionBatch({
+      runPhaseId: discovery.id, phase: 'discovery', bucket: 'bind-cross-day', provider: 'youtube',
+      operation: 'youtube.search.list', itemIds: ['seed-cross-day'],
+    })
+    if (batch.outcome !== 'success') throw new Error(JSON.stringify(batch))
+    expect((await claimCollectionBatch({ batchId: batch.batch.id, leaseOwner: 'cross-day-worker' })).outcome).toBe('claimed')
+    const key = buildProviderReservationIdempotencyKey(batch.batch.id, 1)!
+    const first = await budget.reserveProviderUnits({
+      provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
+      runId: RUNS.bindCrossDay, phase: 'discovery', idempotencyKey: key, units: 100,
+    })
+    if (first.outcome !== 'reserved') throw new Error(JSON.stringify(first))
+    expect((await budget.bindProviderReservationToBatch(first.reservationId, batch.batch.id, 'cross-day-worker')).outcome)
+      .toBe('success')
+
+    dockerPsql(`
+      insert into signal_provider_daily_budgets
+        (id, provider, usage_scope, usage_type, quota_date, limit_units, reserved_units)
+      values
+        ('39000000-0000-4000-8000-000000000001', 'youtube', 'background', 'discovery_search',
+         (timezone('America/Los_Angeles', statement_timestamp()))::date + 1, 300, 100);
+      insert into signal_provider_budget_reservations
+        (id, daily_budget_id, run_id, phase, idempotency_key, requested_units, lease_expires_at)
+      values
+        ('39000000-0000-4000-8000-000000000002', '39000000-0000-4000-8000-000000000001',
+         '${RUNS.bindCrossDay}', 'discovery', '${key}', 100, clock_timestamp() + interval '2 minutes');
+    `)
+    expect((await budget.bindProviderReservationToBatch(
+      '39000000-0000-4000-8000-000000000002', batch.batch.id, 'cross-day-worker',
+    )).outcome).toBe('invalid_transition')
+    expect(dockerPsql(`
+      select coalesce(batch_id::text, 'NULL')
+      from signal_provider_budget_reservations
+      where id='39000000-0000-4000-8000-000000000002';
+    `).trim()).toBe('NULL')
   })
 
   it('settles success/unknown/release states and keeps ledger invariants exact', async () => {

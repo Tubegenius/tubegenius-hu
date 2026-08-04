@@ -413,10 +413,9 @@ export async function listBatchReservations(
       .from('signal_provider_budget_reservations')
       .select('id,daily_budget_id,run_id,batch_id,phase,idempotency_key,requested_units,committed_units,status,attempt_started_at,lease_expires_at,created_at,committed_at,released_at')
       // The immutable 061 reserve RPC has no batch_id argument. PFM-3B2
-      // therefore correlates history through its collision-safe canonical
-      // idempotency prefix; the nullable FK remains available for a later,
-      // separately migrated bind-RPC without weakening today's audit trail.
-      .like('idempotency_key', `signal-batch:${batchId}:attempt:%`)
+      // creates the reservation first; the 063 bind RPC then fills the
+      // one-way FK before the provider attempt starts.
+      .eq('batch_id', batchId)
       .order('created_at', { ascending: true })
     if (error) return databaseFailure(operation, error)
     if (!Array.isArray(data)) return { outcome: 'invalid_rpc_response', operation }
