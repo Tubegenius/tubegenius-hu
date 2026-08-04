@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/refresh-trends",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/collect-signals",
+      "schedule": "0 5 * * *"
     }
   ]
 }
