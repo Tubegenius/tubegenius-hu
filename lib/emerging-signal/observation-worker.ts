@@ -43,6 +43,8 @@ export interface ObservationVideoStats {
 export type ObservationProviderResult =
   | { outcome: 'success'; videos: ObservationVideoStats[] }
   | { outcome: 'outcome_unknown'; errorClass: 'timeout' | 'connection_lost' | 'ambiguous_response' }
+  | { outcome: 'quota_exhausted' }
+  | { outcome: 'failure'; errorClass: 'provider_rejected' | 'invalid_response' }
 
 export interface ObservationProvider {
   fetchVideoStats(videoIds: readonly string[]): Promise<ObservationProviderResult>
@@ -52,6 +54,7 @@ export type ObservationWorkerResult =
   | { outcome: 'completed'; batch: SignalCollectionBatchRow; observedVideoCount: number; missingVideoCount: number; observationCount: number }
   | { outcome: 'no_targets'; batch: SignalCollectionBatchRow }
   | { outcome: 'budget_exhausted'; batch: SignalCollectionBatchRow | null }
+  | { outcome: 'provider_quota_exhausted'; batch: SignalCollectionBatchRow }
   | { outcome: 'outcome_unknown'; batch: SignalCollectionBatchRow; errorClass: string }
   | { outcome: 'not_claimed'; reason: 'missing' | 'terminal' | 'lease_active' | 'attempts_exhausted' | 'race_lost' }
   | { outcome: 'not_applied'; reason: 'missing' | 'attempts_exhausted' | 'race_lost' }
@@ -246,25 +249,57 @@ export async function processObservationBatch(
     return closed.outcome === 'retryable' || closed.outcome === 'failed' ? closed : started
   }
 
-  let providerResult: ObservationProviderResult
+  let providerResult: unknown
   try {
     providerResult = await input.provider.fetchVideoStats(batch.item_ids)
   } catch {
     providerResult = { outcome: 'outcome_unknown', errorClass: 'connection_lost' }
   }
-  if (providerResult.outcome === 'outcome_unknown') {
+  if (
+    providerResult && typeof providerResult === 'object' &&
+    (providerResult as { outcome?: unknown }).outcome === 'outcome_unknown' &&
+    ['timeout', 'connection_lost', 'ambiguous_response'].includes(
+      String((providerResult as { errorClass?: unknown }).errorClass),
+    )
+  ) {
+    const errorClass = String((providerResult as { errorClass: unknown }).errorClass)
     const settled = await markProviderOutcomeUnknown(reservationId, client)
     if (settled.outcome !== 'success') return settled
     const unknown = await markCollectionBatchOutcomeUnknown(batch.id, input.leaseOwner, 0, client)
     return unknown.outcome === 'success'
-      ? { outcome: 'outcome_unknown', batch: unknown.batch, errorClass: providerResult.errorClass }
+      ? { outcome: 'outcome_unknown', batch: unknown.batch, errorClass }
       : unknown
   }
 
-  const parsed = parseProviderVideos(providerResult.videos, batch.item_ids)
+
+  if (
+    providerResult && typeof providerResult === 'object' &&
+    (providerResult as { outcome?: unknown }).outcome === 'quota_exhausted'
+  ) {
+    const committed = await commitProviderUnits(reservationId, 1, client)
+    if (committed.outcome !== 'success') return committed
+    const failed = await failCollectionBatch(batch.id, input.leaseOwner, 'provider_quota_exhausted', 0, client)
+    return failed.outcome === 'success' ? { outcome: 'provider_quota_exhausted', batch: failed.batch } : failed
+  }
+
+  if (
+    providerResult && typeof providerResult === 'object' &&
+    (providerResult as { outcome?: unknown }).outcome === 'failure' &&
+    ['provider_rejected', 'invalid_response'].includes(String((providerResult as { errorClass?: unknown }).errorClass))
+  ) {
+    const committed = await commitProviderUnits(reservationId, 1, client)
+    if (committed.outcome !== 'success') return committed
+    return closeRetryOrFail(batch, input.leaseOwner, String((providerResult as { errorClass: unknown }).errorClass), client)
+  }
+
+  const videos = providerResult && typeof providerResult === 'object' &&
+    (providerResult as { outcome?: unknown }).outcome === 'success'
+    ? (providerResult as { videos?: unknown }).videos
+    : null
+  const parsed = parseProviderVideos(Array.isArray(videos) ? videos as ObservationVideoStats[] : [], batch.item_ids)
   const committed = await commitProviderUnits(reservationId, 1, client)
   if (committed.outcome !== 'success') return committed
-  if (!parsed.ok) return closeRetryOrFail(batch, input.leaseOwner, 'invalid_provider_response', client)
+  if (!Array.isArray(videos) || !parsed.ok) return closeRetryOrFail(batch, input.leaseOwner, 'invalid_provider_response', client)
 
   const persisted = await persistObservationResults({
     targets: targetsResult.targets,

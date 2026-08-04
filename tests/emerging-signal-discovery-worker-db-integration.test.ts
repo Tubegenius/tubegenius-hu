@@ -28,7 +28,8 @@ const RUN_UNKNOWN = '52000000-0000-4000-8000-000000000003'
 const RUN_CONCURRENT = '52000000-0000-4000-8000-000000000004'
 const RUN_REPEAT = '52000000-0000-4000-8000-000000000005'
 const RUN_INVALID = '52000000-0000-4000-8000-000000000006'
-const RUN_IDS = [RUN_SUCCESS, RUN_EMPTY, RUN_UNKNOWN, RUN_CONCURRENT, RUN_REPEAT, RUN_INVALID]
+const RUN_QUOTA = '52000000-0000-4000-8000-000000000007'
+const RUN_IDS = [RUN_SUCCESS, RUN_EMPTY, RUN_UNKNOWN, RUN_CONCURRENT, RUN_REPEAT, RUN_INVALID, RUN_QUOTA]
 
 interface RpcCall { name: string; args: Record<string, unknown> }
 
@@ -120,7 +121,8 @@ async function prepare(runId: string) {
     : runId === RUN_EMPTY ? 'empty'
       : runId === RUN_UNKNOWN ? 'unknown'
         : runId === RUN_CONCURRENT ? 'concurrent'
-          : 'invalid'
+          : runId === RUN_QUOTA ? 'quota'
+            : 'invalid'
   const batch = prepared.batches.find(row => row.item_ids[0] === `pfm3b4_${suffix}`)
   if (!batch) throw new Error('Expected discovery batch was not prepared.')
   return batch
@@ -241,6 +243,24 @@ describeIfLocalDb.sequential('PFM-3B4 discovery worker — real local DB, mocked
     }, client)
     expect(result).toMatchObject({ outcome: 'retryable', errorClass: 'invalid_provider_response' })
     expect(psql(`select status from signal_collection_batches where id='${batch.id}';`).trim()).toBe('retryable')
+    expect(rpcCalls.filter(call => call.name === 'commit_provider_units')).toHaveLength(1)
+    expect(rpcCalls.filter(call => call.name === 'mark_provider_outcome_unknown')).toHaveLength(0)
+  })
+
+  it('settles quota exhaustion once and terminally stops the batch without retrying the provider', async () => {
+    seedRun(RUN_QUOTA, 'quota')
+    const batch = await prepare(RUN_QUOTA)
+    const { client, rpcCalls } = isolatedWorkerClient()
+    const { processDiscoveryBatch } = await import('@/lib/emerging-signal/discovery-worker')
+    let calls = 0
+    const result = await processDiscoveryBatch({
+      batchId: batch.id, runId: RUN_QUOTA, leaseOwner: 'discovery-quota',
+      provider: { search: async () => { calls += 1; return { outcome: 'quota_exhausted' } } },
+    }, client)
+    expect(result.outcome).toBe('provider_quota_exhausted')
+    expect(calls).toBe(1)
+    expect(psql(`select status||':'||error_class from signal_collection_batches where id='${batch.id}';`).trim())
+      .toBe('failed:provider_quota_exhausted')
     expect(rpcCalls.filter(call => call.name === 'commit_provider_units')).toHaveLength(1)
     expect(rpcCalls.filter(call => call.name === 'mark_provider_outcome_unknown')).toHaveLength(0)
   })

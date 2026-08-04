@@ -81,6 +81,45 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     expect(dockerPsql(`select count(*) from signal_run_phases where run_id='${RUNS.phases}';`).trim()).toBe('2')
   })
 
+  it('allows exactly one concurrent same-key scheduled-run claimant', async () => {
+    const { claimScheduledSignalRun } = await import('@/lib/emerging-signal/run-phases')
+    const input = { idempotencyKey: 'pfm3b2:scheduled-run-race', leaseSeconds: 270 }
+    const [first, second] = await Promise.all([
+      claimScheduledSignalRun(input),
+      claimScheduledSignalRun(input),
+    ])
+    expect([first, second].filter(result => result.outcome === 'claimed')).toHaveLength(1)
+    expect([first, second].filter(result => result.outcome === 'not_claimable')).toHaveLength(1)
+    expect(dockerPsql(`select count(*) from signal_runs where idempotency_key='pfm3b2:scheduled-run-race';`).trim()).toBe('1')
+  })
+
+  it('reclaims an expired scheduled-run lease and rejects the stale owner finalization', async () => {
+    const { claimScheduledSignalRun, finalizeScheduledSignalRun } = await import('@/lib/emerging-signal/run-phases')
+    const expiredAt = new Date(Date.now() - 10 * 60_000)
+    const first = await claimScheduledSignalRun({
+      idempotencyKey: 'pfm3b2:scheduled-run-reclaim', leaseSeconds: 1, now: expiredAt,
+    })
+    expect(first.outcome).toBe('claimed')
+    if (first.outcome !== 'claimed') return
+
+    const reclaimed = await claimScheduledSignalRun({
+      idempotencyKey: 'pfm3b2:scheduled-run-reclaim', leaseSeconds: 270,
+    })
+    expect(reclaimed.outcome).toBe('claimed')
+    if (reclaimed.outcome !== 'claimed') return
+    expect(reclaimed.created).toBe(false)
+    expect(reclaimed.run.id).toBe(first.run.id)
+    expect(reclaimed.claimExpiresAt).not.toBe(first.claimExpiresAt)
+
+    expect((await finalizeScheduledSignalRun({
+      runId: first.run.id, claimExpiresAt: first.claimExpiresAt, status: 'completed',
+    })).outcome).toBe('not_applied')
+    expect((await finalizeScheduledSignalRun({
+      runId: reclaimed.run.id, claimExpiresAt: reclaimed.claimExpiresAt, status: 'completed',
+    })).outcome).toBe('success')
+    expect(dockerPsql(`select status from signal_runs where id='${reclaimed.run.id}';`).trim()).toBe('completed')
+  })
+
   it('allows exactly one concurrent phase claimant and rejects the losing transition', async () => {
     insertRun(RUNS.phases, 'phase-race')
     const { ensureRunPhases, claimRunPhase, completeRunPhase } = await import('@/lib/emerging-signal/run-phases')

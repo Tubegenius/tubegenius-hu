@@ -45,6 +45,8 @@ export interface DiscoverySearchRequest {
 export type DiscoveryProviderResult =
   | { outcome: 'success'; videos: ScheduledDiscoveryVideo[] }
   | { outcome: 'outcome_unknown'; errorClass: 'timeout' | 'connection_lost' | 'ambiguous_response' }
+  | { outcome: 'quota_exhausted' }
+  | { outcome: 'failure'; errorClass: 'provider_rejected' | 'invalid_response' }
 
 export interface DiscoveryProvider {
   search(request: DiscoverySearchRequest): Promise<DiscoveryProviderResult>
@@ -53,6 +55,7 @@ export interface DiscoveryProvider {
 export type DiscoveryWorkerResult =
   | { outcome: 'completed'; batch: SignalCollectionBatchRow; seed: SignalSeedRow; evidenceCount: number; scheduledCount: number }
   | { outcome: 'budget_exhausted'; batch: SignalCollectionBatchRow | null }
+  | { outcome: 'provider_quota_exhausted'; batch: SignalCollectionBatchRow }
   | { outcome: 'outcome_unknown'; batch: SignalCollectionBatchRow; errorClass: string }
   | { outcome: 'not_claimed'; reason: 'missing' | 'terminal' | 'lease_active' | 'attempts_exhausted' | 'race_lost' }
   | { outcome: 'not_applied'; reason: 'missing' | 'attempts_exhausted' | 'race_lost' }
@@ -214,6 +217,33 @@ export async function processDiscoveryBatch(
       if (seedUpdated.outcome !== 'success') return seedUpdated
     }
     return { outcome: 'outcome_unknown', batch: unknown.batch, errorClass }
+  }
+
+  if (
+    providerResult && typeof providerResult === 'object' &&
+    (providerResult as { outcome?: unknown }).outcome === 'quota_exhausted'
+  ) {
+    const committed = await commitProviderUnits(reservationId, 100, client)
+    if (committed.outcome !== 'success') return committed
+    const failed = await failCollectionBatch(batch.id, input.leaseOwner, 'provider_quota_exhausted', 0, client)
+    if (failed.outcome !== 'success') return failed
+    const seedUpdated = await markDiscoverySeedFailure(seed.id, observedAt, client)
+    return seedUpdated.outcome === 'success'
+      ? { outcome: 'provider_quota_exhausted', batch: failed.batch }
+      : seedUpdated
+  }
+
+  if (
+    providerResult && typeof providerResult === 'object' &&
+    (providerResult as { outcome?: unknown }).outcome === 'failure' &&
+    ['provider_rejected', 'invalid_response'].includes(String((providerResult as { errorClass?: unknown }).errorClass))
+  ) {
+    const committed = await commitProviderUnits(reservationId, 100, client)
+    if (committed.outcome !== 'success') return committed
+    return closeRetryOrFail(
+      batch, seed, input.leaseOwner,
+      String((providerResult as { errorClass: unknown }).errorClass), observedAt, client,
+    )
   }
 
   // A successful provider response consumed the exact search.list cost even

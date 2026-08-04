@@ -51,8 +51,31 @@ export type CollectionControlResult =
   | { outcome: 'success'; enabled: boolean; updatedAt: string; updatedBy: string | null }
   | OperationFailure
 
+export interface ScheduledSignalRunRow {
+  id: string
+  idempotency_key: string
+  status: 'started' | 'completed' | 'failed'
+  started_at: string
+  completed_at: string | null
+  external_calls_made: number
+  error_class: string | null
+  run_claim_expires_at: string | null
+}
+
+export type ScheduledRunClaimResult =
+  | { outcome: 'claimed'; run: ScheduledSignalRunRow; claimExpiresAt: string; created: boolean }
+  | { outcome: 'not_claimable'; reason: 'terminal' | 'lease_active' | 'race_lost' }
+  | OperationFailure
+
+export type ScheduledRunTransitionResult =
+  | { outcome: 'success'; run: ScheduledSignalRunRow }
+  | { outcome: 'not_applied'; reason: 'missing' | 'race_lost' }
+  | OperationFailure
+
 const PHASE_COLUMNS =
   'id,run_id,phase,status,attempt,max_attempts,lease_owner,lease_acquired_at,lease_expires_at,started_at,completed_at,created_at'
+const RUN_COLUMNS =
+  'id,idempotency_key,status,started_at,completed_at,external_calls_made,error_class,run_claim_expires_at'
 
 function admin(client?: SignalAdminClient): SignalAdminClient {
   return client ?? createAdminClient()
@@ -98,6 +121,155 @@ function asPhaseRows(data: unknown): SignalRunPhaseRow[] | null {
     typeof row.created_at !== 'string'
   )) return null
   return rows
+}
+
+function asScheduledRun(data: unknown): ScheduledSignalRunRow | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  const row = data as ScheduledSignalRunRow
+  if (
+    !isUuid(row.id) || typeof row.idempotency_key !== 'string' || !row.idempotency_key ||
+    !['started', 'completed', 'failed'].includes(row.status) || typeof row.started_at !== 'string' ||
+    (row.completed_at !== null && typeof row.completed_at !== 'string') ||
+    !Number.isInteger(row.external_calls_made) || row.external_calls_made < 0 ||
+    (row.error_class !== null && typeof row.error_class !== 'string') ||
+    (row.run_claim_expires_at !== null && typeof row.run_claim_expires_at !== 'string')
+  ) return null
+  return row
+}
+
+export async function claimScheduledSignalRun(
+  input: { idempotencyKey: string; leaseSeconds?: number; now?: Date },
+  client?: SignalAdminClient,
+): Promise<ScheduledRunClaimResult> {
+  const idempotencyKey = input.idempotencyKey.trim()
+  if (!idempotencyKey || idempotencyKey.length > 512) return invalid('idempotencyKey is required and must be at most 512 characters.')
+  const leaseSeconds = input.leaseSeconds ?? 120
+  if (!validLeaseSeconds(leaseSeconds)) return invalid('leaseSeconds must be an integer between 1 and 900.')
+  const now = input.now ?? new Date()
+  if (!Number.isFinite(now.getTime())) return invalid('now must be a valid date.')
+  const operation = 'claim_scheduled_signal_run'
+  const db = admin(client)
+  const claimExpiresAt = new Date(now.getTime() + leaseSeconds * 1000).toISOString()
+
+  try {
+    const { data: inserted, error: insertError } = await db.from('signal_runs').insert({
+      run_type: 'scheduled_enrichment',
+      idempotency_key: idempotencyKey,
+      status: 'started',
+      run_claim_expires_at: claimExpiresAt,
+    }).select(RUN_COLUMNS).maybeSingle()
+    if (!insertError && inserted) {
+      const run = asScheduledRun(inserted)
+      return run ? { outcome: 'claimed', run, claimExpiresAt, created: true } : { outcome: 'invalid_rpc_response', operation }
+    }
+    if (!insertError || (insertError as { code?: string }).code !== '23505') {
+      return databaseFailure(operation, insertError ?? { message: 'Run insert returned no row.' })
+    }
+
+    const { data: currentData, error: readError } = await db.from('signal_runs')
+      .select(RUN_COLUMNS)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle()
+    if (readError) return databaseFailure(operation, readError)
+    const current = asScheduledRun(currentData)
+    if (!current) return { outcome: 'invalid_rpc_response', operation }
+    if (current.status !== 'started') return { outcome: 'not_claimable', reason: 'terminal' }
+    if (current.run_claim_expires_at && Date.parse(current.run_claim_expires_at) > now.getTime()) {
+      return { outcome: 'not_claimable', reason: 'lease_active' }
+    }
+
+    let query = db.from('signal_runs')
+      .update({ run_claim_expires_at: claimExpiresAt })
+      .eq('id', current.id)
+      .eq('status', 'started')
+    query = current.run_claim_expires_at === null
+      ? query.is('run_claim_expires_at', null)
+      : query.eq('run_claim_expires_at', current.run_claim_expires_at)
+    const { data: reclaimed, error: reclaimError } = await query.select(RUN_COLUMNS).maybeSingle()
+    if (reclaimError) return databaseFailure(operation, reclaimError)
+    if (!reclaimed) return { outcome: 'not_claimable', reason: 'race_lost' }
+    const run = asScheduledRun(reclaimed)
+    return run ? { outcome: 'claimed', run, claimExpiresAt, created: false } : { outcome: 'invalid_rpc_response', operation }
+  } catch (error) {
+    return databaseFailure(operation, error)
+  }
+}
+
+async function countStartedProviderAttempts(runId: string, client?: SignalAdminClient): Promise<number | OperationFailure> {
+  const operation = 'count_scheduled_signal_provider_attempts'
+  try {
+    const { count, error } = await admin(client)
+      .from('signal_provider_budget_reservations')
+      .select('id', { count: 'exact', head: true })
+      .eq('run_id', runId)
+      .not('attempt_started_at', 'is', null)
+    if (error) return databaseFailure(operation, error)
+    return Number.isInteger(count) && Number(count) >= 0 ? Number(count) : { outcome: 'invalid_rpc_response', operation }
+  } catch (error) {
+    return databaseFailure(operation, error)
+  }
+}
+
+export async function finalizeScheduledSignalRun(
+  input: { runId: string; claimExpiresAt: string; status: 'completed' | 'failed'; errorClass?: string; now?: Date },
+  client?: SignalAdminClient,
+): Promise<ScheduledRunTransitionResult> {
+  if (!isUuid(input.runId)) return invalid('runId must be a UUID.')
+  if (!Number.isFinite(Date.parse(input.claimExpiresAt))) return invalid('claimExpiresAt must be valid.')
+  if (input.status === 'failed' && (!input.errorClass?.trim() || input.errorClass.length > 200)) {
+    return invalid('A failed run requires an errorClass of at most 200 characters.')
+  }
+  if (input.status === 'completed' && input.errorClass !== undefined) return invalid('errorClass is only valid for failed runs.')
+  const now = input.now ?? new Date()
+  if (!Number.isFinite(now.getTime())) return invalid('now must be a valid date.')
+  const attemptCount = await countStartedProviderAttempts(input.runId, client)
+  if (typeof attemptCount !== 'number') return attemptCount
+  const operation = `finalize_scheduled_signal_run_${input.status}`
+  try {
+    const { data, error } = await admin(client).from('signal_runs')
+      .update({
+        status: input.status,
+        completed_at: now.toISOString(),
+        external_calls_made: attemptCount,
+        error_class: input.status === 'failed' ? input.errorClass!.trim() : null,
+        run_claim_expires_at: null,
+      })
+      .eq('id', input.runId)
+      .eq('status', 'started')
+      .eq('run_claim_expires_at', input.claimExpiresAt)
+      .gt('run_claim_expires_at', now.toISOString())
+      .select(RUN_COLUMNS)
+      .maybeSingle()
+    if (error) return databaseFailure(operation, error)
+    if (!data) return { outcome: 'not_applied', reason: 'race_lost' }
+    const run = asScheduledRun(data)
+    return run ? { outcome: 'success', run } : { outcome: 'invalid_rpc_response', operation }
+  } catch (error) {
+    return databaseFailure(operation, error)
+  }
+}
+
+export async function releaseScheduledSignalRunClaim(
+  runId: string,
+  claimExpiresAt: string,
+  client?: SignalAdminClient,
+): Promise<{ outcome: 'success' } | { outcome: 'not_applied'; reason: 'missing' | 'race_lost' } | OperationFailure> {
+  if (!isUuid(runId)) return invalid('runId must be a UUID.')
+  if (!Number.isFinite(Date.parse(claimExpiresAt))) return invalid('claimExpiresAt must be valid.')
+  const operation = 'release_scheduled_signal_run_claim'
+  try {
+    const { data, error } = await admin(client).from('signal_runs')
+      .update({ run_claim_expires_at: null })
+      .eq('id', runId)
+      .eq('status', 'started')
+      .eq('run_claim_expires_at', claimExpiresAt)
+      .select('id')
+      .maybeSingle()
+    if (error) return databaseFailure(operation, error)
+    return data ? { outcome: 'success' } : { outcome: 'not_applied', reason: 'race_lost' }
+  } catch (error) {
+    return databaseFailure(operation, error)
+  }
 }
 
 export async function getCollectionControlState(

@@ -22,23 +22,24 @@ const describeIfLocalDb = stackAvailable ? describe : describe.skip
 const RUN_SUCCESS = '41000000-0000-4000-8000-000000000001'
 const RUN_UNKNOWN = '41000000-0000-4000-8000-000000000002'
 const RUN_CONCURRENT = '41000000-0000-4000-8000-000000000003'
+const RUN_QUOTA = '41000000-0000-4000-8000-000000000004'
 
 function cleanFixtures() {
   psql(`
-    delete from signal_observations where signal_run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}');
+    delete from signal_observations where signal_run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}');
     delete from signal_observation_schedule where signal_evidence_id in (
       select id from signal_evidence where external_ref like 'pfm3b3_%'
     );
-    delete from signal_provider_budget_reservations where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}');
+    delete from signal_provider_budget_reservations where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}');
     delete from signal_collection_batches where run_phase_id in (
-      select id from signal_run_phases where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}')
+      select id from signal_run_phases where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}')
     );
-    delete from signal_run_provider_usage where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}');
-    delete from signal_run_phases where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}');
-    delete from signal_evidence where discovered_in_run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}');
+    delete from signal_run_provider_usage where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}');
+    delete from signal_run_phases where run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}');
+    delete from signal_evidence where discovered_in_run_id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}');
     delete from signal_sources where external_id like 'pfm3b3_%';
     delete from youtube_videos where video_id like 'pfm3b3_%';
-    delete from signal_runs where id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}');
+    delete from signal_runs where id in ('${RUN_SUCCESS}','${RUN_UNKNOWN}','${RUN_CONCURRENT}','${RUN_QUOTA}');
     delete from signal_provider_daily_budgets where not exists (
       select 1 from signal_provider_budget_reservations r where r.daily_budget_id=signal_provider_daily_budgets.id
     );
@@ -167,5 +168,23 @@ describeIfLocalDb.sequential('PFM-3B3 observation worker — real local DB, mock
     expect([first, second].filter(result => result.outcome === 'not_claimed')).toHaveLength(1)
     expect(providerCalls).toBe(1)
     expect(psql(`select count(*) from signal_provider_budget_reservations where run_id='${RUN_CONCURRENT}';`).trim()).toBe('1')
+  })
+
+  it('settles YouTube quota exhaustion once and terminally stops the observation batch', async () => {
+    seedRun(RUN_QUOTA, false)
+    const prepared = await prepare(RUN_QUOTA)
+    const batchId = prepared.batches[0].id
+    const { processObservationBatch } = await import('@/lib/emerging-signal/observation-worker')
+    let providerCalls = 0
+    const result = await processObservationBatch({
+      batchId, runId: RUN_QUOTA, leaseOwner: 'observation-quota',
+      provider: { fetchVideoStats: async () => { providerCalls += 1; return { outcome: 'quota_exhausted' } } },
+    })
+    expect(result.outcome).toBe('provider_quota_exhausted')
+    expect(providerCalls).toBe(1)
+    expect(psql(`select status||':'||error_class from signal_collection_batches where id='${batchId}';`).trim())
+      .toBe('failed:provider_quota_exhausted')
+    expect(psql(`select status||':'||committed_units from signal_provider_budget_reservations where run_id='${RUN_QUOTA}';`).trim())
+      .toBe('committed:1')
   })
 })
