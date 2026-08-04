@@ -17,6 +17,12 @@ import type { TrendCandidate, VideoWithRelevance, SerperResult } from '@/lib/tre
 import { computeFingerprint } from './fingerprint'
 import { isBlank, normalizeCanonicalUrl, extractDomain, safeParseDate } from './normalize'
 import type { EmergingSignalCaptureInput, EmergingSignalCaptureResult, EmergingSignalRunOutcome } from './types'
+import {
+  isUuid,
+  toSignalDatabaseError,
+  type OperationFailure,
+  type SignalAdminClient,
+} from './collection-types'
 
 type AdminClient = ReturnType<typeof createAdminClient>
 
@@ -410,6 +416,207 @@ async function upsertRunCluster(
 // ── Egy candidate teljes capture-je ──────────────────────────────
 
 type CandidateOutcome = 'completed' | 'skipped' | 'failed'
+
+export interface ScheduledDiscoveryVideo {
+  videoId: string
+  title: string
+  description?: string
+  channelId: string
+  channelTitle: string
+  publishedAt: string
+}
+
+export type ScheduledDiscoveryCaptureResult =
+  | { outcome: 'success'; clusterId: string; evidenceCount: number; scheduledCount: number }
+  | OperationFailure
+
+// Background discovery capture uses an already-owned scheduled_enrichment
+// run. Unlike captureOpportunitySignals it never creates/finalizes a run and
+// never calls a provider. All multi-item writes are batched: no per-video DB
+// round trip is permitted on the iad1 <-> eu-west-1 path.
+export async function captureScheduledDiscovery(
+  input: {
+    runId: string
+    seedFingerprint: string
+    seedText: string
+    category: string
+    videos: ScheduledDiscoveryVideo[]
+    observedAt?: Date
+  },
+  client?: SignalAdminClient,
+): Promise<ScheduledDiscoveryCaptureResult> {
+  const operation = 'capture_scheduled_signal_discovery'
+  if (!isUuid(input.runId)) return { outcome: 'invalid_request', message: 'runId must be a UUID.' }
+  if (!input.seedFingerprint.trim() || input.seedFingerprint.length > 512) {
+    return { outcome: 'invalid_request', message: 'seedFingerprint is required and must be at most 512 characters.' }
+  }
+  if (!input.seedText.trim() || input.seedText.length > 500) {
+    return { outcome: 'invalid_request', message: 'seedText is required and must be at most 500 characters.' }
+  }
+  if (!input.category.trim() || input.category.length > 100) {
+    return { outcome: 'invalid_request', message: 'category is required and must be at most 100 characters.' }
+  }
+  if (!Array.isArray(input.videos) || input.videos.length > 50) {
+    return { outcome: 'invalid_request', message: 'videos must contain at most 50 items.' }
+  }
+  const observedAt = input.observedAt ?? new Date()
+  if (!Number.isFinite(observedAt.getTime())) return { outcome: 'invalid_request', message: 'observedAt must be valid.' }
+
+  const byVideoId = new Map<string, ScheduledDiscoveryVideo>()
+  for (const video of input.videos) {
+    if (
+      !video || !/^[A-Za-z0-9_-]{1,100}$/.test(video.videoId) ||
+      !video.title?.trim() || video.title.length > 500 ||
+      !video.channelId?.trim() || video.channelId.length > 200 ||
+      !video.channelTitle?.trim() || video.channelTitle.length > 500 ||
+      (video.description !== undefined && video.description.length > 5_000) ||
+      !safeParseDate(video.publishedAt) || byVideoId.has(video.videoId)
+    ) return { outcome: 'invalid_request', message: 'Discovery videos must be unique and contain valid IDs, source identity, title and publish time.' }
+    byVideoId.set(video.videoId, video)
+  }
+
+  const fingerprint = computeFingerprint({
+    category: input.category,
+    candidateTopicEn: null,
+    candidateTopic: input.seedText,
+    seedKeyword: input.seedText,
+  })
+  if (!fingerprint) return { outcome: 'invalid_request', message: 'Unable to derive the discovery cluster fingerprint.' }
+  const db = client ?? createAdminClient()
+
+  try {
+    const published = [...byVideoId.values()].map(video => safeParseDate(video.publishedAt)!).sort()
+    const clusterId = await upsertCluster(db, {
+      primaryLabel: input.seedText.trim(),
+      category: input.category.trim(),
+      fingerprint: fingerprint.fingerprint,
+      version: fingerprint.version,
+      createdByRunId: input.runId,
+      firstEvidencePublishedAt: published[0] ?? null,
+    })
+    if (!clusterId) return { outcome: 'database_error', operation, error: { message: 'Cluster upsert failed.' } }
+
+    const videos = [...byVideoId.values()]
+    if (videos.length === 0) {
+      await upsertRunCluster(db, {
+        runId: input.runId,
+        clusterId,
+        inputSummaryHash: `scheduled:v${fingerprint.version}:${fingerprint.fingerprint.slice(0, 16)}`,
+        newEvidenceCount: 0,
+        checkStatus: 'completed',
+        skipReason: null,
+        errorClass: null,
+      })
+      return { outcome: 'success', clusterId, evidenceCount: 0, scheduledCount: 0 }
+    }
+
+    const { error: videoError } = await db.from('youtube_videos').upsert(
+      videos.map(video => ({
+        video_id: video.videoId,
+        title: video.title.trim(),
+        channel_id: video.channelId.trim(),
+        channel_title: video.channelTitle.trim(),
+        published_at: safeParseDate(video.publishedAt),
+        last_seen_at: observedAt.toISOString(),
+      })),
+      { onConflict: 'video_id' },
+    )
+    if (videoError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(videoError) }
+
+    const channelMap = new Map<string, string>()
+    for (const video of videos) channelMap.set(video.channelId.trim(), video.channelTitle.trim())
+    const { data: sourceData, error: sourceError } = await db.from('signal_sources').upsert(
+      [...channelMap].map(([externalId, displayName]) => ({
+        source_type: 'youtube_channel', external_id: externalId, display_name: displayName,
+        source_family_key: externalId, last_seen_at: observedAt.toISOString(),
+      })),
+      { onConflict: 'source_type,external_id' },
+    ).select('id,external_id')
+    if (sourceError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(sourceError) }
+    if (!Array.isArray(sourceData)) return { outcome: 'invalid_rpc_response', operation }
+    const sourceIds = new Map(sourceData.map(row => [String(row.external_id), String(row.id)]))
+    if (sourceIds.size !== channelMap.size || [...sourceIds.values()].some(id => !isUuid(id))) {
+      return { outcome: 'invalid_rpc_response', operation }
+    }
+
+    const evidenceRows = videos.map(video => ({
+      signal_source_id: sourceIds.get(video.channelId.trim())!,
+      evidence_type: 'youtube_video',
+      external_ref: video.videoId,
+      youtube_videos_ref: video.videoId,
+      title: video.title.trim(),
+      snippet: video.description?.trim() || null,
+      published_at: safeParseDate(video.publishedAt),
+      canonical_url: null,
+      discovered_in_run_id: input.runId,
+    }))
+
+    // Snapshot the existing natural keys before the insert. A repeated daily
+    // discovery may legitimately link old evidence again, but run audit must
+    // count only genuinely new evidence as new_evidence_count.
+    const { data: evidenceBeforeData, error: evidenceBeforeError } = await db
+      .from('signal_evidence')
+      .select('signal_source_id,external_ref,discovered_in_run_id')
+      .eq('evidence_type', 'youtube_video')
+      .in('external_ref', videos.map(video => video.videoId))
+    if (evidenceBeforeError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(evidenceBeforeError) }
+    if (!Array.isArray(evidenceBeforeData)) return { outcome: 'invalid_rpc_response', operation }
+    const existingEvidenceKeys = new Set(
+      evidenceBeforeData
+        .filter(row => row.discovered_in_run_id !== input.runId)
+        .map(row => `${row.signal_source_id}:${row.external_ref}`),
+    )
+
+    const { error: evidenceInsertError } = await db.from('signal_evidence').upsert(evidenceRows, {
+      onConflict: 'evidence_type,signal_source_id,external_ref', ignoreDuplicates: true,
+    })
+    if (evidenceInsertError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(evidenceInsertError) }
+
+    const { data: evidenceData, error: evidenceReadError } = await db
+      .from('signal_evidence')
+      .select('id,signal_source_id,external_ref')
+      .eq('evidence_type', 'youtube_video')
+      .in('external_ref', videos.map(video => video.videoId))
+    if (evidenceReadError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(evidenceReadError) }
+    if (!Array.isArray(evidenceData)) return { outcome: 'invalid_rpc_response', operation }
+    const expectedKeys = new Set(evidenceRows.map(row => `${row.signal_source_id}:${row.external_ref}`))
+    const exactEvidence = evidenceData.filter(row => expectedKeys.has(`${row.signal_source_id}:${row.external_ref}`))
+    if (exactEvidence.length !== expectedKeys.size || exactEvidence.some(row => !isUuid(String(row.id)))) {
+      return { outcome: 'invalid_rpc_response', operation }
+    }
+    const evidenceIds = exactEvidence.map(row => String(row.id))
+
+    const { error: linkError } = await db.from('signal_cluster_evidence').upsert(
+      evidenceIds.map(evidenceId => ({
+        signal_cluster_id: clusterId, signal_evidence_id: evidenceId,
+        linked_in_run_id: input.runId, relation_type: 'supports',
+      })),
+      { onConflict: 'signal_cluster_id,signal_evidence_id', ignoreDuplicates: true },
+    )
+    if (linkError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(linkError) }
+
+    const { error: scheduleError } = await db.from('signal_observation_schedule').upsert(
+      evidenceIds.map(evidenceId => ({ signal_evidence_id: evidenceId })),
+      { onConflict: 'signal_evidence_id', ignoreDuplicates: true },
+    )
+    if (scheduleError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(scheduleError) }
+
+    await upsertRunCluster(db, {
+      runId: input.runId,
+      clusterId,
+      inputSummaryHash: `scheduled:v${fingerprint.version}:${fingerprint.fingerprint.slice(0, 16)}`,
+      newEvidenceCount: evidenceRows.filter(
+        row => !existingEvidenceKeys.has(`${row.signal_source_id}:${row.external_ref}`),
+      ).length,
+      checkStatus: 'completed',
+      skipReason: null,
+      errorClass: null,
+    })
+    return { outcome: 'success', clusterId, evidenceCount: evidenceIds.length, scheduledCount: evidenceIds.length }
+  } catch (error) {
+    return { outcome: 'database_error', operation, error: toSignalDatabaseError(error) }
+  }
+}
 
 async function captureOneCandidate(
   admin: AdminClient,
