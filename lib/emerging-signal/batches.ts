@@ -283,7 +283,12 @@ export async function claimCollectionBatch(
     const now = input.now ?? new Date()
     const stale = current.status === 'in_progress' && current.lease_expires_at !== null && Date.parse(current.lease_expires_at) <= now.getTime()
     if (current.status === 'in_progress' && !stale) return { outcome: 'not_claimable', reason: 'lease_active' }
-    if (!['pending', 'retryable', 'in_progress'].includes(current.status)) return { outcome: 'not_claimable', reason: 'terminal' }
+    // outcome_unknown is intentionally retryable with a NEW attempt and a
+    // NEW reservation. The previous reservation remains committed_unknown;
+    // its quota is never returned (PFM-3A.4 state-machine contract).
+    if (!['pending', 'retryable', 'in_progress', 'outcome_unknown'].includes(current.status)) {
+      return { outcome: 'not_claimable', reason: 'terminal' }
+    }
     if (current.attempt >= current.max_attempts) return { outcome: 'not_claimable', reason: 'attempts_exhausted' }
 
     const acquiredAt = now.toISOString()
