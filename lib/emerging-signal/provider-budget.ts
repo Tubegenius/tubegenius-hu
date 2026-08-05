@@ -14,7 +14,9 @@ import {
 } from './collection-types'
 
 const REQUIRED_UNITS: Record<SignalUsageType, number> = {
-  discovery_search: 100,
+  // Since June 2026 search.list is metered in its own Search Queries bucket:
+  // one external attempt consumes one unit/call from the daily 100-call quota.
+  discovery_search: 1,
   observation_stats: 1,
 }
 

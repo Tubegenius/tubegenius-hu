@@ -219,7 +219,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     }
   })
 
-  it('deduplicates concurrent reservations and enforces the 300-unit discovery ceiling', async () => {
+  it('deduplicates concurrent reservations and enforces the 3-call discovery ceiling', async () => {
     insertRun(RUNS.replay, 'budget-replay')
     insertRun(RUNS.budgetA, 'budget-a')
     insertRun(RUNS.budgetB, 'budget-b')
@@ -228,7 +228,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     const { reserveProviderUnits } = await import('@/lib/emerging-signal/provider-budget')
     const reserve = (runId: string, key: string) => reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
-      runId, phase: 'discovery', idempotencyKey: key, units: 100,
+      runId, phase: 'discovery', idempotencyKey: key, units: 1,
     })
     const [replayA, replayB] = await Promise.all([
       reserve(RUNS.replay, 'pfm3b2-replay'),
@@ -237,7 +237,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     expect(replayA.outcome).toBe('reserved')
     expect(replayB.outcome).toBe('reserved')
     if (replayA.outcome === 'reserved' && replayB.outcome === 'reserved') expect(replayA.reservationId).toBe(replayB.reservationId)
-    expect(dockerPsql(`select reserved_units from signal_provider_daily_budgets where usage_type='discovery_search';`).trim()).toBe('100')
+    expect(dockerPsql(`select reserved_units from signal_provider_daily_budgets where usage_type='discovery_search';`).trim()).toBe('1')
 
     const results = await Promise.all([
       reserve(RUNS.budgetA, 'pfm3b2-a'),
@@ -246,7 +246,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     ])
     expect(results.filter(result => result.outcome === 'reserved')).toHaveLength(2)
     expect(results.filter(result => result.outcome === 'budget_exhausted')).toHaveLength(1)
-    expect(dockerPsql(`select reserved_units + committed_units from signal_provider_daily_budgets where usage_type='discovery_search';`).trim()).toBe('300')
+    expect(dockerPsql(`select reserved_units + committed_units from signal_provider_daily_budgets where usage_type='discovery_search';`).trim()).toBe('3')
   })
 
   it('refuses to bind a reservation whose canonical key does not identify the batch attempt', async () => {
@@ -265,7 +265,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     expect((await claimCollectionBatch({ batchId: batch.batch.id, leaseOwner: 'bind-worker' })).outcome).toBe('claimed')
     const reservation = await budget.reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
-      runId: RUNS.bindMismatch, phase: 'discovery', idempotencyKey: 'wrong-key', units: 100,
+      runId: RUNS.bindMismatch, phase: 'discovery', idempotencyKey: 'wrong-key', units: 1,
     })
     if (reservation.outcome !== 'reserved') throw new Error(JSON.stringify(reservation))
     expect((await budget.bindProviderReservationToBatch(reservation.reservationId, batch.batch.id, 'bind-worker')).outcome)
@@ -294,7 +294,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     const reservation = await budget.reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
       runId: RUNS.bindExpired, phase: 'discovery',
-      idempotencyKey: buildProviderReservationIdempotencyKey(batch.batch.id, 1)!, units: 100,
+      idempotencyKey: buildProviderReservationIdempotencyKey(batch.batch.id, 1)!, units: 1,
     })
     if (reservation.outcome !== 'reserved') throw new Error(JSON.stringify(reservation))
     expect((await budget.bindProviderReservationToBatch(reservation.reservationId, batch.batch.id, 'expired-bind-worker')).outcome)
@@ -319,7 +319,7 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
     const key = buildProviderReservationIdempotencyKey(batch.batch.id, 1)!
     const first = await budget.reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
-      runId: RUNS.bindCrossDay, phase: 'discovery', idempotencyKey: key, units: 100,
+      runId: RUNS.bindCrossDay, phase: 'discovery', idempotencyKey: key, units: 1,
     })
     if (first.outcome !== 'reserved') throw new Error(JSON.stringify(first))
     expect((await budget.bindProviderReservationToBatch(first.reservationId, batch.batch.id, 'cross-day-worker')).outcome)
@@ -330,12 +330,12 @@ describeIfLocalDb.sequential('PFM-3B2 orchestration — real local DB integratio
         (id, provider, usage_scope, usage_type, quota_date, limit_units, reserved_units)
       values
         ('39000000-0000-4000-8000-000000000001', 'youtube', 'background', 'discovery_search',
-         (timezone('America/Los_Angeles', statement_timestamp()))::date + 1, 300, 100);
+         (timezone('America/Los_Angeles', statement_timestamp()))::date + 1, 3, 1);
       insert into signal_provider_budget_reservations
         (id, daily_budget_id, run_id, phase, idempotency_key, requested_units, lease_expires_at)
       values
         ('39000000-0000-4000-8000-000000000002', '39000000-0000-4000-8000-000000000001',
-         '${RUNS.bindCrossDay}', 'discovery', '${key}', 100, clock_timestamp() + interval '2 minutes');
+         '${RUNS.bindCrossDay}', 'discovery', '${key}', 1, clock_timestamp() + interval '2 minutes');
     `)
     expect((await budget.bindProviderReservationToBatch(
       '39000000-0000-4000-8000-000000000002', batch.batch.id, 'cross-day-worker',

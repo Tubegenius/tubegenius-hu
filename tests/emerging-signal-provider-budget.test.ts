@@ -22,13 +22,13 @@ describe('provider budget wrappers', () => {
     const client = clientWithRpc(async () => ({ data: RESERVATION_ID, error: null }))
     const result = await reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
-      runId: RUN_ID, phase: 'discovery', idempotencyKey: 'batch-1', units: 100,
+      runId: RUN_ID, phase: 'discovery', idempotencyKey: 'batch-1', units: 1,
     }, client)
     expect(result).toEqual({ outcome: 'reserved', reservationId: RESERVATION_ID })
     expect(client.rpc).toHaveBeenCalledWith('reserve_provider_units', {
       p_provider: 'youtube', p_usage_scope: 'background', p_usage_type: 'discovery_search',
       p_run_id: RUN_ID, p_phase: 'discovery', p_idempotency_key: 'batch-1',
-      p_units: 100, p_lease_seconds: 120,
+      p_units: 1, p_lease_seconds: 120,
     })
     const args = (client.rpc as any).mock.calls[0][1]
     expect(args).not.toHaveProperty('p_quota_date')
@@ -39,7 +39,7 @@ describe('provider budget wrappers', () => {
     const client = clientWithRpc(async () => ({ data: null, error: null }))
     expect((await reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
-      runId: RUN_ID, phase: 'observation', idempotencyKey: 'x', units: 100,
+      runId: RUN_ID, phase: 'observation', idempotencyKey: 'x', units: 1,
     }, client)).outcome).toBe('invalid_request')
     expect((await reserveProviderUnits({
       provider: 'youtube', usageScope: 'background', usageType: 'observation_stats',

@@ -57,7 +57,7 @@ function isolatedWorkerClient(): { client: SignalAdminClient; rpcCalls: RpcCall[
         error: null,
       }
       if (name === 'mark_provider_outcome_unknown') return {
-        data: { reservation_id: args.p_reservation_id, status: 'committed_unknown', duplicate: false, committed_units: 100 },
+        data: { reservation_id: args.p_reservation_id, status: 'committed_unknown', duplicate: false, committed_units: 1 },
         error: null,
       }
       return { data: null, error: { message: `Unexpected RPC: ${name}` } }
@@ -169,7 +169,7 @@ describeIfLocalDb.sequential('PFM-3B4 discovery worker — real local DB, mocked
     expect(psql(`select count(*) from signal_observations where signal_run_id='${RUN_SUCCESS}';`).trim()).toBe('0')
     expect(rpcCalls.filter(call => call.name === 'reserve_provider_units')).toHaveLength(1)
     expect(rpcCalls.find(call => call.name === 'reserve_provider_units')?.args).toMatchObject({
-      p_usage_type: 'discovery_search', p_units: 100,
+      p_usage_type: 'discovery_search', p_units: 1,
     })
     expect(rpcCalls.filter(call => call.name === 'commit_provider_units')).toHaveLength(1)
     expect(psql(`select consecutive_failure_count||':'||(last_run_at is not null)::text from signal_seed_queue where seed_fingerprint='pfm3b4_success';`).trim()).toBe('0:true')

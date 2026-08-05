@@ -161,7 +161,7 @@ export async function processDiscoveryBatch(
   if (!idempotencyKey) return closeRetryOrFail(batch, seed, input.leaseOwner, 'invalid_attempt_identity', observedAt, client)
   const reserved = await reserveProviderUnits({
     provider: 'youtube', usageScope: 'background', usageType: 'discovery_search',
-    runId: input.runId, phase: 'discovery', idempotencyKey, units: 100,
+    runId: input.runId, phase: 'discovery', idempotencyKey, units: 1,
     leaseSeconds: input.leaseSeconds ?? 120,
   }, client)
   if (reserved.outcome === 'budget_exhausted') {
@@ -223,7 +223,7 @@ export async function processDiscoveryBatch(
     providerResult && typeof providerResult === 'object' &&
     (providerResult as { outcome?: unknown }).outcome === 'quota_exhausted'
   ) {
-    const committed = await commitProviderUnits(reservationId, 100, client)
+    const committed = await commitProviderUnits(reservationId, 1, client)
     if (committed.outcome !== 'success') return committed
     const failed = await failCollectionBatch(batch.id, input.leaseOwner, 'provider_quota_exhausted', 0, client)
     if (failed.outcome !== 'success') return failed
@@ -238,7 +238,7 @@ export async function processDiscoveryBatch(
     (providerResult as { outcome?: unknown }).outcome === 'failure' &&
     ['provider_rejected', 'invalid_response'].includes(String((providerResult as { errorClass?: unknown }).errorClass))
   ) {
-    const committed = await commitProviderUnits(reservationId, 100, client)
+    const committed = await commitProviderUnits(reservationId, 1, client)
     if (committed.outcome !== 'success') return committed
     return closeRetryOrFail(
       batch, seed, input.leaseOwner,
@@ -246,14 +246,14 @@ export async function processDiscoveryBatch(
     )
   }
 
-  // A successful provider response consumed the exact search.list cost even
+  // A successful provider response consumed the exact search.list call even
   // if its payload later proves invalid or a local capture write fails.
   const videos = providerResult && typeof providerResult === 'object' &&
     (providerResult as { outcome?: unknown }).outcome === 'success'
     ? (providerResult as { videos?: unknown }).videos
     : null
   const parsedVideos = Array.isArray(videos) ? parseSearchVideos(videos as ScheduledDiscoveryVideo[]) : null
-  const committed = await commitProviderUnits(reservationId, 100, client)
+  const committed = await commitProviderUnits(reservationId, 1, client)
   if (committed.outcome !== 'success') return committed
   if (!parsedVideos) return closeRetryOrFail(batch, seed, input.leaseOwner, 'invalid_provider_response', observedAt, client)
 

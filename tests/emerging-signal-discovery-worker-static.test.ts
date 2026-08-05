@@ -20,11 +20,11 @@ describe('PFM-3B4 discovery worker external-call boundary', () => {
     ]) expect(source.toLowerCase()).not.toContain(forbidden.toLowerCase())
   })
 
-  it('hard-caps one provider request at 25 results and one search.list reservation at 100 units', () => {
+  it('hard-caps one provider request at 25 results and one search.list reservation at 1 call', () => {
     const source = readFileSync(resolve(process.cwd(), 'lib/emerging-signal/discovery-worker.ts'), 'utf8')
     expect(source).toContain('maxResults: 25')
     expect(source).toContain("usageType: 'discovery_search'")
-    expect(source).toContain('units: 100')
-    expect(source).toContain('commitProviderUnits(reservationId, 100')
+    expect(source).toContain('units: 1')
+    expect(source).toContain('commitProviderUnits(reservationId, 1')
   })
 })
