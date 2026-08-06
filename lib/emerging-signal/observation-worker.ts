@@ -22,8 +22,6 @@ import {
 } from './provider-budget'
 import {
   loadObservationTargetsForVideoIds,
-  nextObservationDueAt,
-  observationBucketStart,
   type DueObservationTarget,
 } from './observation-schedule'
 import {
@@ -112,69 +110,68 @@ async function closeRetryOrFail(
   return failed
 }
 
+interface ObservationBatchRpcRow {
+  schedule_id: string
+  new_cadence: string
+  new_active: boolean
+  observation_rows_written: number
+}
+
+// Egyetlen SECURITY DEFINER RPC-hivas (066) — az observation-sorok es a
+// schedule-atmenet (cadence/stagnant/miss/active/next_due_at, a teljes
+// allapotgep szerint) EGY DB-tranzakcioban irodik. Nincs evidence-enkenti
+// kulon RPC-hivas: a teljes batch (legfeljebb 50 egyedi videoId, a fan-
+// out miatt tobb evidence-sor is lehet) egyetlen JSONB tombkent megy at.
 async function persistObservationResults(
   input: {
     targets: DueObservationTarget[]
     videosById: Map<string, ObservationVideoStats>
     runId: string
+    batchId: string
+    leaseOwner: string
     observedAt: Date
   },
   client?: SignalAdminClient,
 ): Promise<{ outcome: 'success'; observationCount: number } | OperationFailure> {
-  const operation = 'persist_signal_observation_batch'
+  const operation = 'apply_signal_observation_batch'
   const db = admin(client)
   const observedAt = input.observedAt.toISOString()
-  const observationRows: Array<Record<string, unknown>> = []
-  const scheduleRows: Array<Record<string, unknown>> = []
 
-  for (const target of input.targets) {
+  const results = input.targets.map(target => {
     const video = input.videosById.get(target.videoId)
-    const bucketStart = observationBucketStart(input.observedAt, target.cadence)
-    const nextDueAt = nextObservationDueAt(input.observedAt, target.cadence)
-    if (!bucketStart || !nextDueAt) return invalid('Unable to compute observation cadence boundaries.')
-    if (video) {
-      const metrics: Array<[string, number | undefined]> = [
-        ['youtube_view_count', video.viewCount],
-        ['youtube_like_count', video.likeCount],
-        ['youtube_comment_count', video.commentCount],
-      ]
-      for (const [metricType, metricValue] of metrics) {
-        if (metricValue !== undefined) observationRows.push({
-          signal_evidence_id: target.evidenceId,
-          signal_run_id: input.runId,
-          metric_type: metricType,
-          metric_value: metricValue,
-          cadence: target.cadence,
-          bucket_start: bucketStart,
-          observed_at: observedAt,
-        })
-      }
+    return {
+      schedule_id: target.scheduleId,
+      evidence_id: target.evidenceId,
+      video_id: target.videoId,
+      found: Boolean(video),
+      view_count: video ? video.viewCount : null,
+      like_count: video?.likeCount ?? null,
+      comment_count: video?.commentCount ?? null,
     }
-    scheduleRows.push({
-      id: target.scheduleId,
-      signal_evidence_id: target.evidenceId,
-      cadence: target.cadence,
-      next_due_at: nextDueAt,
-      last_observed_at: video ? observedAt : target.lastObservedAt,
-      consecutive_stagnant_checks: target.consecutiveStagnantChecks,
-      consecutive_miss_checks: video ? 0 : target.consecutiveMissChecks + 1,
-      active: true,
-      updated_at: observedAt,
-    })
-  }
+  })
 
   try {
-    if (observationRows.length > 0) {
-      const { error } = await db.from('signal_observations').upsert(observationRows, {
-        onConflict: 'signal_evidence_id,metric_type,cadence,bucket_start',
-      })
-      if (error) return databaseFailure(operation, error)
+    const { data, error } = await db.rpc(operation, {
+      p_run_id: input.runId,
+      p_batch_id: input.batchId,
+      p_lease_owner: input.leaseOwner,
+      p_observed_at: observedAt,
+      p_results: results,
+    })
+    if (error) return databaseFailure(operation, error)
+    if (!Array.isArray(data)) return { outcome: 'invalid_rpc_response', operation }
+    let observationCount = 0
+    for (const row of data as ObservationBatchRpcRow[]) {
+      if (
+        typeof row.schedule_id !== 'string' || !isUuid(row.schedule_id) ||
+        !['daily', 'weekly', 'early8h'].includes(row.new_cadence) ||
+        typeof row.new_active !== 'boolean' ||
+        !Number.isInteger(row.observation_rows_written) || row.observation_rows_written < 0
+      ) return { outcome: 'invalid_rpc_response', operation }
+      observationCount += row.observation_rows_written
     }
-    if (scheduleRows.length > 0) {
-      const { error } = await db.from('signal_observation_schedule').upsert(scheduleRows, { onConflict: 'id' })
-      if (error) return databaseFailure(operation, error)
-    }
-    return { outcome: 'success', observationCount: observationRows.length }
+    if (data.length !== input.targets.length) return { outcome: 'invalid_rpc_response', operation }
+    return { outcome: 'success', observationCount }
   } catch (error) {
     return databaseFailure(operation, error)
   }
@@ -305,6 +302,8 @@ export async function processObservationBatch(
     targets: targetsResult.targets,
     videosById: parsed.byId,
     runId: input.runId,
+    batchId: batch.id,
+    leaseOwner: input.leaseOwner,
     observedAt,
   }, client)
   if (persisted.outcome !== 'success') {

@@ -11,6 +11,12 @@
 // tranzakcio kozottuk — ezt szandekosan NEM oldjuk meg uj SECURITY DEFINER
 // RPC-vel vagy migracioval ebben a korben). Az atomitas-modellt lasd a
 // captureOpportunitySignals() fuggveny doc-kommentjeben.
+//
+// KIVETEL (066 ota): a signal_observation_schedule letrejotte scheduled
+// discovery YouTube evidence-hez DB-szinten ATOMI — egy AFTER INSERT
+// trigger a signal_evidence-en, UGYANABBAN a tranzakcioban, mint maga az
+// evidence-sor beszurasa. Ez capture.ts-ben SEMMILYEN kulon irast nem
+// igenyel — ld. captureScheduledDiscovery() megjegyzeset.
 
 import { createAdminClient } from '@/lib/supabase-server'
 import type { TrendCandidate, VideoWithRelevance, SerperResult } from '@/lib/trend-radar'
@@ -595,12 +601,17 @@ export async function captureScheduledDiscovery(
     )
     if (linkError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(linkError) }
 
-    const { error: scheduleError } = await db.from('signal_observation_schedule').upsert(
-      evidenceIds.map(evidenceId => ({ signal_evidence_id: evidenceId })),
-      { onConflict: 'signal_evidence_id', ignoreDuplicates: true },
-    )
-    if (scheduleError) return { outcome: 'database_error', operation, error: toSignalDatabaseError(scheduleError) }
-
+    // signal_observation_schedule NEM iródik itt app-szinten (066 előtti
+    // allapot: ket kulon PostgREST-hivas, nem atomi az evidence-Írással).
+    // 066 ota egy AFTER INSERT trigger (trg_signal_evidence_schedule_new_
+    // scheduled) hozza letre a schedule sort UGYANABBAN a tranzakcioban,
+    // mint maga a signal_evidence INSERT — kizarolag akkor, ha a sor
+    // ujonnan beszurt (nem konfliktusra futott upsert) ES a discovered_
+    // in_run_id egy 'scheduled_enrichment' run_type-u futashoz tartozik.
+    // Mar letezo (masik run altal korabban felfedezett) evidence-t, amit
+    // a scheduled lane MOST talal ujra, a cron sajat, minden provider-
+    // hivas elotti reconcile_missing_signal_observation_schedules()
+    // hivasa potolja — ld. collection-orchestrator.ts. Ld. 066 fejlecet.
     await upsertRunCluster(db, {
       runId: input.runId,
       clusterId,

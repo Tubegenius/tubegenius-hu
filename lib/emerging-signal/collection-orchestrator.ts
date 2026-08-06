@@ -18,7 +18,7 @@ import {
   skipRunPhase,
   type SignalRunPhaseRow,
 } from './run-phases'
-import { prepareObservationBatches, pacificQuotaDate } from './observation-schedule'
+import { prepareObservationBatches, pacificQuotaDate, reconcileMissingObservationSchedules } from './observation-schedule'
 import { prepareDiscoveryBatches } from './seed-selection'
 import { processObservationBatch, type ObservationProvider } from './observation-worker'
 import { processDiscoveryBatch, type DiscoveryProvider } from './discovery-worker'
@@ -54,6 +54,7 @@ export interface SignalCollectorDependencies {
   failPhase: typeof failRunPhase
   retryPhase: typeof retryRunPhase
   skipPhase: typeof skipRunPhase
+  reconcileSchedules: typeof reconcileMissingObservationSchedules
   prepareObservation: typeof prepareObservationBatches
   prepareDiscovery: typeof prepareDiscoveryBatches
   processObservation: typeof processObservationBatch
@@ -72,6 +73,7 @@ const DEFAULT_DEPENDENCIES: SignalCollectorDependencies = {
   failPhase: failRunPhase,
   retryPhase: retryRunPhase,
   skipPhase: skipRunPhase,
+  reconcileSchedules: reconcileMissingObservationSchedules,
   prepareObservation: prepareObservationBatches,
   prepareDiscovery: prepareDiscoveryBatches,
   processObservation: processObservationBatch,
@@ -120,6 +122,13 @@ export async function runSignalCollector(
   if (control.outcome !== 'success') return { outcome: 'skipped', reason: 'control_unavailable' }
   if (!control.enabled) return { outcome: 'skipped', reason: 'disabled' }
   if (input.providerConfigured === false) return { outcome: 'failed', stage: 'provider_not_configured', runId: null }
+
+  // Olcso, idempotens, read-mostly reconciliation MINDEN provider-hivas
+  // elott — nem fugg run/phase claim-tol, ezert meg a run-claim elott fut,
+  // hogy invokaciotol fuggetlenul mindig lefusson. Hiba eseten fail-closed
+  // (nem probal batch-et feldolgozni potolatlan schedule-allapottal).
+  const reconciled = await dependencies.reconcileSchedules(client)
+  if (reconciled.outcome !== 'success') return { outcome: 'failed', stage: 'schedule_reconciliation', runId: null }
 
   const quotaDate = pacificQuotaDate(wallStart)
   if (!quotaDate) return { outcome: 'failed', stage: 'quota_date', runId: null }

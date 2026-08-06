@@ -89,6 +89,22 @@ describe('Premium YouTube collector provider', () => {
     })).toEqual({ outcome: 'failure', errorClass: 'provider_rejected' })
   })
 
+  it('requests two IDs, gets stats back for only one, and the parser reports exactly that one video as found', async () => {
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => response({ items: [
+      { id: 'video_found', statistics: { viewCount: '500', likeCount: '20', commentCount: '3' } },
+    ] }))
+    const provider = createYouTubeCollectorProviders({ apiKey: 'key', fetchImpl: fetchImpl as unknown as typeof fetch }).observation
+
+    const result = await provider.fetchVideoStats(['video_found', 'video_missing'])
+
+    expect(result).toEqual({
+      outcome: 'success', videos: [{ videoId: 'video_found', viewCount: 500, likeCount: 20, commentCount: 3 }],
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    const url = new URL(String(fetchImpl.mock.calls[0][0]))
+    expect(url.searchParams.get('id')).toBe('video_found,video_missing')
+  })
+
   it('rejects observation calls outside the one-to-fifty ID contract before fetch', async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch
     const provider = createYouTubeCollectorProviders({ apiKey: 'key', fetchImpl }).observation

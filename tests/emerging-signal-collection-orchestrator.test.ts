@@ -20,6 +20,7 @@ function dependencies() {
   const discovery = phase(DISCOVERY_ID, 'discovery')
   return {
     getControl: vi.fn(async () => ({ outcome: 'success', enabled: true, updatedAt: '2026-08-04T00:00:00Z', updatedBy: null })),
+    reconcileSchedules: vi.fn(async () => ({ outcome: 'success', insertedCount: 0 })),
     claimRun: vi.fn(async () => ({
       outcome: 'claimed', created: true, claimExpiresAt: CLAIM_EXPIRES,
       run: { id: RUN_ID, idempotency_key: 'scheduled', status: 'started', started_at: '2026-08-04T12:00:00Z', completed_at: null, external_calls_made: 0, error_class: null, run_claim_expires_at: CLAIM_EXPIRES },
@@ -80,6 +81,30 @@ describe('Premium signal collection orchestrator', () => {
     expect(result).toEqual({ outcome: 'failed', stage: 'provider_not_configured', runId: null })
     expect(deps.getControl).toHaveBeenCalledTimes(1)
     expect(deps.claimRun).not.toHaveBeenCalled()
+  })
+
+  it('reconciles missing observation schedules before claiming a run or calling any provider', async () => {
+    const deps = dependencies()
+    const injectedProviders = providers()
+    const result = await runSignalCollector({ ...baseInput, providers: injectedProviders }, deps)
+    expect(result.outcome).not.toBe('failed')
+    expect(deps.reconcileSchedules).toHaveBeenCalledTimes(1)
+    const reconcileOrder = (deps.reconcileSchedules as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]
+    const claimOrder = (deps.claimRun as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]
+    expect(reconcileOrder).toBeLessThan(claimOrder)
+    expect(injectedProviders.discovery.search).not.toHaveBeenCalled()
+    expect(injectedProviders.observation.fetchVideoStats).not.toHaveBeenCalled()
+  })
+
+  it('fails closed if schedule reconciliation errors, before claiming a run or calling any provider', async () => {
+    const deps = dependencies()
+    deps.reconcileSchedules = vi.fn(async () => ({ outcome: 'database_error', operation: 'reconcile', error: { message: 'boom' } })) as never
+    const injectedProviders = providers()
+    const result = await runSignalCollector({ ...baseInput, providers: injectedProviders }, deps)
+    expect(result).toEqual({ outcome: 'failed', stage: 'schedule_reconciliation', runId: null })
+    expect(deps.claimRun).not.toHaveBeenCalled()
+    expect(injectedProviders.discovery.search).not.toHaveBeenCalled()
+    expect(injectedProviders.observation.fetchVideoStats).not.toHaveBeenCalled()
   })
 
   it('stops all later provider work after the first provider quota-exhausted response', async () => {

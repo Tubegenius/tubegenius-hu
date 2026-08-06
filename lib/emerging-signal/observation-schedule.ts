@@ -239,6 +239,36 @@ export async function prepareObservationBatches(
   return { outcome: 'success', plan, batches }
 }
 
+export type ReconcileMissingSchedulesResult =
+  | { outcome: 'success'; insertedCount: number }
+  | OperationFailure
+
+// Idempotens, kotegelt (egyetlen INSERT...SELECT, nincs soronkenti DB
+// round-trip) potlas azokra a scheduled-lane YouTube evidence-sorokra,
+// amiknek MEG NINCS signal_observation_schedule soruk. Ket eset fedi le:
+//   1) a 066-os AFTER INSERT trigger nem futott le (pl. egy korabbi,
+//      066 elotti sorra), vagy
+//   2) az evidence korabban MAS run altal (pl. interaktiv opportunity-
+//      lane) jott letre, es a scheduled discovery csak KESOBB, ujra-
+//      talalta meg — a trigger csak UJONNAN beszurt sorra fut, egy mar
+//      letezo sor ujratalalasara nem.
+// Nem indit provider-hivast, nem duplikal (ON CONFLICT DO NOTHING a
+// migracioban), es a runSignalCollector minden invokacioban, MINDEN
+// batch-feldolgozas ELOTT meghivja — ld. collection-orchestrator.ts.
+export async function reconcileMissingObservationSchedules(
+  client?: SignalAdminClient,
+): Promise<ReconcileMissingSchedulesResult> {
+  const operation = 'reconcile_missing_signal_observation_schedules'
+  try {
+    const { data, error } = await admin(client).rpc(operation, {})
+    if (error) return databaseFailure(operation, error)
+    if (!Number.isInteger(data) || Number(data) < 0) return { outcome: 'invalid_rpc_response', operation }
+    return { outcome: 'success', insertedCount: Number(data) }
+  } catch (error) {
+    return databaseFailure(operation, error)
+  }
+}
+
 export async function loadObservationTargetsForVideoIds(
   input: { videoIds: string[]; dueAt?: Date },
   client?: SignalAdminClient,

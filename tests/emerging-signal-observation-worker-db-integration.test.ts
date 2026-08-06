@@ -46,6 +46,13 @@ function cleanFixtures() {
   `)
 }
 
+// A 066-os trigger (trg_signal_evidence_schedule_new_scheduled) MOST MAR
+// automatikusan letrehozza a signal_observation_schedule sort minden
+// scheduled_enrichment evidence-hez, UGYANABBAN a tranzakcioban, mint az
+// evidence INSERT — ezert a fixture mar NEM inszertalhat sajat, fix ID-vel
+// rendelkezo schedule-sort (UNIQUE(signal_evidence_id) utkozne a trigger
+// altal mar beszurt sorral). Ehelyett a trigger altal letrehozott sort
+// UPDATE-eljuk a teszthez szukseges cadence/next_due_at ertekre.
 function seedRun(runId: string, includeMissing: boolean) {
   const missingSql = includeMissing ? `
     insert into youtube_videos(video_id,title) values ('pfm3b3_missing','Missing video');
@@ -53,8 +60,8 @@ function seedRun(runId: string, includeMissing: boolean) {
       ('42000000-0000-4000-8000-000000000003','youtube_channel','pfm3b3_channel_c','pfm3b3_channel_c');
     insert into signal_evidence(id,signal_source_id,evidence_type,external_ref,youtube_videos_ref,title,discovered_in_run_id) values
       ('43000000-0000-4000-8000-000000000003','42000000-0000-4000-8000-000000000003','youtube_video','pfm3b3_missing','pfm3b3_missing','Missing video','${runId}');
-    insert into signal_observation_schedule(id,signal_evidence_id,cadence,next_due_at) values
-      ('44000000-0000-4000-8000-000000000003','43000000-0000-4000-8000-000000000003','weekly',clock_timestamp()-interval '1 day');
+    update signal_observation_schedule set cadence='weekly', next_due_at=clock_timestamp()-interval '1 day'
+      where signal_evidence_id='43000000-0000-4000-8000-000000000003';
   ` : ''
   psql(`
     insert into signal_runs(id,run_type,idempotency_key,status)
@@ -66,9 +73,10 @@ function seedRun(runId: string, includeMissing: boolean) {
     insert into signal_evidence(id,signal_source_id,evidence_type,external_ref,youtube_videos_ref,title,discovered_in_run_id) values
       ('43000000-0000-4000-8000-000000000001','42000000-0000-4000-8000-000000000001','youtube_video','pfm3b3_shared','pfm3b3_shared','Shared A','${runId}'),
       ('43000000-0000-4000-8000-000000000002','42000000-0000-4000-8000-000000000002','youtube_video','pfm3b3_shared','pfm3b3_shared','Shared B','${runId}');
-    insert into signal_observation_schedule(id,signal_evidence_id,cadence,next_due_at) values
-      ('44000000-0000-4000-8000-000000000001','43000000-0000-4000-8000-000000000001','daily',clock_timestamp()-interval '1 day'),
-      ('44000000-0000-4000-8000-000000000002','43000000-0000-4000-8000-000000000002','early8h',clock_timestamp()-interval '1 day');
+    update signal_observation_schedule set cadence='daily', next_due_at=clock_timestamp()-interval '1 day'
+      where signal_evidence_id='43000000-0000-4000-8000-000000000001';
+    update signal_observation_schedule set cadence='daily', next_due_at=clock_timestamp()-interval '1 day'
+      where signal_evidence_id='43000000-0000-4000-8000-000000000002';
     ${missingSql}
   `)
 }
@@ -117,7 +125,7 @@ describeIfLocalDb.sequential('PFM-3B3 observation worker — real local DB, mock
     expect(psql(`select count(*) from signal_observations where signal_run_id='${RUN_SUCCESS}';`).trim()).toBe('6')
     expect(psql(`select count(*) from signal_observations where signal_evidence_id in
       ('43000000-0000-4000-8000-000000000001','43000000-0000-4000-8000-000000000002');`).trim()).toBe('6')
-    expect(psql(`select consecutive_miss_checks from signal_observation_schedule where id='44000000-0000-4000-8000-000000000003';`).trim()).toBe('1')
+    expect(psql(`select consecutive_miss_checks from signal_observation_schedule where signal_evidence_id='43000000-0000-4000-8000-000000000003';`).trim()).toBe('1')
     expect(psql(`select count(*) from signal_provider_budget_reservations where run_id='${RUN_SUCCESS}' and status='committed' and batch_id is not null;`).trim()).toBe('1')
   })
 
