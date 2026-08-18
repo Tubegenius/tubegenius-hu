@@ -20,6 +20,14 @@ afterEach(() => vi.useRealTimers())
 
 describe('opportunity scoring methodology', () => {
   it('matches accents consistently instead of penalizing Hungarian input', () => {
+    // A video() fixture rogzitett publishedAt-ja ('2026-07-14T12:00:00Z')
+    // csak akkor ad determinisztikus +10 frissesegi bonuszt (< 30 nap), ha
+    // a "most" idopont rogzitve van fake timerrel -- valos rendszerora
+    // mellett a teszt eredmenye a tenyleges naptari datumtol fuggne (a 30
+    // napos ablak magatol kicsuszik), ez okozta a korabbi, dokumentalt
+    // flakinesst. A pinnelt datum a testver-teszttel (26. sor) azonos
+    // konvenciot kovet.
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
     expect(calcSearchRelevance(video(), 'arvizturo noveny')).toBe(100)
   })
 
