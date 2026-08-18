@@ -11,6 +11,9 @@ import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { useFocusTrap } from '@/lib/useFocusTrap'
+import { saveTopicToMemory, fetchSavedStatusForTopics } from '@/lib/creator-lane/memory-save-client'
+import { normalizeTopicKey } from '@/lib/creator-lane/topic-identity'
+import { runSavedLookupCoordinated } from '@/lib/creator-lane/saved-lookup-coordinator'
 
 // ── Score komponensek ─────────────────────────────────────────
 
@@ -300,16 +303,41 @@ function storeOpportunityPackageContext(topic: ExtendedTopic, displayTitle: stri
   sessionStorage.setItem(`willviral_opportunity_package_${topic.id}`, JSON.stringify(payload))
 }
 
-function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacing }: {
+function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacing, alreadySavedTopics, onTopicSaved, saveGateReady }: {
   topic: ExtendedTopic
   index: number
   onReplace: (index: number) => void
   hasPool: boolean
   onSimilarResult: (index: number, result: { title: string; description: string }) => void
   replacing: boolean
+  // A "már elmentve" igazság a szülőben (OpportunitiesPage) él, nem itt —
+  // ez az EGYETLEN módja annak, hogy két duplikált kártya (ugyanaz a cím
+  // két helyen a listában) ugyanazt a mentett állapotot lássa, és hogy egy
+  // korábbi munkamenetben/oldalfrissítés előtt elmentett téma is eleve
+  // "Mentve"-ként jelenjen meg (ld. lib/creator-lane/memory-save-client.ts
+  // fetchSavedStatusForTopics()).
+  alreadySavedTopics: Set<string>
+  onTopicSaved: (topicKey: string) => void
+  // A szülő read-only "korábban elmentve" batch-lookupjának állapota
+  // (loading/ready/error) — amíg ez nem 'ready', a mentés-gomb zárva marad,
+  // hogy egy még folyamatban lévő vagy sikertelen lookup ALATT sose
+  // lehessen egy már elmentett témát véletlenül újra POST-olni.
+  saveGateReady: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [saved, setSaved] = useState(false)
+  // Melyik pontos témacím ("identitás") ment/hibázott éppen — NEM egy sima
+  // boolean, mert a cím a komponens élettartama alatt megváltozhat
+  // (confirmShowSimilar -> setDisplayTitle "Mutass hasonlót" után). Egy
+  // boolean "saved"/"saving" state a régi témára befejeződő mentést a
+  // KÖZBEN megjelenő új témára vetítette volna rá (vagy fordítva: egy
+  // folyamatban lévő régi mentés blokkolta volna az új téma mentését).
+  const [savingTopicKey, setSavingTopicKey] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<{ topicKey: string; message: string } | null>(null)
+  // Kártyánkénti re-entrancy őr, DE témaidentitásonként (Set, nem boolean) —
+  // "egy adott téma mentése közben ne lehessen ugyanarra új mentést
+  // indítani", DE "az új téma [cím-váltás után] külön elmenthető legyen"
+  // még akkor is, ha a régi téma mentése a háttérben még fut.
+  const saveInFlightKeysRef = useRef<Set<string>>(new Set())
   const [status, setStatus] = useState<'active' | 'rejected'>('active')
   const [noMorePool, setNoMorePool] = useState(false)
   const [showReasonModal, setShowReasonModal] = useState(false)
@@ -321,6 +349,17 @@ function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacin
   const similarInFlightRef = useRef(false)
   const scoreColorVal = getScoreColor(topic.opportunity_score)
 
+  // Derivált, a jelenleg megjelenített cím ("identitás") szerint — sose a
+  // komponens teljes élettartamára érvényes, statikus boolean. Ugyanazt a
+  // normalizeTopicKey()-t használja, mint a handleSave() és a szülő
+  // lookup-ja, hogy egy vezető/záró szóköz sose okozzon hamis "nincs
+  // elmentve" állapotot egy ténylegesen (szerver-trimelt) már mentett
+  // témánál.
+  const currentTopicKey = normalizeTopicKey(displayTitle)
+  const isSaved = alreadySavedTopics.has(currentTopicKey)
+  const isSavingCurrent = savingTopicKey === currentTopicKey
+  const currentSaveError = saveError && saveError.topicKey === currentTopicKey ? saveError.message : null
+
   const hasVideos = topic.evidence_videos && topic.evidence_videos.length > 0
   const hasWebSources = topic.web_sources && topic.web_sources.length > 0
   const readyStatus = getReadyStatus(topic)
@@ -328,19 +367,60 @@ function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacin
   const canCreatePackage = readyStatus.status === 'ready' || readyStatus.status === 'watch'
   const decisionScore = topic.decision_score || topic.evidence_match_score
 
+  // Kizárólag explicit user-kattintásból hívódik (a gomb onClick-jéből) — sose
+  // mountkor vagy más effektusból. Pontosan egy POST /api/memory hívást indít
+  // (a body-t és a hibaüzenet-leképezést a lib/creator-lane/memory-save-client
+  // tesztelt, tiszta függvényei adják). A mentendő téma pontos identitását
+  // (topicKey = normalizeTopicKey(displayTitle), UGYANAZ a függvény, mint a
+  // szülő lookup-ja és a szerver btrim()-je) a hívás INDULÁSAKOR rögzítjük —
+  // minden ezt követő state-frissítés kizárólag EHHEZ az identitáshoz kötött,
+  // függetlenül attól, hogy a kártyán közben megváltozik-e a megjelenített
+  // cím (confirmShowSimilar). saveGateReady === false alatt (a szülő
+  // "korábban elmentve" lookupja még fut vagy hibázott) a mentés nem
+  // indulhat el — sose engedjük POST-olni egy olyan témát, aminek a
+  // "már mentve" állapotát még nem ismerjük biztosan.
   async function handleSave() {
-    await fetch('/api/memory', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        topic: displayTitle, search_keyword: topic.keyword, state: 'saved',
-        opportunity_score: topic.opportunity_score, platform: topic.platform,
-      }),
-    })
-    await fetch('/api/feedback', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: displayTitle, feedback_type: 'save', opportunity_score: topic.opportunity_score, niche_cluster: topic.niche_cluster }),
-    })
-    setSaved(true)
+    const topicKey = normalizeTopicKey(displayTitle)
+    if (!saveGateReady || !topicKey || saveInFlightKeysRef.current.has(topicKey) || alreadySavedTopics.has(topicKey)) return
+    saveInFlightKeysRef.current.add(topicKey)
+    setSavingTopicKey(topicKey)
+    setSaveError(prev => (prev && prev.topicKey === topicKey ? null : prev))
+    try {
+      const result = await saveTopicToMemory({
+        topic: topicKey,
+        searchKeyword: topic.keyword,
+        opportunityScore: topic.opportunity_score,
+        platform: topic.platform,
+      })
+      if (result.status === 'error') {
+        setSaveError({ topicKey, message: result.message })
+        return
+      }
+      if (result.status === 'skipped') {
+        // A szerver ({skipped:true}) NEM hozott létre/frissített Memory-
+        // rekordot (pl. túl hosszú, "#" jelet tartalmazó cím) — ez NEM siker,
+        // a gomb marad "nincs mentve", nincs "Mentve" állapot és nincs
+        // /api/feedback hívás sem (az csak valódi mentés után indulhat).
+        setSaveError({ topicKey, message: 'Ez a téma nem menthető el ebben a formában.' })
+        return
+      }
+      // Csak valódi, szerver által visszaigazolt mentés után jelöljük "már
+      // elmentve"-nek — a szülő komponens Set-jét frissítjük (NEM helyi
+      // state-et), hogy minden ugyanezt a témát mutató (akár duplikált)
+      // kártya azonnal ugyanazt az állapotot lássa.
+      onTopicSaved(topicKey)
+      // A feedback-naplózás másodlagos telemetria — a mentés sikerét/UI
+      // "Mentve" állapotát sose blokkolja vagy buktassa el, ha ez elhasal, és
+      // KIZÁRÓLAG a fenti valódi 'saved' ágból indulhat (skipped/error esetén
+      // sose fut le).
+      fetch('/api/feedback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: topicKey, feedback_type: 'save', opportunity_score: topic.opportunity_score, niche_cluster: topic.niche_cluster }),
+      }).catch(() => {})
+    } finally {
+      saveInFlightKeysRef.current.delete(topicKey)
+      setSavingTopicKey(prev => (prev === topicKey ? null : prev))
+    }
   }
 
   async function submitReject(reason: RejectReason) {
@@ -752,15 +832,20 @@ function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacin
                 className="text-xs text-text-muted hover:text-text-secondary px-2 py-1 rounded hover:bg-surface-2">
                 {expanded ? '▲' : '▼'}
               </button>
-              <button onClick={handleSave} disabled={saved}
-                className={`text-xs px-2.5 py-1 rounded transition-all ${saved ? 'text-emerald bg-emerald/10' : 'text-text-muted hover:text-violet hover:bg-violet/10'}`}>
-                {saved ? '✓' : '🔖'}
+              <button type="button" onClick={handleSave} disabled={isSaved || isSavingCurrent || !saveGateReady}
+                aria-label={isSaved ? 'Elmentve a memóriába' : 'Mentés a memóriába'}
+                title={isSaved ? 'Elmentve a memóriába' : !saveGateReady ? 'A mentett állapot ellenőrzése folyamatban…' : 'Mentés a memóriába'}
+                className={`text-xs px-2.5 py-1 rounded transition-all disabled:opacity-70 ${isSaved ? 'text-emerald bg-emerald/10' : 'text-text-muted hover:text-violet hover:bg-violet/10'}`}>
+                {isSavingCurrent ? '⏳' : isSaved ? '✓ Mentve' : '🔖'}
               </button>
               <button onClick={() => setShowReasonModal(true)}
                 className="text-xs px-2.5 py-1 rounded text-text-muted hover:text-rose hover:bg-rose/10 transition-all">
                 ✕
               </button>
             </div>
+            {currentSaveError && (
+              <p className="text-xs text-right max-w-[140px]" style={{ color: '#EF4444' }}>{currentSaveError}</p>
+            )}
           </div>
         </div>
       </div>
@@ -1073,6 +1158,74 @@ export default function OpportunitiesPage() {
     }
     init()
   }, [])
+
+  // Korábban elmentett témák felismerése — a "Mentés a memóriába" gomb
+  // (TopicCard) számára megosztott, szülőben tartott igazság, hogy (1)
+  // duplikált kártyák ugyanazt a mentett állapotot lássák, és (2) egy
+  // korábbi munkamenetben/oldalfrissítés előtt elmentett téma is eleve
+  // "Mentve"-ként jelenjen meg, új POST /api/memory nélkül.
+  //
+  // Egyetlen, könnyű, read-only batch lekérdezés (POST /api/memory/
+  // saved-lookup, ld. lib/creator-lane/memory-save-client.ts
+  // fetchSavedStatusForTopics()) — KIZÁRÓLAG az aktuálisan látható (validált,
+  // nem discovery-lane) Opportunity-témákat kérdezi le, nem a user teljes
+  // Memory-előzményét, ezért helyes marad függetlenül attól, hány összesen
+  // mentett rekordja van a usernek (nincs "legutóbbi 200" torzítás). Minden
+  // alkalommal újrafut, amikor a `topics` lista megváltozik (friss keresés,
+  // "Mutass mást", drilldown stb.) — ettől függetlenül is EGYETLEN batch
+  // kérés kártyánkénti N+1 helyett.
+  //
+  // Explicit loading/ready/error állapotgép (NEM csendes ok:false + üres
+  // Set) — amíg 'ready' nem igaz, EGYETLEN kártya mentés-gombja sem engedi a
+  // POST-ot (ld. TopicCard handleSave() saveGateReady őre), így egy
+  // lookup-hiba SOSE eredményezhet felesleges/duplikált POST-ot egy
+  // valójában már elmentett témára. 'error' esetén a felhasználó explicit
+  // "Újrapróbálás"-sal indíthatja újra — a retry KIZÁRÓLAG ezt a read-only
+  // lookupot ismétli, semmi mást.
+  const [alreadySavedTopics, setAlreadySavedTopics] = useState<Set<string>>(() => new Set())
+  const [savedLookupState, setSavedLookupState] = useState<'loading' | 'ready' | 'error'>('loading')
+  // A React ref maga `{ current: number }` alakú — ugyanaz az objektum-
+  // referencia él a komponens teljes élettartama alatt, ezért közvetlenül
+  // átadható a React-mentes runSavedLookupCoordinated()-nek trackerként (a
+  // request-ID mind a két oldalon ugyanazt az egy számlálót látja/módosítja).
+  const savedLookupRequestIdRef = useRef(0)
+
+  async function runSavedLookup(currentTopics: ExtendedTopic[]) {
+    const visibleKeys = Array.from(new Set(
+      currentTopics
+        .filter(t => !isDiscoveryLane(t))
+        .map(t => normalizeTopicKey(t.title))
+        .filter(key => key.length > 0),
+    ))
+    // A tényleges request-ID kezelés és a race-védelem (üres-listás ág is
+    // invalidál, csak a legfrissebb hívás eredménye íródhat vissza) a
+    // lib/creator-lane/saved-lookup-coordinator.ts-ben él — kiszervezve,
+    // React-mentesen, determinisztikus deferred-Promise teszttel bizonyítva
+    // (ld. tests/saved-lookup-coordinator.test.ts).
+    await runSavedLookupCoordinated(visibleKeys, savedLookupRequestIdRef, {
+      onLoading: () => setSavedLookupState('loading'),
+      onReady: newlySavedTopics => {
+        setAlreadySavedTopics(prev => new Set([...prev, ...newlySavedTopics]))
+        setSavedLookupState('ready')
+      },
+      onError: () => setSavedLookupState('error'),
+    }, fetchSavedStatusForTopics)
+  }
+
+  useEffect(() => {
+    runSavedLookup(topics)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topics])
+
+  function retrySavedLookup() {
+    runSavedLookup(topics)
+  }
+
+  // A TopicCard handleSave()-je hívja meg valódi, szerver által visszaigazolt
+  // mentés után — SOSE optimistán, POST előtt.
+  function markTopicSaved(topicKey: string) {
+    setAlreadySavedTopics(prev => (prev.has(topicKey) ? prev : new Set(prev).add(topicKey)))
+  }
 
   function getCacheKey(nicheVal: string, platform: string, region: string) {
     return `willviral_opportunities_v10_consistency_${nicheVal}_${platform}_${region}`.toLowerCase().replace(/\s+/g, '_')
@@ -1494,6 +1647,18 @@ export default function OpportunitiesPage() {
         </div>
       )}
 
+      {savedLookupState === 'error' && (
+        <div className="rounded-xl px-4 py-3 mb-6 text-sm flex items-center justify-between gap-3"
+          style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#FCA5A5' }}>
+          <span>Nem sikerült ellenőrizni, mely témák vannak már elmentve — a mentés gombok átmenetileg nem használhatók.</span>
+          <button type="button" onClick={retrySavedLookup}
+            className="text-xs px-3 py-1.5 rounded-lg whitespace-nowrap"
+            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5' }}>
+            Újrapróbálás
+          </button>
+        </div>
+      )}
+
       {loading && (
         <div className="card">
           <LoadingScreen steps={LOADING_STEPS.opportunity} message="Forrásokat, YouTube-jeleket és piaci rést ellenőrzünk" />
@@ -1538,7 +1703,7 @@ export default function OpportunitiesPage() {
                 )}
                 <div className="space-y-3">
                   {validatedTopics.map((topic, i) => (
-                    <TopicCard key={topic.id} topic={topic} index={i} onReplace={handleReplace} onSimilarResult={handleSimilarResult} hasPool={poolTopics.length > 0} replacing={pendingReplaceIndex === i} />
+                    <TopicCard key={topic.id} topic={topic} index={i} onReplace={handleReplace} onSimilarResult={handleSimilarResult} hasPool={poolTopics.length > 0} replacing={pendingReplaceIndex === i} alreadySavedTopics={alreadySavedTopics} onTopicSaved={markTopicSaved} saveGateReady={savedLookupState === 'ready'} />
                   ))}
                 </div>
               </div>

@@ -370,7 +370,7 @@ export async function getOpportunityExclusionMemory(
 // PostgREST call; downstream callers narrow/cast as needed.
 export async function getCreatorMemoryByLaneFilter(
   admin: SupabaseClient,
-  input: { userId: string; contentLane?: ContentLane | null; state?: string; limit?: number; select?: string }
+  input: { userId: string; contentLane?: ContentLane | null; state?: string; limit?: number; select?: string; topics?: string[] }
 ): Promise<any[]> {
   const lane = assertValidLaneFilter(input.contentLane)
   let query = admin
@@ -380,6 +380,15 @@ export async function getCreatorMemoryByLaneFilter(
     .order('updated_at', { ascending: false })
   query = lane === null ? query.is('content_lane', null) : query.eq('content_lane', lane)
   if (input.state) query = query.eq('state', input.state)
+  // Opt-in, pontos topic-lista szűrés — a "korábban elmentett témák" batch
+  // lookup (app/api/memory/saved-lookup/route.ts) ezzel kérdezi le, mely
+  // AKTUÁLISAN LÁTHATÓ témák vannak már elmentve, függetlenül attól, hány
+  // összesen mentett rekordja van a usernek (nem a `limit`/`order by
+  // updated_at` alapú "legutóbbi N" heurisztikára támaszkodik). Üres tömb
+  // esetén nem ad hozzá szűrést (megkülönböztetve az "nincs topics
+  // paraméter" esettől) — a hívó felelőssége, hogy üres listával ne is
+  // hívja meg ezt a funkciót.
+  if (input.topics && input.topics.length > 0) query = query.in('topic', input.topics)
   if (input.limit) query = query.limit(input.limit)
   const { data, error } = await query
   if (error) throw new Error(`creator_memory_display_read_failed:${error.message}`)
