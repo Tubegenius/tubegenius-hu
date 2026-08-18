@@ -8,9 +8,11 @@ import {
   setVideoIdeaWorkflowStatus,
   fetchDecisiveVideoIdeas,
   matchRelatedOutcomes,
+  linkVideoIdeaToLegacyRecord,
 } from '@/lib/video-ideas/video-idea-service'
 import type { TopicState, MemoryProofSignalSummary, MemoryInsight, VideoIdeaProofSignal, VideoIdeaEvent } from '@/types'
 import { isOptionalTextWithinLimit, isScoreOrNull, topicInputTooLong } from '@/lib/api-input-validation'
+import { upsertCreatorMemory, getCreatorMemoryByLaneFilter, assertValidLaneFilter } from '@/lib/creator-lane/lane-service'
 
 const MEMORY_STATES: TopicState[] = ['saved', 'in_progress', 'completed', 'rejected']
 
@@ -38,25 +40,26 @@ export async function GET(request: NextRequest) {
   // egyszeru felso korlat valodi lapozas nelkul is.
   const limit = Math.min(Math.max(Number(searchParams.get('limit') || 200), 1), 500)
 
-  let query = admin
-    .from('creator_memory')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('updated_at', { ascending: false })
-    .limit(limit)
-
-  if (state) {
-    query = query.eq('state', state)
+  // Explicit lane-szures: ?lane= nelkul kizarolag a legacy/pending
+  // (content_lane IS NULL) rekordokat adjuk vissza — nincs implicit
+  // "minden lane" mod. Mai kliens sosem kuld lane-t, es minden meglevo sor
+  // ma is NULL-lane, tehat ez byte-pontosan ugyanazt a talalati halmazt
+  // adja, mint korabban; ervenytelen lane ertek fail-closed 400-at kap.
+  const laneParam = searchParams.get('lane')
+  let contentLane: 'evidence_led' | 'entertainment_led' | null
+  try {
+    contentLane = assertValidLaneFilter(laneParam)
+  } catch {
+    return NextResponse.json({ error: 'Érvénytelen lane paraméter' }, { status: 400 })
   }
 
-  const { data, error } = await query
-
-  if (error) {
+  let items: Record<string, unknown>[]
+  try {
+    items = await getCreatorMemoryByLaneFilter(admin, { userId: user.id, contentLane, state: state || undefined, limit })
+  } catch (error) {
     console.error('Memory GET error:', error)
     return NextResponse.json({ error: 'A tartalommemória betöltése sikertelen. Próbáld újra.' }, { status: 500 })
   }
-
-  const items = data || []
   try {
     const enriched = await enrichMemoryItems(admin, user.id, items)
     return NextResponse.json({ items: enriched })
@@ -174,33 +177,59 @@ export async function POST(request: NextRequest) {
   })
   if (!ideaResult.success || !ideaResult.idea?.id) return NextResponse.json({ error: 'A központi videóötlet mentése sikertelen.' }, { status: 500 })
 
-  const record: Record<string, unknown> = {
-    user_id: user.id,
+  // A creator_memory.content_lane nem resze a jelenlegi publikus POST
+  // szerzodesnek (nincs UI, ami lane-t valasztana) — ezert ez a hivo
+  // mindig a lane nelkuli (pending) agat celozza az RPC-ben, byte-pontosan
+  // megorizve a korabbi viselkedest. Az UJ alkalmazaskod ezt az
+  // upsert_creator_memory() RPC-t hasznalja minden creator_memory
+  // INSERT/UPDATE-hez (sajat, tervezett irasi utvonalkent) — a 067 EXPAND
+  // fazisban a ket uj, lane-particionalt partial unique index
+  // (idx_creator_memory_user_topic_pending / idx_creator_memory_user_topic_lane)
+  // a regi globalis (user_id,topic) unique constraint (creator_memory_user_id_topic_key)
+  // MELLETT letezik, nem helyette — az a regi alkalmazas
+  // .upsert({onConflict:'user_id,topic'}) kompatibilitasa miatt marad meg,
+  // es a nyers PostgREST hivas erre a constraintra tovabbra is talal
+  // megfelelo unique objektumot 068 (CONTRACT) alkalmazasaig. Ha ez az RPC
+  // valaha nem-null contentLane-nel hivodna ugyanarra a temara, amelyre
+  // mar letezik lane-es vagy pending sor, a meg jelenlevo regi constraint
+  // miatt fail-closed lane_conflict_pending_contract hibat adna — de ez a
+  // hivas itt mindig contentLane: null-lal tortenik, tehat ezt nem
+  // erintheti (lasd lib/creator-lane/lane-service.ts upsertCreatorMemory()).
+  const upsertResult = await upsertCreatorMemory(admin, {
+    userId: user.id,
     topic: topic.trim(),
-    search_keyword: search_keyword || null,
+    contentLane: null,
+    searchKeyword: search_keyword || null,
     state: state || 'saved',
-    opportunity_score: opportunity_score ?? null,
-    viral_score: viral_score ?? null,
+    opportunityScore: opportunity_score ?? null,
+    viralScore: viral_score ?? null,
     platform: platform || 'youtube',
     notes: notes || null,
-    updated_at: new Date().toISOString(),
-    video_idea_id: ideaResult.idea.id,
-  }
-  if (audit_score !== undefined) record.audit_score = audit_score
-  if (audit_id) record.audit_id = audit_id
-  if (video_package_id) record.video_package_id = video_package_id
-  if (source_context) record.source_context = source_context
-  if (quality_status) record.quality_status = quality_status
+    auditScore: audit_score !== undefined ? audit_score : null,
+    auditId: audit_id || null,
+    videoPackageId: video_package_id || null,
+    sourceContext: source_context || null,
+    qualityStatus: quality_status || null,
+  })
 
-  const { data, error } = await admin
-    .from('creator_memory')
-    .upsert(record, { onConflict: 'user_id,topic' })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Memory POST error:', error)
+  if (!upsertResult.success) {
+    console.error('Memory POST error:', upsertResult.error)
     return NextResponse.json({ error: 'A mentés sikertelen. Próbáld újra.' }, { status: 500 })
+  }
+  const data = upsertResult.row as Record<string, unknown> & { id?: string; video_idea_id?: string | null }
+
+  if (data?.id) {
+    const linkResult = await linkVideoIdeaToLegacyRecord(admin, {
+      table: 'creator_memory',
+      userId: user.id,
+      recordId: data.id,
+      videoIdeaId: ideaResult.idea.id,
+    })
+    if (!linkResult.success) {
+      console.error('Memory POST video_idea_id link error:', linkResult.error)
+      return NextResponse.json({ error: 'A videóötlet-kapcsolat mentése sikertelen.' }, { status: 500 })
+    }
+    data.video_idea_id = ideaResult.idea.id
   }
 
   if (data?.id) {

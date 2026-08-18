@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
 import { polishStatusLabel } from '@/lib/hungarian-output-polish'
+import { getCreatorMemoryByLaneFilter } from '@/lib/creator-lane/lane-service'
 
 // GET /api/dashboard/summary
 // Creator Intelligence Dashboard — kizárólag a user saját, meglévő adataiból
@@ -29,7 +30,11 @@ export async function GET() {
     trackedCompetitorsRes,
   ] = await Promise.all([
     admin.from('user_credits').select('balance, total_used, plan').eq('user_id', userId).single(),
-    admin.from('creator_memory').select('id, topic, state, platform, opportunity_score, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
+    // Nincs lane-input a klienstol ma -- kizarolag a legacy/pending
+    // (content_lane IS NULL) rekordokat osszesitjuk, explicit, nem implicit
+    // "minden lane" mod. Ld. getCreatorMemoryByLaneFilter() megjegyzese.
+    getCreatorMemoryByLaneFilter(admin, { userId, contentLane: null, select: 'id, topic, state, platform, opportunity_score, updated_at' })
+      .then(data => ({ data, error: null as null })),
     admin.from('video_packages').select('id, topic, platform, video_length, quality_status, strict_fact_mode, fact_strictness_level, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
     admin.from('video_audits').select('id, video_title, topic, platform, overall_score, decision, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
     admin.from('ai_usage_logs').select('feature_name, credits_charged, metadata, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),

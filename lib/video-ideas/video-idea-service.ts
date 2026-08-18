@@ -91,7 +91,7 @@ export interface ProofSignalInput {
   payload?: Record<string, unknown>
 }
 
-function normalizeText(value: string | null | undefined) {
+export function normalizeText(value: string | null | undefined) {
   return String(value || '')
     .toLowerCase()
     .normalize('NFD')
@@ -334,6 +334,21 @@ export async function linkVideoIdeaToLegacyRecord(
   }
 ) {
   try {
+    // creator_memory.video_idea_id RPC-only (a service_role tabla/oszlopszintu
+    // INSERT/UPDATE joga a 067-es migracio ota nincs meg ra) — a
+    // link_creator_memory_parent SECURITY DEFINER RPC vegzi a tenant- es
+    // lane-konzisztencia ellenorzest is. video_packages.video_idea_id
+    // valtozatlanul kozvetlenul irhato (nem vedett oszlop).
+    if (input.table === 'creator_memory') {
+      const { error } = await admin.rpc('link_creator_memory_parent', {
+        p_user_id: input.userId,
+        p_memory_id: input.recordId,
+        p_video_idea_id: input.videoIdeaId,
+      })
+      if (error) return { success: false, error: error.message }
+      return { success: true }
+    }
+
     const { error } = await admin
       .from(input.table)
       .update({ video_idea_id: input.videoIdeaId })

@@ -78,6 +78,8 @@ function makeSupabaseFromStub(overrides: Record<string, () => unknown> = {}) {
       upsert: vi.fn(() => Promise.resolve({ data: null, error: null })),
       eq: vi.fn(() => builder),
       in: vi.fn(() => builder),
+      or: vi.fn(() => builder),
+      is: vi.fn(() => builder),
       like: vi.fn(() => builder),
       gt: vi.fn(() => builder),
       order: vi.fn(() => builder),

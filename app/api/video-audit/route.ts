@@ -23,6 +23,7 @@ import {
   validateManualPlatformData,
 } from '@/lib/video-audit-scoring'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { upsertCreatorMemory } from '@/lib/creator-lane/lane-service'
 
 async function fetchYouTubeData(videoId: string): Promise<YouTubeApiData | null> {
   const { getActiveApiKey } = await import('@/lib/youtube-service')
@@ -334,17 +335,27 @@ export async function POST(req: NextRequest) {
       console.error('video_audits insert error:', insertError)
     }
 
-    // Creator Memory auto-mentés admin klienssel
+    // Creator Memory auto-mentés admin klienssel — lane nélküli (pending)
+    // ágon keresztül, az ÚJ alkalmazáskód saját, tervezett írási útvonalán,
+    // az upsert_creator_memory() RPC-n át. A 067 EXPAND fázisban a két új,
+    // lane-particionált partial unique index a régi globális (user_id,topic)
+    // unique constraint (creator_memory_user_id_topic_key) MELLETT létezik,
+    // nem helyette — az a régi alkalmazás onConflict='user_id,topic'
+    // kompatibilitása miatt marad meg 068 (CONTRACT) alkalmazásáig. Ez a
+    // hívás mindig contentLane: null-lal történik, ezért az itt még
+    // fennálló legacy-constraint-ütközés (más lane-re
+    // lane_conflict_pending_contract lenne) ezt nem érintheti.
     if (savedAudit?.id) {
-      await admin.from('creator_memory').upsert({
-        user_id: user.id,
+      await upsertCreatorMemory(admin, {
+        userId: user.id,
         topic,
-        search_keyword: topic,
+        contentLane: null,
+        searchKeyword: topic,
         state: 'saved',
         platform,
-        audit_score: finalScores.overall,
-        audit_id: savedAudit.id,
-      }, { onConflict: 'user_id,topic' })
+        auditScore: finalScores.overall,
+        auditId: savedAudit.id,
+      })
     }
 
     const responsePayload = {

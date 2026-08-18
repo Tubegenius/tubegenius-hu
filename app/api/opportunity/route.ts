@@ -18,6 +18,7 @@ import { detectNicheIntent, buildBroadNicheDiscoveryPacks, buildDrilldownSeedsFo
 import { buildNicheExpansion } from '@/lib/niche-expansion'
 import type { OpportunityTopic, OpportunitySearchMode } from '@/types'
 import { logYouTubeSearch, checkUsagePermission, chargeProtectedFeature, logFreeProductUse } from '@/lib/usage-protection'
+import { getOpportunityExclusionMemory } from '@/lib/creator-lane/lane-service'
 import { logUsage, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { promoteToTrackedCandidate } from '@/lib/trend-tracking'
 import { validateSpecificFocus } from '@/lib/search/validate-focus'
@@ -779,11 +780,20 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 4. Creator Memory exclusions ─────────────────────────
-    const { data: memoryItems, error: memoryReadError } = await admin
-      .from('creator_memory')
-      .select('topic, state')
-      .eq('user_id', user.id)
-    if (memoryReadError) throw new Error(`Creator memory read failed: ${memoryReadError.message}`)
+    // Az Opportunity route request-szerzodese ma NEM tartalmaz content_lane/
+    // lane mezot (ellenorizve: nincs ilyen mezo sehol a body-parsolasban) —
+    // ezert a kizarasi halmaz kizarolag a legacy/pending (content_lane IS
+    // NULL) memoriat celozza, EGZAKT egyezessel, sosem "NULL VAGY
+    // evidence_led". Egy NULL-lane sor besorolasa ismeretlen, tehat nem
+    // befolyasolhatja automatikusan semelyik lane dontesi logikajat. Ha a
+    // jovoben az Opportunity route explicit content_lane bemenetet kap, a
+    // hivas erre a validalt lane-re valt at — ld. getOpportunityExclusionMemory().
+    let memoryItems: { topic: string; state: string }[]
+    try {
+      memoryItems = await getOpportunityExclusionMemory(admin, { userId: user.id, contentLane: null })
+    } catch (memoryReadError) {
+      throw new Error(`Creator memory read failed: ${memoryReadError instanceof Error ? memoryReadError.message : 'unknown_error'}`)
+    }
 
     const completedTopics = new Set((memoryItems || []).filter(m => m.state === 'completed').map(m => m.topic.toLowerCase()))
     const rejectedTopics = new Set((memoryItems || []).filter(m => m.state === 'rejected').map(m => m.topic.toLowerCase()))

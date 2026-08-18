@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
+import { getCreatorMemoryByLaneFilter } from '@/lib/creator-lane/lane-service'
 
 // GET /api/dashboard-stats
 // Valós adatok a Supabase-ből — nincs mock, nincs kamu szám
@@ -21,7 +22,11 @@ export async function GET() {
     usageLogsRes,
   ] = await Promise.all([
     admin.from('user_credits').select('balance, total_used, plan').eq('user_id', userId).single(),
-    admin.from('creator_memory').select('state, platform, created_at').eq('user_id', userId),
+    // Nincs lane-input a klienstol ma -- kizarolag a legacy/pending
+    // (content_lane IS NULL) rekordokat osszesitjuk, explicit, nem implicit
+    // "minden lane" mod. Ld. getCreatorMemoryByLaneFilter() megjegyzese.
+    getCreatorMemoryByLaneFilter(admin, { userId, contentLane: null, select: 'state, platform, created_at' })
+      .then(data => ({ data, error: null as null })),
     admin.from('video_packages').select('id, created_at, platform').eq('user_id', userId).order('created_at', { ascending: false }),
     admin.from('video_audits').select('id, overall_score, platform, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
     admin.from('opportunity_cache').select('generated_at').eq('generated_by', userId).order('generated_at', { ascending: false }).limit(1),
