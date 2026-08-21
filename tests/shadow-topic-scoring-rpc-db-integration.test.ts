@@ -108,6 +108,54 @@ function addObservation(evidenceId: string, value: number, cadence: string, buck
   `)
 }
 
+// Same as addObservation, but takes the metric_value as a raw decimal-literal
+// string so it is parsed by Postgres NUMERIC directly, never round-tripped
+// through a JS `number` (which loses precision above 2^53).
+function addObservationExact(evidenceId: string, exactDecimalValue: string, cadence: string, bucketStart: string, observedAt: string) {
+  dockerPsql(`
+    insert into signal_observations (signal_evidence_id, signal_run_id, metric_type, metric_value, cadence, bucket_start, observed_at)
+    values ('${evidenceId}', '${RUN_TYPE_RUN_ID}', 'youtube_view_count', ${exactDecimalValue}, '${cadence}', '${bucketStart}', '${observedAt}');
+  `)
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const n = sorted.length
+  return n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2
+}
+
+// Independently recomputes the v2 scalar score fields PURELY from a stored
+// input_snapshot (no source-table reads) -- the self-containment proof the
+// v1 snapshot could never make, since it lacked metric_value.
+function recomputeFromSnapshotAlone(snapshot: any, evaluationTimeIso: string) {
+  const evaluationTime = new Date(evaluationTimeIso).getTime()
+  const evidence: any[] = snapshot.evidence
+  const observations: any[] = snapshot.observations
+  const youtubeEvidenceCount = evidence.filter((e) => e.evidence_type === 'youtube_video').length
+  const eligible = evidence.filter((e) => e.eligibility.freshness.eligible === true)
+  const perEvidence = eligible.map((e) => {
+    const sel = observations.find((o) => o.evidence_id === e.evidence_id && o.selected_for_calculation === true)
+    const publishedAt = new Date(e.published_at).getTime()
+    const firstSeenAt = new Date(e.first_seen_at).getTime()
+    const observedAt = new Date(sel.observed_at).getTime()
+    const discoveryLagHours = Math.max(0, (firstSeenAt - publishedAt) / 3600000)
+    const observationAgeHours = Math.max(0, (evaluationTime - observedAt) / 3600000)
+    const elapsedHours = Math.max((observedAt - publishedAt) / 3600000, 1)
+    const velocity = Number(sel.metric_value) / elapsedHours
+    return { discoveryLagHours, observationAgeHours, velocity, observedAtMs: observedAt }
+  })
+  return {
+    evidenceCount: evidence.length,
+    youtubeEvidenceCount,
+    freshnessEligibleCount: eligible.length,
+    freshnessCoverage: youtubeEvidenceCount === 0 ? 0 : Math.round((eligible.length / youtubeEvidenceCount) * 10000) / 10000,
+    medianDiscoveryLagHours: median(perEvidence.map((p) => p.discoveryLagHours)),
+    medianObservationAgeHours: median(perEvidence.map((p) => p.observationAgeHours)),
+    medianVelocity: median(perEvidence.map((p) => p.velocity)),
+    maxObservedAtMs: perEvidence.length ? Math.max(...perEvidence.map((p) => p.observedAtMs)) : null,
+  }
+}
+
 // The (score_profile, algorithm_version, algorithm_config_hash,
 // evaluation_time, input_cutoff) semantic tuple is GLOBAL in v0 (not
 // scoped to any one cluster/test) -- reusing the same literal timestamp
@@ -146,44 +194,98 @@ describeIfLocalDb('Shadow Topic v0 S2 — run_shadow_topic_scoring RPC (real loc
   })
 
   // ------------------------------------------------------------
-  // 1. Migration idempotency / drift
+  // 1. Migration idempotency / drift -- 071 supersedes 070's body.
+  //    070 alone must NEVER be safely re-appliable once 071 has run
+  //    (forward-only chain); 071 owns legacy-v1->corrected-v2 upgrade,
+  //    its own no-op replay, and fail-closed drift protection.
   // ------------------------------------------------------------
-  describe('070 migration re-run behavior', () => {
-    it('re-running 070 against an already-migrated DB is an exact no-op', () => {
-      const migrationSql = readFileSync(join(process.cwd(), 'supabase/migrations/070_run_shadow_topic_scoring.sql'), 'utf8')
-      const out = execSync(
-        'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
-        { input: migrationSql, encoding: 'utf8' },
-      )
-      expect(out).toMatch(/already exists and matches exactly -- no-op\./)
+  const MIGRATION_070 = readFileSync(join(process.cwd(), 'supabase/migrations/070_run_shadow_topic_scoring.sql'), 'utf8')
+  const MIGRATION_071 = readFileSync(join(process.cwd(), 'supabase/migrations/071_fix_shadow_topic_snapshot_provenance.sql'), 'utf8')
+
+  function applyMigration(sql: string): string {
+    return execSync(
+      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      { input: sql, encoding: 'utf8' },
+    )
+  }
+  function applyMigrationExpectThrow(sql: string): boolean {
+    try {
+      execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f -', { input: sql, encoding: 'utf8' })
+      return false
+    } catch {
+      return true
+    }
+  }
+
+  describe('071 migration: legacy v1 -> corrected v2, no-op replay, fail-closed drift', () => {
+    it('a fresh legacy v1 install produces a v1-shaped run/score; applying 071 upgrades the function to v2 and leaves that v1 row byte-for-byte untouched', () => {
+      dockerPsql('DROP FUNCTION IF EXISTS public.run_shadow_topic_scoring(timestamptz, timestamptz, text);')
+      const createOut = applyMigration(MIGRATION_070)
+      expect(createOut).toMatch(/run_shadow_topic_scoring created\./)
+
+      const cluster = newCluster('STS RPC test v1-legacy-preserved', '2026-01-01T00:00:00Z')
+      const e1 = newEvidence('v1legacy-e1', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z')
+      linkEvidence(cluster, e1, '2026-01-01T01:00:00Z')
+      addObservation(e1, 4242, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z')
+      const ts = uniq('2026-01-03T00:00:00Z')
+      const key = `sts-rpc-v1legacy-${randomUUID()}`
+      const result = callRpc(ts, ts, key)
+      expect(result.outcome).toBe('completed')
+
+      const snapshotQuery = `
+        select r.algorithm_version||'|'||s.input_snapshot_schema_version||'|'||s.input_snapshot::text||'|'||s.input_digest
+        from signal_score_runs r join signal_cluster_scores s on s.score_run_id = r.id
+        where r.idempotency_key = '${key}' and s.signal_cluster_id = '${cluster}';
+      `
+      const before = dockerPsql(snapshotQuery).trim()
+      // sanity: this v1 snapshot must NOT contain metric_value (that is exactly the defect 071 fixes)
+      expect(before).not.toContain('"metric_value"')
+      expect(before.split('|')[0]).toBe('1')
+      expect(before.split('|')[1]).toBe('1')
+
+      const replaceOut = applyMigration(MIGRATION_071)
+      expect(replaceOut).toMatch(/replaced with the corrected v2 body/)
+
+      const after = dockerPsql(snapshotQuery).trim()
+      expect(after).toBe(before)
+    })
+
+    it('re-running 071 against the now-v2 function is an exact no-op', () => {
+      const out = applyMigration(MIGRATION_071)
+      expect(out).toMatch(/already exactly the corrected v2 body -- no-op\./)
       expect(out).not.toMatch(/drift/)
     })
 
-    it('drift-fail-fast: tampering the function body makes a 070 re-run fail closed, and CREATE OR REPLACE-ing it back restores a clean idempotent re-run', () => {
+    it('071 refuses to touch an unrecognized/tampered function body (fail-closed); DROP + 070 + 071 restores a clean v2 state', () => {
       dockerPsql(`
         CREATE OR REPLACE FUNCTION public.run_shadow_topic_scoring(p_evaluation_time timestamptz, p_input_cutoff timestamptz, p_idempotency_key text)
         RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
-        AS $tamper$ BEGIN RETURN '{}'::jsonb; END; $tamper$;
+        AS $tamper$ BEGIN RAISE EXCEPTION 'tampered'; END; $tamper$;
       `)
-      const migrationSql = readFileSync(join(process.cwd(), 'supabase/migrations/070_run_shadow_topic_scoring.sql'), 'utf8')
-      let threw = false
-      try {
-        execSync(
-          'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f -',
-          { input: migrationSql, encoding: 'utf8' },
-        )
-      } catch {
-        threw = true
-      }
-      expect(threw).toBe(true)
+      expect(applyMigrationExpectThrow(MIGRATION_071)).toBe(true)
 
-      // restore: re-apply the real migration body via a fresh reset-equivalent — drop and recreate from the file
       dockerPsql('DROP FUNCTION public.run_shadow_topic_scoring(timestamptz, timestamptz, text);')
-      const out = execSync(
-        'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
-        { input: migrationSql, encoding: 'utf8' },
-      )
-      expect(out).toMatch(/run_shadow_topic_scoring created\./)
+      const recreateOut = applyMigration(MIGRATION_070)
+      expect(recreateOut).toMatch(/run_shadow_topic_scoring created\./)
+      const restoreOut = applyMigration(MIGRATION_071)
+      expect(restoreOut).toMatch(/replaced with the corrected v2 body/)
+    })
+
+    it('070 standalone can never be safely re-applied once 071 has advanced the function to v2 (forward-only enforcement)', () => {
+      // live function is v2 at this point (restored by the previous test).
+      // 070's own VALIDATE branch only accepts its own legacy v1 body hash,
+      // so it must fail closed here -- and since that branch never runs
+      // DDL/DCL, the live v2 function is left untouched by this call.
+      expect(applyMigrationExpectThrow(MIGRATION_070)).toBe(true)
+      const err = (() => {
+        try {
+          execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f -', { input: MIGRATION_070, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
+          return ''
+        } catch (e: any) {
+          return String(e.stderr || e.stdout || '')
+        }
+      })()
+      expect(err).toMatch(/070 drift/)
     })
   })
 
@@ -469,7 +571,7 @@ describeIfLocalDb('Shadow Topic v0 S2 — run_shadow_topic_scoring RPC (real loc
       const out = dockerPsql(`
         select (input_digest = encode(sha256(convert_to(
           format(
-            '{"cluster_category_snapshot":%s,"cluster_id":%s,"cluster_status_snapshot":%s,"evaluation_time":%s,"evidence":[%s],"input_cutoff":%s,"observations":[%s],"schema_version":1}',
+            '{"cluster_category_snapshot":%s,"cluster_id":%s,"cluster_status_snapshot":%s,"evaluation_time":%s,"evidence":[%s],"input_cutoff":%s,"observations":[%s],"schema_version":2}',
             to_json('tech_ai'::text)::text,
             to_json(signal_cluster_id::text)::text,
             to_json('active'::text)::text,
@@ -479,14 +581,161 @@ describeIfLocalDb('Shadow Topic v0 S2 — run_shadow_topic_scoring RPC (real loc
               to_json('${e1}'::text)::text, to_json('youtube_video'::text)::text, to_json('2026-01-01T01:00:00.000000Z'::text)::text, to_json('2026-01-01T00:00:00.000000Z'::text)::text, to_json('${SOURCE_ID}'::text)::text
             ), ',')),
             to_json('${tsCanonical}'::text)::text,
-            (select string_agg(format('{"bucket_start":%s,"cadence":"daily","evidence_id":%s,"metric_type":"youtube_view_count","observation_id":%s,"observed_at":%s,"selected_for_calculation":true}',
-              to_json('2026-01-02T00:00:00.000000Z'::text)::text, to_json('${e1}'::text)::text, to_json(o.id::text)::text, to_json('2026-01-02T05:00:00.000000Z'::text)::text
+            (select string_agg(format('{"bucket_start":%s,"cadence":"daily","evidence_id":%s,"metric_type":"youtube_view_count","metric_value":%s,"observation_id":%s,"observed_at":%s,"selected_for_calculation":true}',
+              to_json('2026-01-02T00:00:00.000000Z'::text)::text, to_json('${e1}'::text)::text, to_json(trim_scale(round(o.metric_value,0))::text)::text, to_json(o.id::text)::text, to_json('2026-01-02T05:00:00.000000Z'::text)::text
             ), ',') from signal_observations o where o.signal_evidence_id='${e1}')
           ), 'UTF8'
         )), 'hex')) as matches
         from signal_cluster_scores where signal_cluster_id='${cluster}';
       `).trim()
       expect(out).toBe('t')
+    })
+  })
+
+  // ------------------------------------------------------------
+  // 5b. v2 snapshot provenance -- metric_value, self-containment,
+  //     source-mutation divergence, >2^53 integers.
+  // ------------------------------------------------------------
+  describe('v2 snapshot provenance (metric_value)', () => {
+    it('metric_value is present as a JSON string on every cutoff-eligible observation, not just the selected one', () => {
+      const cluster = newCluster('STS RPC test v2-metric-value-all', '2026-01-01T00:00:00Z')
+      const e1 = newEvidence('v2mv-e1', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z')
+      linkEvidence(cluster, e1, '2026-01-01T01:00:00Z')
+      addObservation(e1, 500, 'daily', '2026-01-01T00:00:00Z', '2026-01-01T12:00:00Z') // older, not selected
+      addObservation(e1, 900, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z') // newer, selected
+      const ts = uniq('2026-01-11T00:00:00Z')
+      callRpc(ts, ts, `sts-rpc-v2mv-${cluster}`)
+      const values = dockerPsql(`
+        select jsonb_agg(o->>'metric_value') from signal_cluster_scores, jsonb_array_elements(input_snapshot->'observations') o
+        where signal_cluster_id='${cluster}';
+      `).trim()
+      expect((JSON.parse(values) as string[]).sort()).toEqual(['500', '900'])
+      const types = dockerPsql(`
+        select string_agg(jsonb_typeof(o->'metric_value'), ',') from signal_cluster_scores, jsonb_array_elements(input_snapshot->'observations') o
+        where signal_cluster_id='${cluster}';
+      `).trim()
+      expect(types).toBe('string,string')
+    })
+
+    it('metric_value=0 renders as the canonical string "0" -- never "0.00", never empty, never a JSON number', () => {
+      const cluster = newCluster('STS RPC test v2-metric-value-zero', '2026-01-01T00:00:00Z')
+      const e1 = newEvidence('v2mv0-e1', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z')
+      linkEvidence(cluster, e1, '2026-01-01T01:00:00Z')
+      addObservation(e1, 0, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z')
+      const ts = uniq('2026-01-12T00:00:00Z')
+      callRpc(ts, ts, `sts-rpc-v2mv0-${cluster}`)
+      const raw = dockerPsql(`
+        select o->>'metric_value' from signal_cluster_scores, jsonb_array_elements(input_snapshot->'observations') o where signal_cluster_id='${cluster}';
+      `).trim()
+      expect(raw).toBe('0')
+    })
+
+    it('the score fields (evidence counts, coverage, medians, max_observed_at) can be recomputed purely from the stored input_snapshot, without reading any source table, and match the stored scalar columns exactly', () => {
+      const cluster = newCluster('STS RPC test v2-self-contained', '2026-01-01T00:00:00Z')
+      const e1 = newEvidence('v2sc-e1', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z')
+      const e2 = newEvidence('v2sc-e2', '2026-01-01T00:00:00Z', '2026-01-01T02:00:00Z')
+      const e3 = newEvidence('v2sc-e3', '2026-01-01T00:00:00Z', '2026-01-01T03:00:00Z')
+      for (const e of [e1, e2, e3]) linkEvidence(cluster, e, '2026-01-01T01:00:00Z')
+      addObservation(e1, 1000, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z')
+      addObservation(e2, 2000, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z')
+      addObservation(e3, 3000, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z')
+      const ts = uniq('2026-01-13T00:00:00Z')
+      const key = `sts-rpc-v2sc-${randomUUID()}`
+      callRpc(ts, ts, key)
+
+      const raw = dockerPsql(`
+        select s.input_snapshot::text||chr(30)||s.evidence_count||chr(30)||s.youtube_evidence_count||chr(30)||
+               s.freshness_eligible_evidence_count||chr(30)||s.freshness_coverage||chr(30)||
+               s.median_discovery_lag_hours||chr(30)||s.median_observation_age_hours||chr(30)||
+               s.median_average_view_velocity_per_hour||chr(30)||s.max_observed_at
+        from signal_score_runs r join signal_cluster_scores s on s.score_run_id=r.id
+        where r.idempotency_key='${key}' and s.signal_cluster_id='${cluster}';
+      `).trim()
+      const [snapshotText, evidenceCount, youtubeEvidenceCount, freshnessEligibleCount, freshnessCoverage, medianLag, medianAge, medianVelocity, maxObservedAt] =
+        raw.split('\x1e')
+      const recomputed = recomputeFromSnapshotAlone(JSON.parse(snapshotText), ts)
+
+      expect(recomputed.evidenceCount).toBe(Number(evidenceCount))
+      expect(recomputed.youtubeEvidenceCount).toBe(Number(youtubeEvidenceCount))
+      expect(recomputed.freshnessEligibleCount).toBe(Number(freshnessEligibleCount))
+      expect(recomputed.freshnessCoverage.toFixed(4)).toBe(freshnessCoverage)
+      expect(recomputed.medianDiscoveryLagHours.toFixed(4)).toBe(medianLag)
+      expect(recomputed.medianObservationAgeHours.toFixed(4)).toBe(medianAge)
+      expect(recomputed.medianVelocity.toFixed(6)).toBe(medianVelocity)
+      expect(new Date(recomputed.maxObservedAtMs!).toISOString()).toBe(new Date(maxObservedAt).toISOString())
+    })
+
+    it('input_digest is sensitive to metric_value (a source mutation between two runs on the same evidence changes the digest), and the FIRST run\'s stored snapshot/digest/score stay completely frozen despite the later mutation', () => {
+      const cluster = newCluster('STS RPC test v2-mutation-digest', '2026-01-01T00:00:00Z')
+      const e1 = newEvidence('v2mutdig-e1', '2026-01-01T00:00:00Z', '2026-01-01T01:00:00Z')
+      linkEvidence(cluster, e1, '2026-01-01T01:00:00Z')
+      addObservation(e1, 100, 'daily', '2026-01-02T00:00:00Z', '2026-01-02T05:00:00Z') // elapsed 29h -> velocity 100/29=3.448276
+
+      const snapshotQuery = (key: string) =>
+        `select s.input_snapshot::text||chr(30)||s.input_digest||chr(30)||s.median_average_view_velocity_per_hour from signal_score_runs r join signal_cluster_scores s on s.score_run_id=r.id where r.idempotency_key='${key}' and s.signal_cluster_id='${cluster}';`
+
+      const ts1 = uniq('2026-01-14T00:00:00Z')
+      const key1 = `sts-rpc-v2mutdig-a-${randomUUID()}`
+      callRpc(ts1, ts1, key1)
+      const row1 = dockerPsql(snapshotQuery(key1)).trim()
+      const [, digest1, velocity1] = row1.split('\x1e')
+      expect(velocity1).toBe('3.448276')
+
+      // mutate the SOURCE row's metric_value -- postgres/test-fixture privilege, NOT via the RPC.
+      dockerPsql(`update signal_observations set metric_value = 999999 where signal_evidence_id='${e1}';`)
+
+      // the first run's stored row must be completely unaffected by the later mutation.
+      const row1After = dockerPsql(snapshotQuery(key1)).trim()
+      expect(row1After).toBe(row1)
+
+      // a SECOND, independent run against the SAME cluster/evidence, now reading the mutated
+      // metric_value, must produce a DIFFERENT digest -- isolating metric_value as the cause,
+      // since cluster_id/evidence_id/source_id/timings are all identical to the first run.
+      const ts2 = uniq('2026-01-15T00:00:00Z')
+      const key2 = `sts-rpc-v2mutdig-b-${randomUUID()}`
+      callRpc(ts2, ts2, key2)
+      const row2 = dockerPsql(snapshotQuery(key2)).trim()
+      const [, digest2, velocity2] = row2.split('\x1e')
+      expect(digest2).not.toBe(digest1)
+      expect(velocity2).not.toBe(velocity1)
+
+      // a naive recompute from the NOW-mutated source would silently produce yet another
+      // number -- proving only the frozen, stored snapshot is trustworthy long-term.
+      const independentFromMutatedSource = dockerPsql(`select (999999::numeric/29.0)::numeric(20,6);`).trim()
+      expect(independentFromMutatedSource).toBe(velocity2)
+      expect(independentFromMutatedSource).not.toBe(velocity1)
+
+      // restore fixture state.
+      dockerPsql(`update signal_observations set metric_value = 100 where signal_evidence_id='${e1}';`)
+    })
+
+    it('a metric_value above 2^53 survives in the snapshot as an exact decimal string with no scientific notation and no precision loss, and the NUMERIC velocity computation matches an independent NUMERIC calculation', () => {
+      // Elapsed hours (published_at -> observed_at) is deliberately large (100000h)
+      // so huge/elapsed still fits signal_cluster_scores.median_average_view_velocity_per_hour's
+      // fixed NUMERIC(20,6) column (14 integer digits max) -- this is an existing,
+      // out-of-scope-for-071 column precision, not something this migration controls.
+      const cluster = newCluster('STS RPC test v2-bigint', '2026-01-01T00:00:00Z')
+      const e1 = newEvidence('v2bigint-e1', '2015-01-01T00:00:00Z', '2015-01-01T01:00:00Z')
+      linkEvidence(cluster, e1, '2026-01-01T01:00:00Z')
+      const huge = '9007199254740993' // 2^53 + 1 -- not exactly representable as an IEEE-754 double
+      addObservationExact(e1, huge, 'daily', '2026-05-29T00:00:00Z', '2026-05-29T16:00:00Z') // elapsed = 100000h exactly
+      const ts = uniq('2026-06-01T00:00:00Z')
+      const key = `sts-rpc-v2bigint-${randomUUID()}`
+      callRpc(ts, ts, key)
+
+      const snapshotValue = dockerPsql(`
+        select o->>'metric_value' from signal_cluster_scores s, jsonb_array_elements(s.input_snapshot->'observations') o
+        where s.signal_cluster_id = '${cluster}';
+      `).trim()
+      expect(snapshotValue).toBe(huge)
+      expect(snapshotValue).not.toMatch(/[eE][+-]?\d/)
+      expect(snapshotValue).not.toMatch(/\./)
+
+      const storedVelocity = dockerPsql(`
+        select median_average_view_velocity_per_hour from signal_cluster_scores where signal_cluster_id='${cluster}';
+      `).trim()
+      const independentVelocity = dockerPsql(`select (${huge}::numeric / 100000.0)::numeric(20,6);`).trim()
+      expect(storedVelocity).toBe(independentVelocity)
     })
   })
 
@@ -543,7 +792,7 @@ describeIfLocalDb('Shadow Topic v0 S2 — run_shadow_topic_scoring RPC (real loc
       const key = `sts-rpc-diffconfig-${randomUUID()}`
       dockerPsql(`
         insert into signal_score_runs (score_profile, layer, algorithm_version, algorithm_config_hash, algorithm_config_snapshot, algorithm_config_schema_version, evaluation_time, input_cutoff, status, completed_at, idempotency_key)
-        values ('shadow_topic_v0','cluster_topic',1,'${'9'.repeat(64)}','{}'::jsonb,1,now(),now(),'completed',now(),'${key}-fake');
+        values ('shadow_topic_v0','cluster_topic',2,'${'9'.repeat(64)}','{}'::jsonb,2,now(),now(),'completed',now(),'${key}-fake');
       `)
       try {
         const err = callRpcExpectError('2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', key)
@@ -574,6 +823,40 @@ describeIfLocalDb('Shadow Topic v0 S2 — run_shadow_topic_scoring RPC (real loc
       expect(outcomes).toEqual(['completed', 'replayed'])
       const count = dockerPsql(`select count(*) from signal_score_runs where idempotency_key='${key}';`).trim()
       expect(count).toBe('1')
+    })
+  })
+
+  // ------------------------------------------------------------
+  // 6b. v1/v2 idempotency isolation -- v1 is never silently replayed as
+  //     v2, and the per-version config-hash invariant stays isolated.
+  // ------------------------------------------------------------
+  describe('v1/v2 idempotency isolation', () => {
+    it('calling the v2 RPC with the persisted v1 run\'s exact idempotency_key raises a semantic-mismatch error, never outcome=replayed', () => {
+      const v1Key = dockerPsql(
+        `select idempotency_key from signal_score_runs where idempotency_key like 'sts-rpc-v1legacy-%' and algorithm_version=1 order by created_at limit 1;`,
+      ).trim()
+      expect(v1Key).toMatch(/^sts-rpc-v1legacy-/)
+      const err = callRpcExpectError('2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', v1Key)
+      expect(err).toMatch(/idempotency_key already used with different semantic parameters/)
+      expect(err).not.toContain('"outcome": "replayed"')
+    })
+
+    it('a fresh v2 idempotency_key succeeds and stamps algorithm_version=2, input_snapshot_schema_version=2, and the new v2 algorithm_config_hash', () => {
+      const ts = uniq('2026-01-17T00:00:00Z')
+      const key = `sts-rpc-v2fresh-${randomUUID()}`
+      const result = callRpc(ts, ts, key)
+      expect(result.outcome).toBe('completed')
+      const row = dockerPsql(`select algorithm_version||'|'||algorithm_config_hash from signal_score_runs where idempotency_key='${key}';`).trim()
+      const [version, configHash] = row.split('|')
+      expect(version).toBe('2')
+      expect(configHash).toBe('ac9bcc711e105bf8e4822382191b63e1baec5df3fd8e0efcb680a5dba8ef8911')
+      expect(configHash).not.toBe('7c6ec8a97fc182a6a41810245d141ea30b7e6677e4e4289bbfc7d298b6207910')
+    })
+
+    it('the (score_profile, algorithm_version) -> single config_hash invariant is scoped per-version: the persisted v1 row (different hash, version=1) never collides with a fresh v2 call', () => {
+      const ts = uniq('2026-01-18T00:00:00Z')
+      const result = callRpc(ts, ts, `sts-rpc-v2scoped-${randomUUID()}`)
+      expect(result.outcome).toBe('completed')
     })
   })
 

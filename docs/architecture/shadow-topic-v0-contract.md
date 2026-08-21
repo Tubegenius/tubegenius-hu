@@ -1,6 +1,6 @@
 # Shadow Topic v0 — Canonical Schema & Computation Contract
 
-Status: **S1 (schema-only) + S2 (deterministic scoring RPC) implemented locally.** S1: `supabase/migrations/069_shadow_topic_score_schema.sql`. S2: `supabase/migrations/070_run_shadow_topic_scoring.sql` (`public.run_shadow_topic_scoring(timestamptz, timestamptz, text) RETURNS jsonb`). No cron, no route, no UI, no TypeScript caller in this phase. `ranking_eligible` is hard-`false` for every row the v0 RPC can ever produce.
+Status: **S1 (schema-only) + S2 (deterministic scoring RPC, corrected to v2) implemented locally.** S1: `supabase/migrations/069_shadow_topic_score_schema.sql`. S2: `supabase/migrations/070_run_shadow_topic_scoring.sql` (v1, **provenance-defective, see §13 — do not use for calibration**) corrected by `supabase/migrations/071_fix_shadow_topic_snapshot_provenance.sql` (v2, `algorithm_version=2`, `input_snapshot_schema_version=2`; same function identity `public.run_shadow_topic_scoring(timestamptz, timestamptz, text) RETURNS jsonb`). No cron, no route, no UI, no TypeScript caller in this phase. `ranking_eligible` is hard-`false` for every row the v0 RPC can ever produce, in both v1 and v2.
 
 ## 1. Source of truth and precedence
 
@@ -136,9 +136,11 @@ Rather than building a full FK-based junction/provenance table for this theoreti
 
 ### `input_snapshot` shape (top level)
 
+**`schema_version` (this document's original design, only correctly implemented from v2 onward — see §13):**
+
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "cluster_id": "...",
   "cluster_category_snapshot": "tech_ai",
   "cluster_status_snapshot": "active",
@@ -151,7 +153,7 @@ Rather than building a full FK-based junction/provenance table for this theoreti
 
 **Evidence element**: `evidence_id`, `evidence_type`, `source_id`, `published_at`, `first_seen_at`, `cluster_link_created_at`, `eligibility.freshness.{eligible,reason}`, `eligibility.velocity.{eligible,reason}`.
 
-**Observation element**: `observation_id`, `evidence_id`, `metric_type`, `cadence`, `bucket_start`, `observed_at`, `metric_value` (decimal **string**, never a JSON number), `selected_for_calculation` (boolean — at most one `true` per evidence, marking the tie-break winner; the snapshot carries *every* cutoff-eligible-cadence observation per evidence, not just the winner).
+**Observation element**: `observation_id`, `evidence_id`, `metric_type`, `cadence`, `bucket_start`, `observed_at`, `metric_value` (decimal **string**, never a JSON number), `selected_for_calculation` (boolean — at most one `true` per evidence, marking the tie-break winner; the snapshot carries *every* cutoff-eligible-cadence observation per evidence, not just the winner). **This was always the design intent of this document, but v1/070 shipped without `metric_value` in the observation element — see §13. Only v2 (`input_snapshot_schema_version=2`) actually satisfies this paragraph.**
 
 **Controlled `eligibility.reason` enum** (snapshot-internal, not a DB CHECK): `not_youtube_evidence`, `missing_published_at`, `published_after_evaluation_time`, `linked_after_input_cutoff`, `first_seen_after_input_cutoff`, `no_scheduled_view_observation`; `reason=null` when `eligible=true`.
 
@@ -241,3 +243,23 @@ This section supersedes §7's `(score_profile, algorithm_version) → single con
 **Canonical JSON**: hand-built `format()` text templates in fixed, manually-verified lexicographic key order (never `jsonb_build_object(...)::text` — empirically confirmed non-deterministic key ordering in this Postgres version, see prior design-gate notes). Every scalar is encoded via `pg_catalog.to_json(value)::text` (proven correct for quotes/backslash/Unicode/control characters — `signal_clusters.category` has no CHECK constraint and cannot be assumed pre-sanitized). `input_digest`/`algorithm_config_hash` are `encode(sha256(convert_to(<that same text>, 'UTF8')), 'hex')` — computed from and stored (via `::jsonb`) from the identical text expression, never two independently-built values.
 
 **Atomic error model**: the RPC runs as one transaction. Any `RAISE EXCEPTION` (input validation, config-hash conflict, non-`completed` existing run for the same idempotency key, semantic-tuple conflict, or any unexpected error) aborts the entire call — no `RETURN` is reached, so the caller receives a SQL exception, not a JSONB payload, and nothing is committed. `signal_score_runs.status = 'failed'` remains schema-legal but this RPC never writes or commits it. Only two `outcome` values are ever returned: `"completed"` (fresh run) and `"replayed"` (idempotent replay of a prior `completed` run, verified to match on `score_profile`/`algorithm_version`/`algorithm_config_hash`/`evaluation_time`/`input_cutoff` before being trusted).
+
+## 13. S2 correction — v1 provenance defect and the v2 fix (`071_fix_shadow_topic_snapshot_provenance.sql`)
+
+**The v1/070 defect.** §6 of this document always specified that the observation element must carry `metric_value` as a decimal string, precisely so the stored `input_snapshot` alone is sufficient to recompute a score even if the source `signal_observations` row is later modified. The v1 implementation (070) did not do this — its `observation_json` canonical-text builder omitted `metric_value` entirely, and therefore `input_digest` (a hash of that same canonical text) was **not sensitive to `metric_value` either**. Concretely: a v1 `input_snapshot` is not self-contained, and any "reproducibility" demonstrated against a v1 row by re-reading current `signal_observations` values is not proof of anything — it is just reading the still-unchanged live value, not verifying the frozen snapshot.
+
+**Consequence for existing v1 data.** The first (and, as of this writing, only) production Shadow Topic run, `signal_score_runs.id = 6853aa21-dbdf-4ec0-a6d9-6ba7f83d39c6` (`algorithm_version=1`, `input_snapshot_schema_version=1`), is **not calibratable** and must be treated as a provenance-incomplete audit record, not a usable data point. It is preserved exactly as-is — `signal_score_runs`/`signal_cluster_scores` are append-only and `071` performs zero DML — and must **never** be claimed to be reproducible from its own snapshot. Any future calibration or score-quality audit must exclude every row with `input_snapshot_schema_version < 2`.
+
+**The v2 fix.** `071_fix_shadow_topic_snapshot_provenance.sql` replaces only the `run_shadow_topic_scoring` function body (fail-closed: it only ever transitions the known v1 legacy body hash to the known-good v2 body hash, no-ops if already v2, and raises and rolls back on any other body/ACL/owner/search_path it doesn't recognize). It changes:
+
+- `algorithm_version`: `1` → `2`.
+- `input_snapshot_schema_version`: `1` → `2` (also carried explicitly as a field inside `algorithm_config_snapshot`, so a v2 config alone makes its own snapshot shape unambiguous).
+- `algorithm_config_schema_version`: `1` → `2` (the config JSON's own structure gained a field, which is a config-schema change in its own right).
+- `algorithm_config_hash`: recomputed from the new config canonical text (new hash, since the config text changed).
+- Advisory lock key: `shadow_topic_v0:1` → `shadow_topic_v0:2` (v1 and v2 calls no longer serialize against each other — there is no reason to, since a v1 call can never happen again once 071 is applied).
+- The observation element in the snapshot now includes `metric_value`, satisfying §6 as originally written. Every cutoff-eligible observation carries it (not just the selected one), as a JSON string, built directly from `NUMERIC` (`trim_scale(round(metric_value, 0))::text` — never a JS/floating-point round-trip), so values above 2⁵³ survive byte-exact with no scientific notation.
+- The score formula's mathematics (medians, eligibility, coverage) are **unchanged** — this is a reproducibility-contract fix, not an algorithm fix. `algorithm_version` bumps anyway, because the *meaning* of "the input this run saw" materially changed, and v1/v2 results must never be silently compared or averaged together.
+
+**Isolation guarantees (enforced by the existing per-version scoping, not new code):** the `(score_profile, algorithm_version) → single config_hash` invariant is scoped to the caller's own `algorithm_version`, so the v1 row never collides with a v2 call. Calling the v2 RPC with the v1 run's exact `idempotency_key` does not replay it — the idempotency lookup finds a `completed` row whose `algorithm_version` differs from the caller's, and raises the existing "different semantic parameters" exception. A v1 run can never be silently reinterpreted as v2.
+
+`ranking_eligible` remains hard-`false` in v2, exactly as in v1 — §10's guarantee is untouched by this correction.
