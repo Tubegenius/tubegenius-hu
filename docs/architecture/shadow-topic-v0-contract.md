@@ -1,7 +1,6 @@
 # Shadow Topic v0 — Canonical Schema & Computation Contract
 
-Status: **S1 (schema-only) implemented locally** — `supabase/migrations/069_shadow_topic_score_schema.sql`.
-No RPC, no writer, no cron, no UI in this phase. `ranking_eligible` is hard-`false` for every row a v0 writer can ever produce.
+Status: **S1 (schema-only) + S2 (deterministic scoring RPC) implemented locally.** S1: `supabase/migrations/069_shadow_topic_score_schema.sql`. S2: `supabase/migrations/070_run_shadow_topic_scoring.sql` (`public.run_shadow_topic_scoring(timestamptz, timestamptz, text) RETURNS jsonb`). No cron, no route, no UI, no TypeScript caller in this phase. `ranking_eligible` is hard-`false` for every row the v0 RPC can ever produce.
 
 ## 1. Source of truth and precedence
 
@@ -216,3 +215,29 @@ Every row this schema can hold is diagnostic. `ranking_eligible BOOLEAN NOT NULL
 - `(score_profile, algorithm_version) → single config_hash` is not database-enforced in this schema-only phase; a future RPC must add a concurrency-safe guard (advisory lock or a registry table).
 - `max_observed_at <= input_cutoff` and full snapshot-vs-scalar consistency are not native CHECK constraints (PostgreSQL cannot cross-table CHECK, and JSONB-path CHECKs here would be fragile/expensive) — both are future RPC + integration-test responsibilities.
 - No composite/final score, no ranking, no user-facing surface exists in v0 by design.
+
+## 12. S2 — `run_shadow_topic_scoring` RPC (implemented, `070_run_shadow_topic_scoring.sql`)
+
+This section supersedes §7's `(score_profile, algorithm_version) → single config_hash` limitation and §9's "future RPC" placeholders — S2 closes them. It documents only the points that were **finalized** during the S2 design-correction pass; §1–11 remain the schema-level source of truth.
+
+**Identity**: `public.run_shadow_topic_scoring(p_evaluation_time timestamptz, p_input_cutoff timestamptz, p_idempotency_key text) RETURNS jsonb`. `LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp`, owner `postgres`, `EXECUTE` granted to `service_role` only (`anon`/`authenticated`/`PUBLIC` = 0). Every table reference is `public.`-qualified; every built-in used (`sha256`, `convert_to`, `to_json`, `hashtextextended`, `pg_advisory_xact_lock`) is `pg_catalog.`-qualified.
+
+**Concurrency**: `pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('shadow_topic_v0:1', 0))` is taken as the very first step. Because this is a transaction-scoped lock, it holds until COMMIT/ROLLBACK — **the entire RPC execution serializes** across concurrent calls, not just the config/insert section. This is a deliberate v0 trade-off (no cron/route in this phase, negligible cost at current data volumes), not an oversight.
+
+**Eligibility reason enum actually reachable in v0** (both freshness and velocity always share the same eligibility/reason per evidence, since v0 uses an identical condition for both): the base evidence query already excludes anything outside the cutoff (`signal_cluster_evidence.created_at`, `signal_evidence.first_seen_at`), so `linked_after_input_cutoff` and `first_seen_after_input_cutoff` are **structurally unreachable** and are not produced by this RPC. The four reachable values, in strict `CASE` precedence order (first match wins):
+
+1. `not_youtube_evidence`
+2. `missing_published_at`
+3. `published_after_evaluation_time`
+4. `no_scheduled_view_observation`
+5. *(none of the above)* → `eligible = true`, `reason = null`
+
+**`youtube_evidence_count`**: counts `evidence_type = 'youtube_video'` within the cutoff-valid evidence set **regardless of `published_at`**. A missing or future `published_at` stays in this denominator and is excluded only from `freshness/velocity_eligible_evidence_count` — it lowers `freshness_coverage`/`velocity_coverage`, it does not vanish from the count. Verified by test (`4 evidence with 1 missing published_at → coverage=0.7500`, not `1.0000`).
+
+**Observation event-time cutoff, not ingestion-time**: `observed_at <= p_input_cutoff` is the only temporal gate on `signal_observations` — there is no separate "was this row already in the database by wall-clock time X" concept. A `signal_observations` row inserted by the collector *after* a given `run_shadow_topic_scoring` call, whose `observed_at` nonetheless satisfies the cutoff, is picked up by any *later* run with that same `input_cutoff` value (a re-run is not literally possible under the current semantic-dup UNIQUE for the exact same tuple, but a fresh run with a later `input_cutoff` covering the same window would see it). The `input_snapshot` freezes exactly what a given run actually saw, which is what makes each run individually auditable — it does not claim to represent "the database as of a wall-clock instant."
+
+**Selection tie-break = snapshot order** (deliberately unified, a refinement over the earlier draft's plain-ascending wording): `observed_at DESC, bucket_start DESC, id ASC`, applied identically both to pick the per-evidence winning observation (`selected_for_calculation = true`) and to order the `observations[]` array within each `evidence_id` group (itself ordered `evidence_id ASC`). The first row in every per-evidence group in the snapshot is always the selected one.
+
+**Canonical JSON**: hand-built `format()` text templates in fixed, manually-verified lexicographic key order (never `jsonb_build_object(...)::text` — empirically confirmed non-deterministic key ordering in this Postgres version, see prior design-gate notes). Every scalar is encoded via `pg_catalog.to_json(value)::text` (proven correct for quotes/backslash/Unicode/control characters — `signal_clusters.category` has no CHECK constraint and cannot be assumed pre-sanitized). `input_digest`/`algorithm_config_hash` are `encode(sha256(convert_to(<that same text>, 'UTF8')), 'hex')` — computed from and stored (via `::jsonb`) from the identical text expression, never two independently-built values.
+
+**Atomic error model**: the RPC runs as one transaction. Any `RAISE EXCEPTION` (input validation, config-hash conflict, non-`completed` existing run for the same idempotency key, semantic-tuple conflict, or any unexpected error) aborts the entire call — no `RETURN` is reached, so the caller receives a SQL exception, not a JSONB payload, and nothing is committed. `signal_score_runs.status = 'failed'` remains schema-legal but this RPC never writes or commits it. Only two `outcome` values are ever returned: `"completed"` (fresh run) and `"replayed"` (idempotent replay of a prior `completed` run, verified to match on `score_profile`/`algorithm_version`/`algorithm_config_hash`/`evaluation_time`/`input_cutoff` before being trusted).
