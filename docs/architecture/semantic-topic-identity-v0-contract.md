@@ -1,6 +1,6 @@
-# Semantic Topic Identity v0 — Canonical Schema Contract (S1)
+# Semantic Topic Identity v0 — Canonical Schema Contract (S1 + S2A)
 
-Status: **S1 (schema-only, fully inert) implemented locally.** `supabase/migrations/072_semantic_topic_identity_foundation.sql`. No RPC, no trigger, no backfill, no cron, no route, no UI, no TypeScript caller, no AI/provider call, no data write in this phase — this migration cannot create a single row of application data by itself.
+Status: **S1 (schema-only, fully inert) + S2A (writerless audit/provenance schema + temporal hardening) implemented locally.** S1: `supabase/migrations/072_semantic_topic_identity_foundation.sql`. S2A: `supabase/migrations/073_semantic_topic_s2a_audit_and_temporal_hardening.sql`. Neither phase has an RPC, a trigger, a backfill, a cron, a route, a UI, a TypeScript caller, an AI/provider call, or any data write — S2A adds three new tables and hardens the temporal invariant on the S1 membership table, but nothing in either phase can create a single row of application data by itself (`service_role` is `SELECT`-only on every table this contract covers).
 
 ## 1. Source of truth and precedence
 
@@ -119,3 +119,97 @@ The 045/046/047 security baseline (function-execution hardening, default-privile
 ## 14. What this migration explicitly does not do
 
 No AI/provider call, no backfill of any existing `signal_clusters`/`signal_evidence` data into these tables, no scoring, no use in any ranking or recommendation surface, no change to the collector/cron/control tables, no change to `creator_memory`/`video_ideas`, no change to the Creator Lane, no new route, and no change to the currently-live, semantically-mixed legacy `signal_clusters` cluster or its Shadow Topic v0 V1/V2 scores — those remain exactly as they are today: a known-incoherent, immutable diagnostic artifact (see `docs/architecture/shadow-topic-v0-contract.md` §13), not a data source this migration reads from or writes to.
+
+---
+
+# S2A — Writerless Audit/Provenance Schema + Temporal Hardening
+
+S2A adds three new, still-writerless tables and closes the S1 `TEMPORAL_NON_OVERLAP = DEFERRED_TO_S2` gap. It does **not** add a writer RPC — that is S2B/S2C. Canonical source: "PFM Semantic Topic Identity v0 — S2 Final Pre-Implementation Correctness Gate."
+
+## 15. `topic_extraction_runs` — one row per terminal extraction attempt
+
+**Terminal, immutable model (not start/finish):** `status` is `CHECK (status IN ('completed', 'failed'))` — there is no `processing` value in the schema. The table records only settled attempts; a crash/timeout that never reaches a settlement is tracked by the provider-reservation system (059–066), not here. There is **no** `invalidated_at` or `superseded_by_extraction_run_id` — the table is genuinely INSERT-only, never UPDATE, so calling it immutable is not just a claim no code path contradicts.
+
+**Two-layer provenance**, replacing the earlier single "input_snapshot" idea:
+- `source_snapshot` / `source_snapshot_digest` — built **by a future RPC directly from the live `signal_evidence` row**, never accepted as client JSON. Digest computed server-side.
+- `normalized_extraction_input` / `normalized_input_digest` — the actual normalized text the extractor consumed; caller-supplied (normalization happens in the application layer), but the digest is recomputed server-side from the supplied text, so it is at least self-consistent (though it cannot prove the normalization *process* was correct).
+
+**Provider/model/prompt pairing** — explicit two-branch, fully-closed CHECK: `deterministic` requires `provider`/`model`/`prompt_version` all `NULL` and `deterministic_extractor_version` set; `ai_assisted` requires all three non-blank (length-bounded) and `deterministic_extractor_version NULL`. No partial combination on either branch is legal.
+
+**Cache identity** — `extraction_config_digest` (hash of `extraction_method, normalization_version, extraction_schema_version, provider, model, prompt_version, deterministic_extractor_version`) plus `(signal_evidence_id, normalized_input_digest)` forms the cache key. A **partial unique index** (`topic_extraction_runs_completed_cache_key`, `WHERE status = 'completed'`) allows at most one completed result per exact cache key, while `failed` attempts may retry indefinitely under fresh `idempotency_key`s. `idempotency_key` remains pure request-idempotency, unrelated to cache identity.
+
+**`structured_output`** (only present when `status='completed'`) must conform to the `topic_extraction_output_v1` contract — enforced by CHECK as far as a non-subquery expression allows: object type, **no unknown top-level keys** (`structured_output - ARRAY[...] = '{}'`), required scalar fields present/typed/length-bounded, `label_language` against the same S1 BCP-47 subset regex, `specificity`/`content_format` enums, `confidence` range, `subject_entities`/`supporting_spans` array-typed with bounded length, and the embedded `extraction_schema_version` cross-checked against the column. Per-element structure inside the arrays (e.g. each `supporting_spans` object's own shape) is **not** DB-enforceable via CHECK (Postgres CHECK constraints cannot contain subqueries or set-returning functions) — that remains an S2B/RPC responsibility. `supporting_spans` elements are `{source_field, quoted_text}` only — **no offsets** (avoids UTF-16/codepoint/Postgres-index ambiguity); `quoted_text` is expected, not DB-enforced, to be a verbatim substring of the corresponding `source_snapshot` field.
+
+`estimated_cost_usd`/`input_tokens`/`output_tokens` are **diagnostic only**, not wired to the collector's `signal_provider_daily_budgets`/`reserve_provider_units` system in any way in S2A (see §18).
+
+## 16. `topic_assignment_decisions` — one row per settled assignment decision
+
+`UNIQUE(extraction_run_id)` — exactly one decision per extraction, 1:1. `outcome IN ('CREATE_NEW', 'ATTACH_EXISTING', 'QUARANTINE')`, paired with `semantic_topic_id`/`resulting_membership_id` (both NULL iff `QUARANTINE`, both NOT NULL otherwise). `decision_reason` is a 7-value enum; S2's own (not-yet-written) RPC will in practice only ever produce `no_similar_topic_found` and `exact_entity_match` — `embedding_similarity_match` and the `manual_review_*` values are schema-reserved for S3. No `invalidated_at` — same immutability stance as `topic_extraction_runs`.
+
+## 17. `semantic_topic_membership_events` — append-only decision-provenance log
+
+Complements (does not duplicate) the S1 membership table's own temporal history: the membership table records *what was true when*, this table records *why a transition happened and under which decision*. `related_assignment_decision_id` is **`NOT NULL`** — every event, including any future manual correction, must carry a real `topic_assignment_decisions` row; there is no audit-free nullable escape hatch. `event_type IN ('attached', 'detached', 'reassigned')`.
+
+## 18. `semantic_topic_membership.assignment_reason` — `topic_creation_seed` added
+
+The original 072 four-value enum (`entity_event_match`, `embedding_similarity`, `manual_review_confirmed`, `manual_review_override`) had no value that correctly describes a `CREATE_NEW` topic's first membership — it isn't a *match* to anything pre-existing. S2A adds a fifth value, **`topic_creation_seed`**, via a fail-closed `DROP CONSTRAINT`/`ADD CONSTRAINT` pair that only proceeds from the exact, byte-verified 072 legacy definition (or is a no-op if already corrected) — any other observed definition is `DEFINITION_DRIFT`, migration aborts, no auto-repair.
+
+## 19. Temporal non-overlap — `DEFERRED_TO_S2` closed
+
+### `btree_gist` install — fail-closed preflight, not just post-install validation
+
+Before any DDL runs, the `NOT EXISTS` branch checks **two facts from the live catalog**: `pg_available_extension_versions` genuinely offers the expected version (`1.7`) on this PostgreSQL installation, and the target schema (`extensions` — the same convention `pgcrypto` already uses) exists. ("No `btree_gist` already installed in a different schema" is not a separate query — `pg_extension` can hold at most one row per extension name per database, so reaching this branch at all already proves that fact.) Either preflight failure is `RAISE EXCEPTION` before `CREATE EXTENSION` is ever issued. An already-present extension is checked for exact `(extversion, extnamespace)` match and left untouched otherwise (`RAISE EXCEPTION` on mismatch, never `ALTER`/`DROP EXTENSION`).
+
+**The `VERSION` clause and its `WARNING` — documented precisely, not just described.** Command actually run when the extension is absent:
+
+```sql
+CREATE EXTENSION btree_gist WITH SCHEMA extensions;
+```
+
+An earlier draft of this migration also appended `VERSION '1.7'`. Running that variant (`CREATE EXTENSION btree_gist WITH SCHEMA extensions VERSION '1.7';`) as the `postgres` role — confirmed non-superuser on both local (`supabase_admin` holds superuser locally) and production — produces, verbatim, from the **PostgreSQL server's own `CREATE EXTENSION` DDL processing** (not psql, not the extension's install script):
+
+```
+WARNING:  only superusers can specify extension versions, ignoring version "1.7" and installing the default version
+```
+
+The clause is silently dropped and the default version installs instead — which happens to equal `1.7` here only because it is the *only* version `pg_available_extension_versions` currently offers for `btree_gist` on this PostgreSQL build, not because the clause took effect. The migration therefore does not pass `VERSION` at all (it would be theater), and instead makes the guarantee real via a **post-install self-check in the same transaction** — `extversion`/`extnamespace` are re-read immediately after `CREATE EXTENSION` and compared against the expected values; any mismatch `RAISE EXCEPTION`s. Verified locally by forcing both failure modes: an unavailable-version preflight failure leaves `pg_extension` with **zero** `btree_gist` rows (never reached `CREATE EXTENSION`), and a forced post-install self-check failure (extension genuinely installs as `1.7`, self-check deliberately told to expect something else) *also* leaves zero rows afterward — proving the single-transaction rollback undoes the extension creation itself, not just the error propagation.
+
+### The `EXCLUDE` constraint — a real unbounded range, not an `infinity` sentinel
+
+```sql
+ALTER TABLE semantic_topic_membership ADD CONSTRAINT semantic_topic_membership_no_overlap
+  EXCLUDE USING gist (
+    signal_evidence_id WITH =,
+    tstzrange(valid_from, valid_to, '[)') WITH &&
+  );
+```
+
+An earlier draft used `tstzrange(valid_from, coalesce(valid_to, 'infinity'::timestamptz), '[)')`. That is a real, storable `timestamptz` value standing in for "no upper bound" — not PostgreSQL's native unbounded-range representation, and nothing stopped a caller from writing the literal `'infinity'` timestamp into `valid_to` directly. The corrected form passes `valid_to` straight through: PostgreSQL's range constructor treats a `NULL` bound as genuinely unbounded (`upper_inf(...)` returns true, confirmed locally), which participates correctly in `&&` overlap comparisons without a sentinel value anywhere.
+
+That alone doesn't stop `'infinity'`/`'-infinity'` from being written as an *explicit* value, so two more `CHECK` constraints close that gap directly, added via the same fail-closed CREATE/VALIDATE pattern (with a real precheck over existing rows before either is added):
+
+- `semantic_topic_membership_valid_from_finite` — `CHECK (isfinite(valid_from))`
+- `semantic_topic_membership_valid_to_finite` — `CHECK (valid_to IS NULL OR isfinite(valid_to))`
+
+Verified locally: `valid_from`/`valid_to` = `infinity` or `-infinity` are all rejected (the `-infinity` `valid_to` case is caught by the pre-existing 072 `valid_to > valid_from` CHECK before it would even reach the new guard — both agree the row is invalid). An **empty range** can never be constructed either way: the only way a `tstzrange` becomes empty is a lower bound `>=` the upper bound, which the 072 `valid_to > valid_from` CHECK already excludes independently of the range-type machinery.
+
+A mandatory **overlap precheck** (a real self-join over the live table, using the same finite `tstzrange` expression as the constraint itself) runs immediately before `ADD CONSTRAINT` and `RAISE EXCEPTION`s if any pre-existing overlapping pair is found — the constraint is never added over already-invalid data. Half-open `[valid_from, valid_to)` semantics mean **touching, non-overlapping intervals are explicitly allowed** (`[a,b)` followed by `[b,c)`). Verified locally: active–active, active–historical, and historical–historical overlaps for the same `signal_evidence_id` are all rejected; two genuinely concurrent overlapping inserts resolve to exactly one success. This constraint is defense-in-depth alongside (not a replacement for) whatever advisory-lock discipline a future S2B writer RPC also implements.
+
+`TEMPORAL_NON_OVERLAP` is no longer `DEFERRED_TO_S2` as of this migration — it is closed at the schema level, for every current and future write path, including ones that don't yet exist.
+
+## 20. Phase boundaries (S2A / S2B / S2C / S3)
+
+- **S2A** (this migration): the three audit tables, the `assignment_reason` enum correction, `btree_gist` + the `EXCLUDE` constraint. Zero RPCs, zero provider/quota changes.
+- **S2B** (not started): the two writer RPCs (`record_topic_extraction_run`, `record_topic_assignment_decision`) implemented and tested locally against **synthetic, deterministic-only** payloads. No production, no provider.
+- **S2C** (not started): the S2B RPCs applied to production, inert — no application caller exists yet.
+- **S3** (not started): the AI-provider/quota contract (a real architectural change to the existing `reserve_provider_units` RPC and its `usage_type`/`provider` CHECK constraints — confirmed by code audit to be non-trivial, not a simple additive row), an application-layer extraction service, and a controlled, explicitly-approved shadow replay over the 10 existing production evidence rows.
+
+## 21. S2A DB-integration tests
+
+`tests/semantic-topic-s2a-audit-temporal-db-integration.test.ts` — same local-Docker-only, direct-`postgres`-fixture pattern as the 072 suite (still no writer RPC to call). Covers: the 3-table topology gate (0/3, 3/3, every partial state), byte-exact second-run no-op across all six migration sub-blocks (three tables, `assignment_reason`, `btree_gist`, the finite-timestamp guard, the `EXCLUDE` constraint), the `assignment_reason` legacy→corrected transition and its `DEFINITION_DRIFT` rejection, all 5 `assignment_reason` values, `btree_gist` version/schema, the `EXCLUDE` constraint's exact (infinity-free) definition and its drift rejection, the overlap precheck (including a real forced-overlap scenario), active–active/active–historical/historical–historical overlap rejection, adjacent-interval acceptance, a real concurrent-insert race, the finite-timestamp guard (`infinity`/`-infinity` on both `valid_from` and `valid_to` rejected, `NULL valid_to` confirmed genuinely unbounded via `upper_inf(...)`, empty-range impossibility), every `topic_extraction_runs` pairing/domain/digest/cache-identity/structured-output-shape CHECK, `topic_assignment_decisions` outcome/reason/pairing/uniqueness/FK behavior, `semantic_topic_membership_events`' `NOT NULL` decision-reference enforcement, and the full RLS/policy/grant matrix (including `SET ROLE` checks) across all three new tables.
+
+## 22. Cross-migration test isolation — schema-state-aware self-skip
+
+`tests/semantic-topic-identity-schema-db-integration.test.ts` (the 072 suite) shares the same local Docker database as the 073 suite. Its destructive topology-gate and drift-fail-closed tests re-run the **072 file standalone** and require a byte-exact "no drift" result from that — a result 073 permanently changes once applied (073 adds FK-dependent tables onto `semantic_topic_membership`/`semantic_topics`, so a raw `DROP TABLE` would fail; 073 also legitimately extends `assignment_reason` to five values, so 072's own unchanged VALIDATE branch will forever see that as drift, correctly, since a later migration really did move the goalposts). One 072 test (`does NOT reject overlapping closed historical intervals...`) similarly asserts a documented S1-era gap that 073's `EXCLUDE` constraint intentionally closes.
+
+None of that is corrected by having the 072 suite drop and rebuild 073's objects around itself — that was tried and rejected: it risks racing any other suite touching the same tables, and a suite that dies mid-test (a real risk with `ON_ERROR_STOP=1` fixture setup) can leave 073 permanently absent for everything that runs afterward. Instead, the 072 suite follows the exact convention `creator-lane-s1-legacy-compat-db-integration.test.ts` already established for the 067-vs-068 case: it detects the live schema state via one marker query (the literal text of `semantic_topic_membership_assignment_reason_check` — legacy 4-value vs. corrected 5-value) and self-skips only the state-incompatible describe blocks/tests with `describe.skip`/`it.skip` plus a `console.warn` explaining why and how to actually exercise them (temporarily remove 073, `supabase db reset`, run, restore, reset again) — the same pattern `describeIfLocalDb` already uses for a missing Docker stack. It never drops, alters, or rebuilds a single 073 object. Every non-destructive 072 invariant (column matrix, individual domain `CHECK`s, FK `RESTRICT`, the partial-unique active-membership index, the RLS/grant/`SET ROLE` matrix) runs unconditionally in both states, since 073 doesn't change any of those facts about the 072 tables themselves. Verified locally in both states: pre-073, all 61 tests run (0 skipped); post-073, 51 run and 10 self-skip with the expected warning, and the full repository-wide suite passes with 073's own objects provably undisturbed throughout.

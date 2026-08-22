@@ -152,6 +152,51 @@ function insertMembershipExpectError(row: Record<string, string>): string {
   return dockerPsqlExpectError(`insert into semantic_topic_membership (${cols}) values (${vals});`)
 }
 
+// SCHEMA-STATE-AWARE SELF-SKIP, same convention as
+// creator-lane-s1-legacy-compat-db-integration.test.ts: this suite's
+// destructive topology/drift tests (which DROP semantic_topics/
+// semantic_topic_membership outright, or re-run 072 standalone and
+// require a byte-exact "no drift" result) are only meaningful against a
+// database that has 072 but NOT YET 073 applied. Once 073 exists, it (a)
+// adds FK-dependent tables onto semantic_topic_membership/semantic_topics
+// (a raw DROP TABLE would fail with a dependency error), (b) corrects
+// assignment_reason to a 5-value enum (so a standalone re-run of the
+// unchanged 072 file's VALIDATE branch would permanently see that as
+// "drift" -- not a 072 regression, just a fact no longer true once a
+// later migration has legitimately extended that column's domain), and
+// (c) adds the EXCLUDE constraint that makes the documented S1-era
+// "overlapping closed intervals are NOT rejected" gap no longer true. This
+// suite NEVER drops/rebuilds 073's objects to route around that -- it
+// detects the real schema state via one marker query (the exact same
+// technique the creator-lane S1 suite uses for 067-vs-068) and
+// self-skips the state-incompatible parts with a clear, actionable
+// console warning, exactly like describeIfLocalDb already does for a
+// missing Docker stack.
+function assignmentReasonIsPre073(): boolean {
+  try {
+    const def = dockerPsql(`select pg_get_constraintdef(oid, true) from pg_constraint where conname = 'semantic_topic_membership_assignment_reason_check';`).trim()
+    return def === "CHECK (assignment_reason = ANY (ARRAY['entity_event_match'::text, 'embedding_similarity'::text, 'manual_review_confirmed'::text, 'manual_review_override'::text]))"
+  } catch {
+    return false
+  }
+}
+
+const pre073State = stackAvailable && assignmentReasonIsPre073()
+const describeIfPre073 = stackAvailable && pre073State ? describe : describe.skip
+const itIfPre073 = stackAvailable && pre073State ? it : it.skip
+
+if (stackAvailable && !pre073State) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '072 destructive topology/drift/overlap-gap tests skipped: local DB already has 073 applied ' +
+    '(assignment_reason is the corrected 5-value definition). These tests are only meaningful ' +
+    'against a 072-only database. To exercise them, temporarily remove ' +
+    'supabase/migrations/073_semantic_topic_s2a_audit_and_temporal_hardening.sql, run `supabase db reset`, ' +
+    'run this file, then restore 073 and reset again. All other (non-destructive) 072 invariant ' +
+    'checks in this file still run normally regardless of 073.'
+  )
+}
+
 describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB)', () => {
   let runId: string
   let sourceId: string
@@ -178,7 +223,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_
   //    Runs first and is self-contained: it only touches the two new
   //    tables, never the fixture tables set up above.
   // ------------------------------------------------------------
-  describe('global topology gate', () => {
+  describeIfPre073('global topology gate', () => {
     it('a 1-of-2 state (only semantic_topics present) is rejected before any DDL, leaving the surviving table untouched', () => {
       dockerPsql('DROP TABLE public.semantic_topic_membership;')
       const before = dockerPsql(`select count(*) from pg_tables where schemaname='public' and tablename='semantic_topics';`).trim()
@@ -221,7 +266,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_
   // 2. Column / constraint / index / RLS / policy / grant drift —
   //    each mutated then reverted so the suite ends in a clean state.
   // ------------------------------------------------------------
-  describe('drift fail-closed (column, constraint, index, RLS, policy, grant, owner)', () => {
+  describeIfPre073('drift fail-closed (column, constraint, index, RLS, policy, grant, owner)', () => {
     it('an unauthorized column addition makes a re-run fail closed; reverting restores a clean no-op', () => {
       dockerPsql('ALTER TABLE public.semantic_topics ADD COLUMN sti_drift_probe TEXT;')
       const bad = runMigration()
@@ -561,7 +606,12 @@ describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_
     // this test — asserting rejection here would be a false PASS claim
     // about a guarantee S1 does not provide. A real EXCLUDE constraint
     // (requires btree_gist) is a future, separately-approved migration.
-    it('does NOT reject overlapping closed historical intervals for the same evidence (documented S1 gap, not a guarantee)', () => {
+    // Pre073-only: once 073's EXCLUDE constraint exists, this exact
+    // scenario is REJECTED (see the 073 suite's own overlap tests) --
+    // asserting the old S1 gap here in a post-073 database would be a
+    // false claim about the current schema, so this one test self-skips
+    // via the same schema-state marker as the two describe blocks above.
+    itIfPre073('does NOT reject overlapping closed historical intervals for the same evidence (documented S1 gap, not a guarantee)', () => {
       const topicA = insertTopic()
       const topicB = insertTopic()
       const localEvidence = insertFixtureEvidence(sourceId, runId, `sti-fixture-overlap-${Date.now()}`)
@@ -633,14 +683,21 @@ describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_
 
     it('service_role cannot INSERT/UPDATE/DELETE on semantic_topic_membership directly (SET ROLE, real grant check)', () => {
       const topicId = insertTopic()
+      // Fresh, locally-scoped evidence rather than the shared evidenceA --
+      // this test's wide [2020-01-01, now()) span exists purely to give the
+      // UPDATE/DELETE steps below a row to target, and must not risk
+      // colliding with whatever other tests have already put on the shared
+      // fixture evidence (post-073, overlapping closed intervals on the
+      // same evidence are correctly rejected by the EXCLUDE constraint).
+      const localEvidence = insertFixtureEvidence(sourceId, runId, `sti-fixture-svcgrant-${Date.now()}`)
       const insErr = dockerPsqlExpectError(`
         SET ROLE service_role;
-        insert into semantic_topic_membership (semantic_topic_id, signal_evidence_id, assignment_reason, confidence, algorithm_version) values ('${topicId}','${evidenceA}','entity_event_match',0.5,1);
+        insert into semantic_topic_membership (semantic_topic_id, signal_evidence_id, assignment_reason, confidence, algorithm_version) values ('${topicId}','${localEvidence}','entity_event_match',0.5,1);
         RESET ROLE;
       `)
       expect(insErr).toMatch(/permission denied/i)
 
-      const membershipId = insertMembership(membershipRow(topicId, evidenceA, { valid_from: `'2020-01-01T00:00:00Z'`, valid_to: 'now()' }))
+      const membershipId = insertMembership(membershipRow(topicId, localEvidence, { valid_from: `'2020-01-01T00:00:00Z'`, valid_to: 'now()' }))
       const updErr = dockerPsqlExpectError(`
         SET ROLE service_role;
         update semantic_topic_membership set confidence=0.1 where id='${membershipId}';
