@@ -22,4 +22,5 @@ export const PROMPT_TEMPLATES = {
   videoPackageOrchestration: definePromptTemplate({ id: 'video_package', version: 'v1', locale: 'hu-HU', description: 'Video package orchestration version.' }),
   viralScoreExplanation: definePromptTemplate({ id: 'viral_score_explanation', version: 'v1', locale: 'hu-HU', description: 'Backend Viral Score explanation.' }),
   seedGenerator: definePromptTemplate({ id: 'seed_generator', version: 'v2', locale: 'hu-HU', description: 'Dynamic creator-intelligence search seeds.' }),
+  semanticTopicExtraction: definePromptTemplate({ id: 'semantic_topic_extraction', version: 'v1', locale: 'en-US', description: 'AI-assisted semantic-topic identity extraction from a single signal_evidence item (S3A shadow_extraction, background job, no end user).' }),
 } as const

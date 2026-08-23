@@ -6,7 +6,7 @@
 // unavailable, direct postgres-privileged psql fixture inserts (no writer
 // RPC exists yet -- S2A is still fully writerless), SET ROLE for real
 // grant-boundary checks.
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 30000 })
 import { execSync } from 'node:child_process'
@@ -80,7 +80,41 @@ function resetAssignmentReasonToLegacy() {
   `)
 }
 
+// Since migration 075 (S3A), ai_provider_budget_reservations.extraction_run_id
+// carries its own FK to topic_extraction_runs. A CASCADE drop of
+// topic_extraction_runs would silently take that FK constraint down with it
+// as a side effect this suite doesn't own or track -- explicit, named
+// drop/restore instead, so the S3A table's schema is provably complete
+// again before and after every single test in this file, never dependent
+// on which specific test happened to run or in what order.
+const S3A_EXTRACTION_RUN_FK = 'ai_provider_budget_reservations_extraction_run_id_fkey'
+
+function dropS3AExtractionRunFkIfPresent() {
+  dockerPsql(`ALTER TABLE IF EXISTS public.ai_provider_budget_reservations DROP CONSTRAINT IF EXISTS ${S3A_EXTRACTION_RUN_FK};`)
+}
+
+// Idempotent, dependency-aware: only (re)adds the FK when both tables exist
+// and the constraint is currently missing -- a no-op when S3A was never
+// applied locally, or when the FK is already present and correct.
+function restoreS3AExtractionRunFk() {
+  dockerPsql(`
+    DO $restore_s3a_fk$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='ai_provider_budget_reservations')
+         AND EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='topic_extraction_runs')
+         AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='${S3A_EXTRACTION_RUN_FK}')
+      THEN
+        ALTER TABLE public.ai_provider_budget_reservations
+          ADD CONSTRAINT ${S3A_EXTRACTION_RUN_FK}
+          FOREIGN KEY (extraction_run_id) REFERENCES public.topic_extraction_runs(id) ON DELETE RESTRICT;
+      END IF;
+    END;
+    $restore_s3a_fk$;
+  `)
+}
+
 function dropS2AObjects() {
+  dropS3AExtractionRunFkIfPresent()
   dockerPsql(`
     DROP TABLE IF EXISTS public.semantic_topic_membership_events;
     DROP TABLE IF EXISTS public.topic_assignment_decisions;
@@ -268,6 +302,15 @@ describeIfLocalDb('Semantic Topic Identity v0 S2A -- audit/provenance schema + t
 
   afterAll(() => {
     cleanupTestData()
+  })
+
+  // Runs after EVERY test in this file, pass or fail, regardless of which
+  // test ran or in what order -- guarantees the S3A (075) extraction_run_id
+  // FK is never left missing as a side effect of this suite's own drift
+  // experiments on topic_extraction_runs (see dropS2AObjects/restoreS3AExtractionRunFk
+  // above). A test failure partway through does not skip this.
+  afterEach(() => {
+    restoreS3AExtractionRunFk()
   })
 
   // ------------------------------------------------------------
