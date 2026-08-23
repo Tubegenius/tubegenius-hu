@@ -19,7 +19,30 @@ export const SEMANTIC_TOPIC_EXTRACTION_MODEL = 'claude-sonnet-4-6' as const
 // separate, unstarted phase.
 export const SEMANTIC_TOPIC_EXTRACTION_METHOD = 'ai_assisted' as const
 
-export const SEMANTIC_TOPIC_NORMALIZATION_VERSION = 1
+// Versions the raw-evidence -> normalized_extraction_input ALGORITHM
+// (normalize.ts's buildNormalizedExtractionInput), not the structured
+// OUTPUT shape (that's SEMANTIC_TOPIC_EXTRACTION_SCHEMA_VERSION, a
+// separate, independent field -- do not conflate the two). Embedded as
+// one of the fixed fields in extraction_config_digest (see digest.ts),
+// so bumping this constant is what makes a normalization-algorithm change
+// produce a genuinely different extraction_config_digest rather than a
+// silent, undetected behavioral change under the same identity key.
+//
+// v1 -> v2 history: v1 (topic_extraction_runs rows created before the
+// "Canonical Input Timestamp v2" gate, e.g. extraction_run_id
+// c5e4da64-7e23-4e56-9620-6cdcafb395d5) embedded the evidence.publishedAt
+// string exactly as the caller's data source produced it, with no
+// canonicalization -- Postgres's own `::text` cast and PostgREST's
+// `to_json()` REST serialization of the identical timestamptz column
+// disagree on format (space- vs "T"-separated, colon-less vs colon
+// offset), so the SAME instant could hash to a DIFFERENT
+// normalized_input_digest depending on which code path fetched the
+// evidence row. v2 (this version) canonicalizes publishedAt through
+// canonical-timestamp.ts's canonicalizeTimestamp() before it ever reaches
+// buildNormalizedExtractionInput, closing that gap. v1 rows are immutable
+// historical audit records and are NEVER reinterpreted as v2 -- see
+// docs/architecture/semantic-topic-identity-v0-contract.md SS30.
+export const SEMANTIC_TOPIC_NORMALIZATION_VERSION = 2
 export const SEMANTIC_TOPIC_EXTRACTION_SCHEMA_VERSION = 1
 
 // Must match the id/version/locale registered in lib/prompts/catalog.ts

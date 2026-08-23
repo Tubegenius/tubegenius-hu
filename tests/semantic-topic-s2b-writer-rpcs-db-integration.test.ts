@@ -15,6 +15,26 @@ import { randomUUID } from 'node:crypto'
 
 const MIGRATION_PATH = join(process.cwd(), 'supabase/migrations/074_semantic_topic_s2b_writer_rpcs.sql')
 
+// Extracted verbatim from 074's own source (never retyped -- a retyped copy
+// risks a whitespace difference that changes body_hash and silently breaks
+// any test relying on it matching 074's own pinned legacy hash constant)
+// so restoring record_topic_extraction_run to "exactly what 074 itself
+// would create" is guaranteed byte-identical, for tests that need to run
+// 074's own idempotency checks after migration 076 may have already
+// advanced the function in this same shared local DB.
+function extractLegacyRterBodySql(): string {
+  const migrationText = readFileSync(MIGRATION_PATH, 'utf8')
+  const start = migrationText.indexOf('CREATE FUNCTION public.record_topic_extraction_run(')
+  if (start === -1) throw new Error('extractLegacyRterBodySql: CREATE FUNCTION record_topic_extraction_run not found in 074')
+  const bodyEnd = migrationText.indexOf('$rpc$;', start)
+  if (bodyEnd === -1) throw new Error('extractLegacyRterBodySql: closing $rpc$; not found')
+  const createStatement = migrationText.slice(start, bodyEnd + '$rpc$;'.length)
+  const grantStart = migrationText.indexOf('REVOKE ALL ON FUNCTION public.record_topic_extraction_run(', bodyEnd)
+  const grantEnd = migrationText.indexOf(') TO service_role;', grantStart) + ') TO service_role;'.length
+  const grantStatements = migrationText.slice(grantStart, grantEnd)
+  return createStatement.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION') + '\n' + grantStatements
+}
+
 function dockerPsql(sql: string): string {
   return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
     input: sql,
@@ -852,10 +872,76 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
     })
 
     it('second migration run is a byte-exact no-op (VALIDATE branch, no DDL/DCL)', () => {
+      // Migration 076 (canonical input timestamp v2) may have already
+      // advanced record_topic_extraction_run to its corrected v2 body as a
+      // side effect of an earlier test file in this same run/DB -- 074's own
+      // VALIDATE branch only ever accepts 074's own pinned hash, so this
+      // test must restore the exact 074-created state first, or it would be
+      // testing "074 vs. a function 076 already replaced," not "074 vs.
+      // itself." See the parallel case for 070/071 in
+      // tests/shadow-topic-scoring-rpc-db-integration.test.ts.
+      const currentHash = dockerPsql(
+        `select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_topic_extraction_run';`,
+      ).trim()
+      if (currentHash !== 'f6ed6773724c95c2deccc2f7ca692e89') {
+        dockerPsql(extractLegacyRterBodySql())
+        const restoredHash = dockerPsql(
+          `select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_topic_extraction_run';`,
+        ).trim()
+        if (restoredHash !== 'f6ed6773724c95c2deccc2f7ca692e89') {
+          throw new Error(`restore-to-legacy failed: got ${restoredHash}, expected f6ed6773724c95c2deccc2f7ca692e89`)
+        }
+      }
+
       const { out, threw } = runMigration()
       expect(threw).toBe(false)
       expect(out).toMatch(/record_topic_extraction_run already exists and matches exactly -- no-op/)
       expect(out).toMatch(/record_topic_assignment_decision already exists and matches exactly -- no-op/)
+    })
+
+    it('074 standalone can never be safely re-applied once migration 076 has advanced record_topic_extraction_run to v2 (forward-only enforcement)', () => {
+      // Advance to v2 via 076, then prove 074 alone fails closed against it --
+      // parallel case to shadow-topic-scoring-rpc-db-integration.test.ts's
+      // "070 standalone can never be safely re-applied once 071 has advanced."
+      //
+      // 076 (canonical input timestamp v2) requires BOTH
+      // record_topic_extraction_run (074) AND reserve_ai_provider_units
+      // (075) to be exactly legacy before its own REPLACE branch will run
+      // -- reserve_ai_provider_units is untouched by anything else in this
+      // file, so its state depends on which other test files already ran
+      // against this shared local DB. Force it back to 075's own legacy
+      // body first (never DROP, same reasoning as record_topic_extraction_run's
+      // own restoration above) so this test deterministically exercises
+      // 076's REPLACE branch regardless of test-file execution order.
+      const migration075 = readFileSync(join(process.cwd(), 'supabase/migrations/075_semantic_topic_s3a_ai_quota_foundation.sql'), 'utf8')
+      const reserveStart = migration075.indexOf('CREATE FUNCTION public.reserve_ai_provider_units(')
+      const reserveBodyEnd = migration075.indexOf('$body$;', reserveStart) + '$body$;'.length
+      const legacyReserveSql = migration075.slice(reserveStart, reserveBodyEnd).replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
+      dockerPsql(legacyReserveSql)
+      dockerPsql(`
+        REVOKE ALL ON FUNCTION public.reserve_ai_provider_units(TEXT, TEXT, TEXT, UUID, INTEGER, INTEGER, TEXT, TEXT, INTEGER, INTEGER, TEXT) FROM PUBLIC, anon, authenticated;
+        GRANT EXECUTE ON FUNCTION public.reserve_ai_provider_units(TEXT, TEXT, TEXT, UUID, INTEGER, INTEGER, TEXT, TEXT, INTEGER, INTEGER, TEXT) TO service_role;
+      `)
+
+      const migration076 = readFileSync(join(process.cwd(), 'supabase/migrations/076_semantic_topic_canonical_input_timestamp_v2.sql'), 'utf8')
+      const apply076 = (() => {
+        try {
+          return { out: execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1', { input: migration076, encoding: 'utf8' }), threw: false }
+        } catch (e: any) {
+          return { out: String(e.stdout || e.stderr || e.message || ''), threw: true }
+        }
+      })()
+      expect(apply076.threw).toBe(false)
+      expect(apply076.out).toMatch(/both record_topic_extraction_run and reserve_ai_provider_units replaced/)
+
+      const { out, threw } = runMigration()
+      expect(threw).toBe(true)
+      expect(out).toMatch(/074 drift/)
+
+      const hashAfter = dockerPsql(
+        `select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_topic_extraction_run';`,
+      ).trim()
+      expect(hashAfter).toBe('ef55f0b83d78d001d9e2f903f434c79f') // untouched by the fail-closed 074 attempt -- still v2
     })
 
     it('1/2 partial topology raises before any DDL runs, leaving the surviving function untouched', () => {

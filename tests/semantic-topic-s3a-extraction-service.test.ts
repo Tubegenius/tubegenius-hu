@@ -158,6 +158,35 @@ describe('runShadowExtraction', () => {
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
   })
 
+  it('canonical timestamp v2: two evidence objects with different publishedAt STRING formats (same instant) hit the completed-cache under the IDENTICAL digest -- second caller never reaches the provider', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'budget_exhausted' })
+
+    const callerA = { ...EVIDENCE.evidence, publishedAt: '2026-07-26 04:47:43+00' } // SQL ::text style
+    const callerB = { ...EVIDENCE.evidence, publishedAt: '2026-07-26T04:47:43+00:00' } // PostgREST style
+
+    await runShadowExtraction({ signalEvidenceId: EVIDENCE.signalEvidenceId, evidence: callerA, idempotencyKey: 'fmt-a' })
+    await runShadowExtraction({ signalEvidenceId: EVIDENCE.signalEvidenceId, evidence: callerB, idempotencyKey: 'fmt-b' })
+
+    const calls = mockedFn(findCompletedExtractionRun).mock.calls
+    expect(calls.length).toBe(2)
+    const digestA = calls[0][1]
+    const digestB = calls[1][1]
+    expect(digestA).toBe(digestB) // byte-identical digest despite different source string formats -- the v1 gap, closed
+  })
+
+  it('canonical timestamp v2: an UNPARSEABLE publishedAt is rejected fail-closed BEFORE any reservation or provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+
+    const badEvidence = { ...EVIDENCE.evidence, publishedAt: 'not-a-real-timestamp' }
+    await expect(
+      runShadowExtraction({ signalEvidenceId: EVIDENCE.signalEvidenceId, evidence: badEvidence, idempotencyKey: 'bad-ts' }),
+    ).rejects.toThrow(/unparseable/)
+
+    expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
   it('daily/run limit exhausted: reservation rejected, no provider call', async () => {
     mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
     mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'budget_exhausted' })
