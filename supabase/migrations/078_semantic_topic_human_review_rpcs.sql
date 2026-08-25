@@ -645,7 +645,7 @@ DECLARE
   v_oid oid;
   v_prosrc text;
   v_hash text;
-  v_expected_hash CONSTANT text := '2ff3bc959745d38561143d1baecb32d5';
+  v_expected_hash CONSTANT text := '044169f63ad29e599208853204e95e18';
   v_expected_args CONSTANT text := 'p_review_request_id uuid, p_decision_idempotency_key text, p_outcome text, p_canonical_topic_label text, p_topic_definition text, p_scope text, p_inclusion_criteria text, p_exclusion_criteria text, p_lane_neutral_confirmed boolean, p_evidence_adequacy text, p_duplicate_search_outcome text, p_proposed_outcome text, p_target_semantic_topic_id uuid, p_uncertainty_classification text, p_reviewer_rationale text, p_review_policy_version integer, p_rejection_reason text';
 BEGIN
   SELECT count(*) INTO v_name_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -715,7 +715,10 @@ BEGIN
         RAISE EXCEPTION 'record_topic_assignment_review_decision: review_request % not found (post-lock)', p_review_request_id;
       END IF;
 
-      SELECT * INTO v_reviewer FROM public.semantic_topic_reviewers WHERE user_id = v_caller_user_id AND active IS TRUE;
+      -- FOR SHARE: closes the TOCTOU window where a concurrent
+      -- deactivation of this exact reviewer could otherwise commit
+      -- between this check and this call's own commit.
+      SELECT * INTO v_reviewer FROM public.semantic_topic_reviewers WHERE user_id = v_caller_user_id AND active IS TRUE FOR SHARE;
       IF NOT FOUND THEN
         RAISE EXCEPTION 'record_topic_assignment_review_decision: caller is not an active reviewer';
       END IF;
@@ -1107,14 +1110,34 @@ $migrate_estarr$;
 -- 7. cancel_topic_assignment_review_request
 -- ============================================================
 
+-- Corrected from the initial implementation (Security and Concurrency
+-- Closure gate): the original two-parameter signature let a service_role
+-- caller supply an ARBITRARY auth.users UUID as cancelled_by_user_id --
+-- an unauditable, forgeable identity claim, no different in kind from
+-- letting a caller self-report reviewer identity elsewhere in this
+-- workflow (which every other RPC here deliberately forbids). The
+-- "preferred" fix floated for this gate (drop the parameter entirely,
+-- keep a service_role caller, hardcode actor_user_id=NULL) is PROVABLY
+-- inapplicable: 077's own topic_assignment_review_requests_cancelled_fields
+-- CHECK requires cancelled_by_user_id IS NOT NULL whenever status='cancelled'
+-- -- and 077 must never be altered. There is no real, non-invented
+-- auth.users row to attribute a service_role-driven cancel to. The only
+-- fail-closed option that (a) never trusts a caller-supplied identity and
+-- (b) always has a real, valid auth.users FK to write is to make
+-- cancellation an authenticated, active-reviewer action -- reviewer_user_id
+-- coming exclusively from auth.uid(), the exact same pattern already
+-- proven safe by revoke_topic_assignment_review_approval below. Same
+-- symmetry: revoke calls off an approved-but-not-executed request, cancel
+-- calls off a pending-but-not-decided one -- both now equally
+-- reviewer-authenticated, equally auth.uid()-derived, equally forgery-proof.
 DO $migrate_ctarr$
 DECLARE
   v_name_count int;
   v_oid oid;
   v_prosrc text;
   v_hash text;
-  v_expected_hash CONSTANT text := '61a16967ee7a608c40516d5cd9c580d7';
-  v_expected_args CONSTANT text := 'p_review_request_id uuid, p_cancelled_by_user_id uuid';
+  v_expected_hash CONSTANT text := 'c12d0d8abe4b2cd6206c33485d324bc5';
+  v_expected_args CONSTANT text := 'p_review_request_id uuid';
 BEGIN
   SELECT count(*) INTO v_name_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = 'cancel_topic_assignment_review_request';
@@ -1123,14 +1146,26 @@ BEGIN
     RAISE NOTICE '078: cancel_topic_assignment_review_request does not exist -- CREATE branch.';
 
     CREATE FUNCTION public.cancel_topic_assignment_review_request(
-      p_review_request_id UUID,
-      p_cancelled_by_user_id UUID
+      p_review_request_id UUID
     ) RETURNS JSONB
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
     AS $rpc$
     DECLARE
+      v_caller_user_id UUID;
       v_request RECORD;
     BEGIN
+      v_caller_user_id := auth.uid();
+      IF v_caller_user_id IS NULL THEN
+        RAISE EXCEPTION 'cancel_topic_assignment_review_request: authentication required';
+      END IF;
+      -- FOR SHARE: closes the TOCTOU window where a concurrent deactivation
+      -- of this exact reviewer could otherwise commit between this check
+      -- and this call's own commit. Only the matched (active=true) row is
+      -- locked -- an already-inactive reviewer's row is never touched.
+      IF NOT EXISTS (SELECT 1 FROM public.semantic_topic_reviewers WHERE user_id = v_caller_user_id AND active IS TRUE FOR SHARE) THEN
+        RAISE EXCEPTION 'cancel_topic_assignment_review_request: caller is not an active reviewer';
+      END IF;
+
       PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_review_request_id::text, 10));
 
       SELECT * INTO v_request FROM public.topic_assignment_review_requests WHERE id = p_review_request_id FOR UPDATE;
@@ -1144,23 +1179,19 @@ BEGIN
         RAISE EXCEPTION 'cancel_topic_assignment_review_request: REVIEW_REQUEST_NOT_CANCELLABLE -- status=% is a different terminal/live state', v_request.status;
       END IF;
 
-      IF NOT EXISTS (SELECT 1 FROM auth.users WHERE id = p_cancelled_by_user_id) THEN
-        RAISE EXCEPTION 'cancel_topic_assignment_review_request: cancelled_by_user_id % not found', p_cancelled_by_user_id;
-      END IF;
-
       UPDATE public.topic_assignment_review_requests
-      SET status = 'cancelled', cancelled_at = now(), cancelled_by_user_id = p_cancelled_by_user_id
+      SET status = 'cancelled', cancelled_at = now(), cancelled_by_user_id = v_caller_user_id
       WHERE id = p_review_request_id;
 
       INSERT INTO public.topic_assignment_review_events (review_request_id, event_type, actor_user_id, actor_kind, policy_version, operation_digest)
-      VALUES (p_review_request_id, 'cancelled', NULL, 'service_role_system', 1, NULL);
+      VALUES (p_review_request_id, 'cancelled', v_caller_user_id, 'authenticated_reviewer', 1, NULL);
 
       RETURN jsonb_build_object('ok', true, 'outcome', 'cancelled', 'review_request_id', p_review_request_id, 'status', 'cancelled');
     END;
     $rpc$;
 
-    REVOKE ALL ON FUNCTION public.cancel_topic_assignment_review_request(UUID, UUID) FROM PUBLIC, anon, authenticated;
-    GRANT EXECUTE ON FUNCTION public.cancel_topic_assignment_review_request(UUID, UUID) TO service_role;
+    REVOKE ALL ON FUNCTION public.cancel_topic_assignment_review_request(UUID) FROM PUBLIC, anon, authenticated, service_role;
+    GRANT EXECUTE ON FUNCTION public.cancel_topic_assignment_review_request(UUID) TO authenticated;
 
     RAISE NOTICE '078: cancel_topic_assignment_review_request created.';
 
@@ -1196,18 +1227,18 @@ BEGIN
     END IF;
 
     IF NOT has_function_privilege('postgres', v_oid, 'EXECUTE')
-       OR NOT has_function_privilege('service_role', v_oid, 'EXECUTE')
+       OR NOT has_function_privilege('authenticated', v_oid, 'EXECUTE')
        OR has_function_privilege('anon', v_oid, 'EXECUTE')
-       OR has_function_privilege('authenticated', v_oid, 'EXECUTE')
+       OR has_function_privilege('service_role', v_oid, 'EXECUTE')
        OR EXISTS (
          SELECT 1 FROM aclexplode(coalesce(
            (SELECT proacl FROM pg_proc WHERE oid = v_oid),
            acldefault('f', (SELECT proowner FROM pg_proc WHERE oid = v_oid))
          )) acl JOIN pg_roles grantee ON grantee.oid = acl.grantee
-         WHERE acl.privilege_type = 'EXECUTE' AND grantee.rolname NOT IN ('postgres', 'service_role')
+         WHERE acl.privilege_type = 'EXECUTE' AND grantee.rolname NOT IN ('postgres', 'authenticated')
        )
     THEN
-      RAISE EXCEPTION '078 drift: cancel_topic_assignment_review_request ACL does not match exactly (expected postgres+service_role EXECUTE only)';
+      RAISE EXCEPTION '078 drift: cancel_topic_assignment_review_request ACL does not match exactly (expected postgres+authenticated EXECUTE only)';
     END IF;
 
     RAISE NOTICE '078: cancel_topic_assignment_review_request already exists and matches exactly -- no-op.';
@@ -1227,7 +1258,7 @@ DECLARE
   v_oid oid;
   v_prosrc text;
   v_hash text;
-  v_expected_hash CONSTANT text := 'bbb9214c179ea55e854dea098c06fdb0';
+  v_expected_hash CONSTANT text := '02d0ea82e72a05b61d91da496475eadf';
   v_expected_args CONSTANT text := 'p_review_request_id uuid';
 BEGIN
   SELECT count(*) INTO v_name_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -1249,7 +1280,8 @@ BEGIN
       IF v_caller_user_id IS NULL THEN
         RAISE EXCEPTION 'revoke_topic_assignment_review_approval: authentication required';
       END IF;
-      IF NOT EXISTS (SELECT 1 FROM public.semantic_topic_reviewers WHERE user_id = v_caller_user_id AND active IS TRUE) THEN
+      -- FOR SHARE: same TOCTOU closure as cancel/record_decision/execute.
+      IF NOT EXISTS (SELECT 1 FROM public.semantic_topic_reviewers WHERE user_id = v_caller_user_id AND active IS TRUE FOR SHARE) THEN
         RAISE EXCEPTION 'revoke_topic_assignment_review_approval: caller is not an active reviewer';
       END IF;
 
@@ -1345,7 +1377,7 @@ DECLARE
   v_oid oid;
   v_prosrc text;
   v_hash text;
-  v_expected_hash CONSTANT text := '5fce42a55012f6f8c6f6767baac48a68';
+  v_expected_hash CONSTANT text := '8959b234dec66b872c59bb695e832158';
   v_expected_args CONSTANT text := 'p_review_request_id uuid, p_idempotency_key text';
 BEGIN
   SELECT count(*) INTO v_name_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -1470,7 +1502,12 @@ BEGIN
         RAISE EXCEPTION 'execute_approved_topic_assignment_review: unsupported review_policy_version/approval_digest_version for review_request %', p_review_request_id;
       END IF;
 
-      IF NOT EXISTS (SELECT 1 FROM public.semantic_topic_reviewers WHERE user_id = v_request.reviewer_user_id AND active IS TRUE) THEN
+      -- FOR SHARE: the highest-value TOCTOU closure of the four -- without
+      -- it, a reviewer deactivated in the window between this check and
+      -- this call's commit would not be caught, even though the whole
+      -- point of re-checking here (rather than trusting the approval-time
+      -- check alone) is exactly to catch that window.
+      IF NOT EXISTS (SELECT 1 FROM public.semantic_topic_reviewers WHERE user_id = v_request.reviewer_user_id AND active IS TRUE FOR SHARE) THEN
         RAISE EXCEPTION 'execute_approved_topic_assignment_review: reviewer for review_request % is no longer active', p_review_request_id;
       END IF;
 

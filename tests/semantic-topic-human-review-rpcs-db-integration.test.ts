@@ -11,11 +11,14 @@
 // not a bootstrap RPC).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.setConfig({ testTimeout: 30000 })
-import { execSync } from 'node:child_process'
+vi.setConfig({ testTimeout: 60000 })
+import { execSync, exec } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { promisify } from 'node:util'
+
+const execAsync = promisify(exec)
 
 const MIGRATION_077_PATH = join(process.cwd(), 'supabase/migrations/077_semantic_topic_human_review_schema_foundation.sql')
 const MIGRATION_078_PATH = join(process.cwd(), 'supabase/migrations/078_semantic_topic_human_review_rpcs.sql')
@@ -38,6 +41,27 @@ function dockerPsqlExpectError(sql: string): string {
   } catch (e: any) {
     return String(e.stderr || e.stdout || e.message || '')
   }
+}
+
+// TRUE async/parallel variant -- spawn (not execSync) so two calls issued
+// via Promise.all actually run as two independent OS processes / two
+// independent Postgres connections at the same time, not one after the
+// other. execSync blocks the whole Node event loop for its duration, so a
+// naive `Promise.all([new Promise(r => r(execSync(...))), ...])` would
+// silently serialize both calls despite looking concurrent -- these two
+// helpers are what the concurrency matrix below actually needs.
+import { spawn } from 'node:child_process'
+function dockerPsqlAsync(sql: string): Promise<{ ok: boolean; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('docker', ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-q', '-v', 'ON_ERROR_STOP=1', '-f', '-'])
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => (stdout += d.toString()))
+    child.stderr.on('data', (d) => (stderr += d.toString()))
+    child.on('close', (code) => resolve({ ok: code === 0, out: code === 0 ? stdout : stderr || stdout }))
+    child.stdin.write(sql)
+    child.stdin.end()
+  })
 }
 
 function runMigration(path: string): { out: string; threw: boolean } {
@@ -76,6 +100,10 @@ function asReviewer(userId: string, sql: string): string {
     ${sql}
     COMMIT;
   `
+}
+
+function asReviewerAsync(userId: string, sql: string): Promise<{ ok: boolean; out: string }> {
+  return dockerPsqlAsync(asReviewer(userId, sql))
 }
 
 function asReviewerExpectError(userId: string, sql: string): string {
@@ -543,7 +571,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
     it('cancelled/expired/revoked requests are REVIEW_REQUEST_NOT_DECIDABLE', () => {
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
-      dockerPsql(`select cancel_topic_assignment_review_request('${id}'::uuid, '${REVIEWER_A}');`)
+      dockerPsql(asReviewer(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`))
       const err = asReviewerExpectError(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null))
       expect(err).toMatch(/REVIEW_REQUEST_NOT_DECIDABLE/)
     })
@@ -653,6 +681,44 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       expect(err).toMatch(/approval_digest drift detected/)
     })
 
+    it('target_semantic_topic_id tampering after an ATTACH_EXISTING approval (row edited to point elsewhere) is caught fail-closed', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const otherSeed = createExtraction()
+      const otherReq = createReviewRequest(otherSeed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(otherReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const otherExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${otherReq.id}'::uuid, '${nextMarker()}');`).trim())
+
+      const attach = createExtraction()
+      const req = createReviewRequest(attach.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(req.id, nextMarker(), 'ATTACH_EXISTING', seedExec.semantic_topic_id)))
+      // Swap the approved target to a DIFFERENT real topic, entirely
+      // post-approval -- the row is internally self-consistent (a real,
+      // valid target FK) but no longer matches what was actually approved.
+      dockerPsql(`update topic_assignment_review_requests set target_semantic_topic_id = '${otherExec.semantic_topic_id}' where id='${req.id}';`)
+      const err = dockerPsqlExpectError(`select execute_approved_topic_assignment_review('${req.id}'::uuid, '${nextMarker()}');`)
+      expect(err).toMatch(/approval_digest drift detected/)
+      const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where semantic_topic_id in ('${seedExec.semantic_topic_id}','${otherExec.semantic_topic_id}') and signal_evidence_id='${attach.evidenceId}';`).trim()
+      expect(membershipCount).toBe('0')
+    })
+
+    it('digest domains are distinct, non-swappable strings, each the literal first digested element', () => {
+      const src = readFileSync(MIGRATION_078_PATH, 'utf8')
+      expect(src).toMatch(/willviral\.semantic-topic\.review-request:v1/)
+      expect(src).toMatch(/willviral\.semantic-topic\.review-decision:v1/)
+      expect(src).toMatch(/willviral\.semantic-topic\.review-execution:v1/)
+      // Each domain constant feeds format()'s FIRST %s substitution
+      // (the "domain" JSON key is always written first in every digest's
+      // canonical text), and the three domain strings are pairwise
+      // distinct -- a request digest can never be replayed as if it were
+      // a decision or execution digest, and vice versa.
+      expect(src).toMatch(/'\{"domain":%s,"extraction_run_id":%s,"output_digest":%s/)
+      expect(src).toMatch(/'\{"domain":%s,"review_request_id":%s,"generation":%s,"decision_idempotency_key":%s/)
+      expect(src).toMatch(/'\{"domain":%s,"review_request_id":%s,"execution_idempotency_key":%s/)
+    })
+
     it('reviewer deactivated between approval and execution blocks execution fail-closed', () => {
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
@@ -744,9 +810,9 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
     it('cancels a pending request; replay on repeat call; new generation afterward', () => {
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
-      const first = JSON.parse(dockerPsql(`select cancel_topic_assignment_review_request('${id}'::uuid, '${REVIEWER_A}');`).trim())
+      const first = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`)).trim())
       expect(first.outcome).toBe('cancelled')
-      const second = JSON.parse(dockerPsql(`select cancel_topic_assignment_review_request('${id}'::uuid, '${REVIEWER_A}');`).trim())
+      const second = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`)).trim())
       expect(second.outcome).toBe('replayed')
       const retry = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
       expect(retry.generation).toBe(2)
@@ -756,22 +822,78 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
       dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
-      const err = dockerPsqlExpectError(`select cancel_topic_assignment_review_request('${id}'::uuid, '${REVIEWER_A}');`)
+      const err = asReviewerExpectError(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`)
       expect(err).toMatch(/REVIEW_REQUEST_NOT_CANCELLABLE/)
     })
 
     it('cancellation performs a logical status change only -- no physical DELETE', () => {
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
-      dockerPsql(`select cancel_topic_assignment_review_request('${id}'::uuid, '${REVIEWER_A}');`)
+      dockerPsql(asReviewer(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`))
       const row = dockerPsql(`select count(*) from topic_assignment_review_requests where id='${id}';`).trim()
       expect(row).toBe('1')
     })
 
-    it('only service_role may call it', () => {
+    // --- Cancellation provenance hardening (Security and Concurrency
+    // Closure gate) -- the single-parameter signature makes an arbitrary
+    // caller-supplied cancelled_by_user_id structurally impossible: there
+    // is no such parameter any more. cancelled_by_user_id can only ever be
+    // auth.uid(), exactly like reviewer_user_id on a decision.
+    it('signature carries no cancelled_by_user_id parameter -- exactly one argument', () => {
+      const args = dockerPsql(`select pg_get_function_identity_arguments(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='cancel_topic_assignment_review_request';`).trim()
+      expect(args).toBe('p_review_request_id uuid')
+    })
+
+    it('exactly one overload exists -- no leftover pre-hardening signature (PostgREST-ambiguity proof)', () => {
+      const count = dockerPsql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='cancel_topic_assignment_review_request';`).trim()
+      expect(count).toBe('1')
+      const routineCount = dockerPsql(`select count(*) from information_schema.routines where routine_schema='public' and routine_name='cancel_topic_assignment_review_request';`).trim()
+      expect(routineCount).toBe('1')
+    })
+
+    it('cancelled_by_user_id is always exactly the calling reviewer -- never a different, spoofed identity', () => {
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
-      const err = asReviewerExpectError(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid, '${REVIEWER_A}');`)
+      dockerPsql(asReviewer(REVIEWER_B, `select cancel_topic_assignment_review_request('${id}'::uuid);`))
+      const row = dockerPsql(`select cancelled_by_user_id from topic_assignment_review_requests where id='${id}';`).trim()
+      expect(row).toBe(REVIEWER_B)
+    })
+
+    it('the cancelled event is authenticated_reviewer-attributed, never a bare system/NULL actor', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`))
+      const row = dockerPsql(`select actor_kind, actor_user_id from topic_assignment_review_events where review_request_id='${id}' and event_type='cancelled';`).trim()
+      expect(row).toBe(`authenticated_reviewer|${REVIEWER_A}`)
+    })
+
+    it('unauthenticated caller (no auth.uid()) is rejected', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const err = dockerPsqlExpectError(`select cancel_topic_assignment_review_request('${id}'::uuid);`)
+      expect(err).toMatch(/authentication required/)
+    })
+
+    it('authenticated but non-reviewer caller is rejected', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const err = asReviewerExpectError(NON_REVIEWER, `select cancel_topic_assignment_review_request('${id}'::uuid);`)
+      expect(err).toMatch(/not an active reviewer/)
+    })
+
+    it('inactive reviewer cannot cancel', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      dockerPsql(`update semantic_topic_reviewers set active=false, deactivated_at=now(), deactivated_by_user_id='${REVIEWER_A}' where user_id='${REVIEWER_A}';`)
+      const err = asReviewerExpectError(REVIEWER_A, `select cancel_topic_assignment_review_request('${id}'::uuid);`)
+      expect(err).toMatch(/not an active reviewer/)
+      dockerPsql(`update semantic_topic_reviewers set active=true, deactivated_at=NULL, deactivated_by_user_id=NULL where user_id='${REVIEWER_A}';`)
+    })
+
+    it('service_role cannot call it directly (authenticated-only, symmetric with revoke)', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const err = dockerPsqlExpectError(`SET ROLE service_role; select cancel_topic_assignment_review_request('${id}'::uuid); RESET ROLE;`)
       expect(err).toMatch(/permission denied/)
     })
   })
@@ -844,57 +966,471 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
   })
 
   // ------------------------------------------------------------
-  // 11. Concurrency proofs -- real parallel connections
+  // 11. Concurrency proofs -- REAL parallel connections
+  //
+  // Every test in this block dispatches via dockerPsqlAsync (spawn, not
+  // execSync) so two calls issued through Promise.all genuinely run as two
+  // independent OS processes / two independent Postgres connections at the
+  // same time -- Postgres's own lock queue is what performs the actual
+  // serialization being proven, not test-side sequencing. Each test
+  // documents: which lock/constraint is the final guarantee, and what the
+  // losing call's outcome is.
   // ------------------------------------------------------------
   describe('concurrency', () => {
-    it('two concurrent create calls on the same run: exactly one created row survives', async () => {
-      const { extractionRunId } = createExtraction()
-      const results = await Promise.all([
-        new Promise<string>((resolve) => resolve(dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`))),
-        new Promise<string>((resolve) => resolve(dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`))),
-      ])
-      const successCount = results.filter((r) => r === '__NO_ERROR__').length
-      expect(successCount).toBe(1)
-      const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${extractionRunId}';`).trim()
-      expect(rowCount).toBe('1')
+    // --- A. Request creation ---
+    describe('A. request creation', () => {
+      it('two concurrent creates, same run, different keys: exactly one wins (idx_..._one_live_per_run is the guarantee)', async () => {
+        const { extractionRunId } = createExtraction()
+        const [a, b] = await Promise.all([
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`),
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`),
+        ])
+        const successCount = [a, b].filter((r) => r.ok).length
+        expect(successCount).toBe(1)
+        const loser = a.ok ? b : a
+        expect(loser.out).toMatch(/already has a live \(pending\/approved\) review request/)
+        const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${extractionRunId}';`).trim()
+        expect(rowCount).toBe('1')
+      })
+
+      it('two concurrent creates, SAME key + SAME payload: both resolve to the same row (topic_assignment_review_requests_request_key_key is the guarantee)', async () => {
+        const { extractionRunId } = createExtraction()
+        const key = nextMarker()
+        const [a, b] = await Promise.all([
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`),
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`),
+        ])
+        expect(a.ok && b.ok).toBe(true)
+        const idA = JSON.parse(a.out.trim()).review_request_id
+        const idB = JSON.parse(b.out.trim()).review_request_id
+        expect(idA).toBe(idB)
+        const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${extractionRunId}';`).trim()
+        expect(rowCount).toBe('1')
+      })
+
+      it('two concurrent creates, SAME key + DIFFERENT run (different payload): exactly one wins, loser gets IDEMPOTENCY_KEY_REUSE', async () => {
+        const a = createExtraction()
+        const b = createExtraction()
+        const key = nextMarker()
+        const [ra, rb] = await Promise.all([
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${a.extractionRunId}'::uuid, '${key}');`),
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${b.extractionRunId}'::uuid, '${key}');`),
+        ])
+        const successCount = [ra, rb].filter((r) => r.ok).length
+        expect(successCount).toBe(1)
+        const loser = ra.ok ? rb : ra
+        expect(loser.out).toMatch(/IDEMPOTENCY_KEY_REUSE/)
+      })
+
+      it('create vs. an old direct 074 QUARANTINE on the same run: never more than one topic_assignment_decisions row results', async () => {
+        const { extractionRunId } = createExtraction()
+        const [createResult, decisionResult] = await Promise.all([
+          dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`),
+          dockerPsqlAsync(`select record_topic_assignment_decision('${extractionRunId}'::uuid, 'QUARANTINE', 'below_confidence_threshold', '{}'::jsonb, '${nextMarker()}', NULL);`),
+        ])
+        // Both share the evidence advisory lock (tag 0) -- whichever
+        // acquires it first proceeds to completion, and the second
+        // re-reads fresh state after acquiring the lock. Known residual
+        // asymmetry (documented, not a corruption bug): if create() wins
+        // the race, the 074 call still has no knowledge of review_requests
+        // and can still succeed afterward, leaving the review request
+        // permanently orphaned in 'pending' (its own future decide/execute
+        // calls then correctly fail closed with "already has a
+        // topic_assignment_decisions row" -- never silently double-decided).
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+      })
     })
 
-    it('two concurrent reviewer decisions on the same request: exactly one wins, the other sees a conflict', async () => {
-      const { extractionRunId } = createExtraction()
-      const { id } = createReviewRequest(extractionRunId)
-      const results = await Promise.all([
-        new Promise<string>((resolve) => resolve(asReviewerExpectError(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))),
-        new Promise<string>((resolve) => resolve(asReviewerExpectError(REVIEWER_B, REJECT_ARGS(id, nextMarker(), 'insufficient_evidence')))),
-      ])
-      const successCount = results.filter((r) => r === '__NO_ERROR__').length
-      expect(successCount).toBe(1)
-      const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
-      expect(['approved', 'rejected']).toContain(status)
+    // --- B. Reviewer decision ---
+    describe('B. reviewer decision', () => {
+      it('approve vs. approve (two different reviewers): exactly one wins (request row FOR UPDATE + status check is the guarantee)', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        const [a, b] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)),
+          asReviewerAsync(REVIEWER_B, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)),
+        ])
+        const successCount = [a, b].filter((r) => r.ok).length
+        expect(successCount).toBe(1)
+        const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        expect(status).toBe('approved')
+      })
+
+      it('approve vs. reject: exactly one wins', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        const [a, b] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)),
+          asReviewerAsync(REVIEWER_B, REJECT_ARGS(id, nextMarker(), 'insufficient_evidence')),
+        ])
+        const successCount = [a, b].filter((r) => r.ok).length
+        expect(successCount).toBe(1)
+        const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        expect(['approved', 'rejected']).toContain(status)
+      })
+
+      it('reject vs. reject: exactly one wins, exactly one QUARANTINE decision', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        const [a, b] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, REJECT_ARGS(id, nextMarker(), 'insufficient_evidence')),
+          asReviewerAsync(REVIEWER_B, REJECT_ARGS(id, nextMarker(), 'invalid_topic_identity')),
+        ])
+        const successCount = [a, b].filter((r) => r.ok).length
+        expect(successCount).toBe(1)
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+      })
+
+      it('decision vs. expiry, truly concurrent: the row is always eventually consistent, never a double-write', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(`update topic_assignment_review_requests set expires_at = now() + interval '200 milliseconds' where id='${id}';`)
+        await new Promise((r) => setTimeout(r, 210))
+        const [decisionResult, expireResult] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)),
+          dockerPsqlAsync(`select expire_stale_topic_assignment_review_requests(100);`),
+        ])
+        let status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        // Three valid outcomes under real lock contention, all correct by
+        // design: (1) expire's FOR UPDATE SKIP LOCKED grabs the row first
+        // and transitions it to 'expired'; (2) decision's FOR UPDATE grabs
+        // it first, sees expires_at unchanged, and legitimately approves
+        // before expiry; (3) decision's FOR UPDATE grabs it first, sees
+        // expires_at already past, and self-aborts with
+        // REVIEW_REQUEST_EXPIRED WITHOUT persisting anything (by design --
+        // expiry persistence is exclusively the sweeper's job) -- meanwhile
+        // expire's SKIP LOCKED pass, running at the same moment, skips this
+        // locked row entirely and finds nothing to do. Outcome (3) leaves
+        // the row 'pending' from THIS pass alone -- not a stuck state, just
+        // eventual consistency: a LATER sweeper run must still catch it.
+        if (status === 'pending') {
+          const followUp = JSON.parse(dockerPsql(`select expire_stale_topic_assignment_review_requests(100);`).trim())
+          expect(followUp.expired_ids).toContain(id)
+          status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        }
+        expect(['approved', 'expired']).toContain(status)
+        // Whichever won, there is exactly one terminal-transition event for
+        // this request (never both approved AND expired events).
+        const terminalEvents = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type in ('approved','expired');`).trim()
+        expect(terminalEvents).toBe('1')
+      })
+
+      it('decision vs. cancellation, truly concurrent: the row ends up either decided or cancelled, never both', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        const [decisionResult, cancelResult] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)),
+          asReviewerAsync(REVIEWER_B, `select cancel_topic_assignment_review_request('${id}'::uuid);`),
+        ])
+        const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        expect(['approved', 'cancelled']).toContain(status)
+        const terminalEvents = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type in ('approved','cancelled');`).trim()
+        expect(terminalEvents).toBe('1')
+      })
+
+      it('a request that expired before this call never writes decision state or a decision event (expiry check runs before any write)', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(`update topic_assignment_review_requests set expires_at = now() - interval '1 hour' where id='${id}';`)
+        asReviewerExpectError(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null))
+        const row = dockerPsql(`select status, reviewer_user_id is null from topic_assignment_review_requests where id='${id}';`).trim()
+        expect(row).toBe('pending|t')
+        const eventCount = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type='approved';`).trim()
+        expect(eventCount).toBe('0')
+      })
     })
 
-    it('two concurrent executors on the same approved request: exactly one topic/membership/decision survives', async () => {
-      const { extractionRunId } = createExtraction()
-      const { id } = createReviewRequest(extractionRunId)
-      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
-      const results = await Promise.all([
-        new Promise<string>((resolve) => resolve(dockerPsqlExpectError(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`))),
-        new Promise<string>((resolve) => resolve(dockerPsqlExpectError(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`))),
-      ])
-      const successCount = results.filter((r) => r === '__NO_ERROR__').length
-      expect(successCount).toBe(1)
-      const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
-      expect(decisionCount).toBe('1')
+    // --- C. Approval lifecycle ---
+    describe('C. approval lifecycle', () => {
+      it('revoke vs. executor: exactly one wins, never both revoked and executed', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const [revokeResult, execResult] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, `select revoke_topic_assignment_review_approval('${id}'::uuid);`),
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`),
+        ])
+        const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        expect(['revoked', 'executed']).toContain(status)
+        const terminalEvents = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type in ('revoked','executed');`).trim()
+        expect(terminalEvents).toBe('1')
+        if (status === 'executed') {
+          const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+          expect(decisionCount).toBe('1')
+        } else {
+          const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+          expect(decisionCount).toBe('0')
+        }
+      })
+
+      it('two concurrent revokes: exactly one revoked event, the other replays', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const [a, b] = await Promise.all([
+          asReviewerAsync(REVIEWER_A, `select revoke_topic_assignment_review_approval('${id}'::uuid);`),
+          asReviewerAsync(REVIEWER_B, `select revoke_topic_assignment_review_approval('${id}'::uuid);`),
+        ])
+        expect(a.ok && b.ok).toBe(true)
+        const eventCount = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type='revoked';`).trim()
+        expect(eventCount).toBe('1')
+      })
+
+      it('revoke on an already-executed request always fails (sequential, deterministic precondition)', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`)
+        const err = asReviewerExpectError(REVIEWER_A, `select revoke_topic_assignment_review_approval('${id}'::uuid);`)
+        expect(err).toMatch(/REVIEW_APPROVAL_NOT_REVOCABLE/)
+      })
+
+      it('reviewer deactivation concurrent with executor: the final state is always self-consistent (FOR SHARE is the guarantee)', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const [deactivateResult, execResult] = await Promise.all([
+          dockerPsqlAsync(`update semantic_topic_reviewers set active=false, deactivated_at=now(), deactivated_by_user_id='${REVIEWER_A}' where user_id='${REVIEWER_A}';`),
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`),
+        ])
+        const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
+        if (status === 'executed') {
+          // Execution's FOR SHARE won the row before deactivation's UPDATE
+          // could apply -- a fully valid, non-orphaned execution.
+          const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+          expect(decisionCount).toBe('1')
+        } else {
+          // Deactivation's UPDATE landed first (or FOR SHARE correctly saw
+          // it mid-transaction) -- execution must have failed closed, with
+          // zero partial writes.
+          expect(status).toBe('approved')
+          const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+          expect(decisionCount).toBe('0')
+        }
+        dockerPsql(`update semantic_topic_reviewers set active=true, deactivated_at=NULL, deactivated_by_user_id=NULL where user_id='${REVIEWER_A}';`)
+      })
     })
 
-    it('decision vs. expiry race: expiring after a decision already landed is a no-op (expire only ever touches pending rows)', () => {
-      const { extractionRunId } = createExtraction()
-      const { id } = createReviewRequest(extractionRunId)
-      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
-      dockerPsql(`update topic_assignment_review_requests set expires_at = now() - interval '1 hour' where id='${id}';`)
-      const out = JSON.parse(dockerPsql(`select expire_stale_topic_assignment_review_requests(100);`).trim())
-      expect(out.expired_ids).not.toContain(id)
-      const status = dockerPsql(`select status from topic_assignment_review_requests where id='${id}';`).trim()
-      expect(status).toBe('approved')
+    // --- D. CREATE_NEW execution ---
+    describe('D. CREATE_NEW execution', () => {
+      it('two concurrent executors on the same approved CREATE_NEW request, DIFFERENT keys: exactly one wins, loser gets ALREADY_EXECUTED', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const [a, b] = await Promise.all([
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`),
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`),
+        ])
+        const successCount = [a, b].filter((r) => r.ok).length
+        expect(successCount).toBe(1)
+        const loser = a.ok ? b : a
+        expect(loser.out).toMatch(/ALREADY_EXECUTED/)
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+        const topicCount = dockerPsql(`select count(*) from semantic_topics where creation_request_digest = encode(sha256(convert_to('${id}' || chr(31) || 'human_review_topic_creation_seed', 'UTF8')), 'hex');`).trim()
+        expect(topicCount).toBe('1')
+      })
+
+      it('two concurrent executors on the same approved CREATE_NEW request, SAME key: both resolve identically (created + replayed)', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const key = nextMarker()
+        const [a, b] = await Promise.all([
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${key}');`),
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${key}');`),
+        ])
+        expect(a.ok && b.ok).toBe(true)
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+      })
+
+      it('executor vs. an old direct 074 QUARANTINE writer on the same run: at most one decision, executor fails closed if it loses', async () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const [execResult, decisionResult] = await Promise.all([
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`),
+          dockerPsqlAsync(`select record_topic_assignment_decision('${extractionRunId}'::uuid, 'QUARANTINE', 'below_confidence_threshold', '{}'::jsonb, '${nextMarker()}', NULL);`),
+        ])
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+        // whichever lost must have failed closed, not silently no-opped
+        expect(execResult.ok || decisionResult.ok).toBe(true)
+        expect(execResult.ok && decisionResult.ok).toBe(false)
+      })
+
+      it('execution replay: identical key + identical stored state -- deterministic, no second event/decision', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const key = nextMarker()
+        dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${key}');`)
+        dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${key}');`)
+        const eventCount = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type='executed';`).trim()
+        expect(eventCount).toBe('1')
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+      })
+
+      it('a genuinely mid-transaction failure leaves zero orphans (rollback proof: forged approval_digest tamper mid-flight)', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const tamperedDigest = 'f'.repeat(64)
+        dockerPsql(`update topic_assignment_review_requests set approval_digest = '${tamperedDigest}' where id='${id}';`)
+        const err = dockerPsqlExpectError(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`)
+        expect(err).toMatch(/approval_digest drift detected/)
+        const topicCount = dockerPsql(`select count(*) from semantic_topics where creation_request_digest = encode(sha256(convert_to('${id}' || chr(31) || 'human_review_topic_creation_seed', 'UTF8')), 'hex');`).trim()
+        expect(topicCount).toBe('0')
+        const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where signal_evidence_id in (select signal_evidence_id from topic_extraction_runs where id='${extractionRunId}');`).trim()
+        expect(membershipCount).toBe('0')
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('0')
+      })
+
+      it('CREATE_NEW execution permanently closes the run to any other path (ATTACH_EXISTING via a new generation is impossible)', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`)
+        const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
+        expect(err).toMatch(/already has a topic_assignment_decisions row/)
+      })
+    })
+
+    // --- E. ATTACH_EXISTING execution ---
+    describe('E. ATTACH_EXISTING execution', () => {
+      function seedTopic(): string {
+        const seed = createExtraction()
+        const seedReq = createReviewRequest(seed.extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+        const exec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+        return exec.semantic_topic_id
+      }
+
+      it('two concurrent ATTACH executors on the same target: exactly one membership row added per request', async () => {
+        const topicId = seedTopic()
+        const attachA = createExtraction()
+        const reqA = createReviewRequest(attachA.extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(reqA.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
+        const attachB = createExtraction()
+        const reqB = createReviewRequest(attachB.extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_B, APPROVE_ARGS(reqB.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
+        const [a, b] = await Promise.all([
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${reqA.id}'::uuid, '${nextMarker()}');`),
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${reqB.id}'::uuid, '${nextMarker()}');`),
+        ])
+        expect(a.ok && b.ok).toBe(true)
+        const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where semantic_topic_id='${topicId}';`).trim()
+        expect(membershipCount).toBe('3') // seed + A + B
+      })
+
+      it('ATTACH executor vs. concurrent target-lifecycle change: forbidden lifecycle at commit time fails closed, zero writes', async () => {
+        const topicId = seedTopic()
+        const attach = createExtraction()
+        const req = createReviewRequest(attach.extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(req.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
+        const [execResult, lifecycleResult] = await Promise.all([
+          dockerPsqlAsync(`select execute_approved_topic_assignment_review('${req.id}'::uuid, '${nextMarker()}');`),
+          dockerPsqlAsync(`update semantic_topics set lifecycle_status='archived' where id='${topicId}';`),
+        ])
+        const status = dockerPsql(`select status from topic_assignment_review_requests where id='${req.id}';`).trim()
+        if (status === 'executed') {
+          const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where semantic_topic_id='${topicId}';`).trim()
+          expect(membershipCount).toBe('2')
+        } else {
+          expect(status).toBe('approved')
+          const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where semantic_topic_id='${topicId}';`).trim()
+          expect(membershipCount).toBe('1') // only the seed membership
+        }
+        dockerPsql(`update semantic_topics set lifecycle_status='candidate_singleton' where id='${topicId}';`)
+      })
+
+      for (const forbidden of ['archived', 'superseded', 'merge_candidate', 'split_required']) {
+        it(`execution-time: a target that became ${forbidden} between approval and execution is rejected, zero writes`, () => {
+          const topicId = seedTopic()
+          const attach = createExtraction()
+          const req = createReviewRequest(attach.extractionRunId)
+          dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(req.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
+          dockerPsql(`update semantic_topics set lifecycle_status='${forbidden}' where id='${topicId}';`)
+          const err = dockerPsqlExpectError(`select execute_approved_topic_assignment_review('${req.id}'::uuid, '${nextMarker()}');`)
+          expect(err).toMatch(/no longer accepts ATTACH_EXISTING/)
+          const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where semantic_topic_id='${topicId}';`).trim()
+          expect(membershipCount).toBe('1') // only the seed membership -- zero new writes
+          dockerPsql(`update semantic_topics set lifecycle_status='candidate_singleton' where id='${topicId}';`)
+        })
+      }
+
+      it('a valid ATTACH_EXISTING execution writes exactly one membership, one decision, one attached event', () => {
+        const topicId = seedTopic()
+        const attach = createExtraction()
+        const req = createReviewRequest(attach.extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(req.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
+        const exec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${req.id}'::uuid, '${nextMarker()}');`).trim())
+        const counts = dockerPsql(`
+          select
+            (select count(*) from semantic_topic_membership where id='${exec.resulting_membership_id}'),
+            (select count(*) from topic_assignment_decisions where id='${exec.resulting_decision_id}'),
+            (select count(*) from semantic_topic_membership_events where related_assignment_decision_id='${exec.resulting_decision_id}');
+        `).trim()
+        expect(counts).toBe('1|1|1')
+      })
+
+      it('a run cannot go CREATE_NEW and ATTACH_EXISTING via two separate generations -- the second request is blocked by the first request decision', () => {
+        const topicId = seedTopic()
+        const { extractionRunId } = createExtraction()
+        const first = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(first.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
+        dockerPsql(`select execute_approved_topic_assignment_review('${first.id}'::uuid, '${nextMarker()}');`)
+        const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
+        expect(err).toMatch(/already has a topic_assignment_decisions row/)
+      })
+    })
+
+    // --- F. Retry determinism ---
+    describe('F. retry determinism', () => {
+      it('create retry (simulated timeout/unknown-result): same key always resolves to the same row, never a second row', () => {
+        const { extractionRunId } = createExtraction()
+        const key = nextMarker()
+        const first = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`).trim())
+        for (let i = 0; i < 3; i++) {
+          const retry = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`).trim())
+          expect(retry.review_request_id).toBe(first.review_request_id)
+          expect(retry.outcome).toBe('replayed')
+        }
+        const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${extractionRunId}';`).trim()
+        expect(rowCount).toBe('1')
+      })
+
+      it('decision retry: same key always resolves to the same outcome, never a second event or decision', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        const key = nextMarker()
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, key, 'CREATE_NEW', null)))
+        for (let i = 0; i < 3; i++) {
+          const retry = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, key, 'CREATE_NEW', null))).trim())
+          expect(retry.outcome).toBe('replayed')
+        }
+        const eventCount = dockerPsql(`select count(*) from topic_assignment_review_events where review_request_id='${id}' and event_type='approved';`).trim()
+        expect(eventCount).toBe('1')
+      })
+
+      it('executor retry: same key always resolves to the same outcome, never a second decision', () => {
+        const { extractionRunId } = createExtraction()
+        const { id } = createReviewRequest(extractionRunId)
+        dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
+        const key = nextMarker()
+        dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${key}');`)
+        for (let i = 0; i < 3; i++) {
+          const retry = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${key}');`).trim())
+          expect(retry.outcome).toBe('replayed')
+        }
+        const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
+        expect(decisionCount).toBe('1')
+      })
     })
   })
 })
