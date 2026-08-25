@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const MIGRATION_PATH = join(process.cwd(), 'supabase/migrations/073_semantic_topic_s2a_audit_and_temporal_hardening.sql')
+const MIGRATION_077_PATH = join(process.cwd(), 'supabase/migrations/077_semantic_topic_human_review_schema_foundation.sql')
 
 function dockerPsql(sql: string): string {
   return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
@@ -37,6 +38,19 @@ function dockerPsqlExpectError(sql: string): string {
 
 function runMigration(): { out: string; threw: boolean } {
   const migrationSql = readFileSync(MIGRATION_PATH, 'utf8')
+  try {
+    const out = execSync(
+      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      { input: migrationSql, encoding: 'utf8' },
+    )
+    return { out, threw: false }
+  } catch (e: any) {
+    return { out: String(e.stdout || e.stderr || e.message || ''), threw: true }
+  }
+}
+
+function runMigration077(): { out: string; threw: boolean } {
+  const migrationSql = readFileSync(MIGRATION_077_PATH, 'utf8')
   try {
     const out = execSync(
       'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
@@ -113,7 +127,38 @@ function restoreS3AExtractionRunFk() {
   `)
 }
 
+// Since migration 077, topic_assignment_review_requests carries FKs onto
+// topic_extraction_runs, semantic_topics, and topic_assignment_decisions --
+// this file's own topology-gate/drift tests DROP those 073 objects directly,
+// which a plain (no-CASCADE) DROP would now block. Explicit, named,
+// dependency-ordered drop/restore of the 077 objects first (never CASCADE,
+// never weakening the FK itself), mirroring the same pattern already used
+// above for the 075 (S3A) extraction_run_id FK.
+function dropHumanReviewObjects() {
+  dockerPsql(`
+    DROP TABLE IF EXISTS public.topic_assignment_review_events;
+    DROP TABLE IF EXISTS public.topic_assignment_review_requests;
+    DROP TABLE IF EXISTS public.semantic_topic_reviewer_events;
+    DROP TABLE IF EXISTS public.semantic_topic_reviewers;
+  `)
+}
+
+// Idempotent: 077's own migration is CREATE-if-missing / validate-if-present,
+// so re-running it is always safe once the 072-076 topology it depends on is
+// intact. A no-op when 077 was never applied locally.
+function restoreHumanReviewObjects() {
+  const out = dockerPsql(`select count(*) from pg_tables where schemaname='public' and tablename in ('topic_assignment_review_events','topic_assignment_review_requests','semantic_topic_reviewer_events','semantic_topic_reviewers');`).trim()
+  if (out === '4') {
+    return
+  }
+  const result = runMigration077()
+  if (result.threw) {
+    throw new Error(`restoreHumanReviewObjects: 077 re-apply failed -- ${result.out}`)
+  }
+}
+
 function dropS2AObjects() {
+  dropHumanReviewObjects()
   dropS3AExtractionRunFkIfPresent()
   dockerPsql(`
     DROP TABLE IF EXISTS public.semantic_topic_membership_events;
@@ -142,6 +187,7 @@ function ensureFullyApplied() {
       runMigration()
     }
   }
+  restoreHumanReviewObjects()
 }
 
 function cleanupTestData() {
@@ -306,11 +352,14 @@ describeIfLocalDb('Semantic Topic Identity v0 S2A -- audit/provenance schema + t
 
   // Runs after EVERY test in this file, pass or fail, regardless of which
   // test ran or in what order -- guarantees the S3A (075) extraction_run_id
-  // FK is never left missing as a side effect of this suite's own drift
-  // experiments on topic_extraction_runs (see dropS2AObjects/restoreS3AExtractionRunFk
-  // above). A test failure partway through does not skip this.
+  // FK, and the 077 human-review tables, are never left missing as a side
+  // effect of this suite's own drift experiments on topic_extraction_runs /
+  // topic_assignment_decisions (see dropS2AObjects/restoreS3AExtractionRunFk/
+  // restoreHumanReviewObjects above). A test failure partway through does
+  // not skip this.
   afterEach(() => {
     restoreS3AExtractionRunFk()
+    restoreHumanReviewObjects()
   })
 
   // ------------------------------------------------------------
