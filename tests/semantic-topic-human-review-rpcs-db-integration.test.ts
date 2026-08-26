@@ -310,22 +310,76 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       expect(events).toBe('requested')
     })
 
-    it('rejects confidence >= 0.8500 (automatic-path territory, not human review)', () => {
-      const { extractionRunId } = createExtraction({ confidence: 0.9 })
-      const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-      expect(err).toMatch(/requires confidence </)
+    it('EXTRACTION_NOT_COMPLETED: a non-completed extraction returns a structured ineligible result, no request row', () => {
+      const m = nextMarker()
+      const sourceId = dockerPsql(`insert into signal_sources (source_type, external_id, source_family_key) values ('youtube_channel', '${m}-src', '${m}-src') returning id;`).trim()
+      const runId = dockerPsql(`insert into signal_runs (run_type, idempotency_key, status, completed_at) values ('shadow_batch', '${m}-run', 'completed', now()) returning id;`).trim()
+      const evidenceId = dockerPsql(`insert into signal_evidence (signal_source_id, evidence_type, external_ref, title, discovered_in_run_id) values ('${sourceId}', 'youtube_video', '${m}-ev', '${MARKER} fixture evidence', '${runId}') returning id;`).trim()
+      const failedResult = JSON.parse(dockerPsql(`select record_topic_extraction_run(
+        '${evidenceId}'::uuid, 2, 'ai_assisted', 'anthropic', 'claude-sonnet-4-6', 'v1', NULL,
+        'norm-${m}', 1, 'failed', NULL, 100, 50, 0.001, 'provider_error',
+        '${m}-ext', now() - interval '1 minute', now()
+      );`).trim())
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${failedResult.extraction_run_id}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'ineligible', reason_code: 'EXTRACTION_NOT_COMPLETED' })
+      const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${failedResult.extraction_run_id}';`).trim()
+      expect(rowCount).toBe('0')
     })
 
-    it('rejects generic (non-specific) extractions', () => {
+    it('INVALID_STRUCTURED_OUTPUT: a completed extraction with a NULL specificity (bypassing the app-layer validator) returns a structured ineligible result, not a silent pass-through', () => {
+      // This bypasses lib/semantic-topic/structured-output-schema.ts entirely
+      // (which would normally reject a null specificity before the RPC is
+      // ever called) by inserting structured_output directly, the same way
+      // record_topic_extraction_run's own canonicalization would accept it
+      // -- proving the DB-side null-safety guard, not the app-side validator.
+      const m = nextMarker()
+      const sourceId = dockerPsql(`insert into signal_sources (source_type, external_id, source_family_key) values ('youtube_channel', '${m}-src', '${m}-src') returning id;`).trim()
+      const runId = dockerPsql(`insert into signal_runs (run_type, idempotency_key, status, completed_at) values ('shadow_batch', '${m}-run', 'completed', now()) returning id;`).trim()
+      const evidenceId = dockerPsql(`insert into signal_evidence (signal_source_id, evidence_type, external_ref, title, discovered_in_run_id) values ('${sourceId}', 'youtube_video', '${m}-ev', '${MARKER} fixture evidence', '${runId}') returning id;`).trim()
+      const malformed = JSON.stringify({
+        extraction_schema_version: 1, canonical_phenomenon_label: 'x', label_language: 'en', subject_entities: ['A'],
+        action_or_event: null, location: null, temporal_context: null, specificity: null, content_format: 'other',
+        confidence: 0.5, supporting_spans: [{ source_field: 'title', quoted_text: 'x' }],
+      }).replace(/'/g, "''")
+      const completedResult = JSON.parse(dockerPsql(`select record_topic_extraction_run(
+        '${evidenceId}'::uuid, 2, 'ai_assisted', 'anthropic', 'claude-sonnet-4-6', 'v1', NULL,
+        'norm-${m}', 1, 'completed', '${malformed}'::jsonb, 100, 50, 0.001, NULL,
+        '${m}-ext', now() - interval '1 minute', now()
+      );`).trim())
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${completedResult.extraction_run_id}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'ineligible', reason_code: 'INVALID_STRUCTURED_OUTPUT' })
+      const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${completedResult.extraction_run_id}';`).trim()
+      expect(rowCount).toBe('0')
+    })
+
+    it('NOT_SPECIFIC: rejects generic (non-specific) extractions with a structured result, not an exception', () => {
       const { extractionRunId } = createExtraction({ specificity: 'generic' })
-      const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-      expect(err).toMatch(/specificity=specific/)
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'ineligible', reason_code: 'NOT_SPECIFIC' })
     })
 
-    it('rejects extractions with zero supporting_spans', () => {
+    it('CONFIDENCE_NOT_REVIEW_ELIGIBLE: rejects confidence >= 0.8500 with a structured result, not an exception', () => {
+      const { extractionRunId } = createExtraction({ confidence: 0.9 })
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'ineligible', reason_code: 'CONFIDENCE_NOT_REVIEW_ELIGIBLE' })
+    })
+
+    it('NO_SUPPORTING_SPANS: rejects extractions with zero supporting_spans with a structured result, not an exception', () => {
       const { extractionRunId } = createExtraction({ supporting_spans: [] })
-      const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-      expect(err).toMatch(/at least one supporting_spans/)
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'ineligible', reason_code: 'NO_SUPPORTING_SPANS' })
+    })
+
+    it('changing the human-readable message text alone never changes outcome_kind/reason_code (message is diagnostic-only)', () => {
+      const { extractionRunId } = createExtraction({ specificity: 'generic' })
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(typeof body.message).toBe('string')
+      expect(body.message.length).toBeGreaterThan(0)
+      // The message is free-text and may legitimately change wording across
+      // migrations without being a breaking contract change -- outcome_kind
+      // and reason_code are the only fields any caller may branch on.
+      expect(body.outcome_kind).toBe('ineligible')
+      expect(body.reason_code).toBe('NOT_SPECIFIC')
     })
 
     it('identical idempotency_key + identical payload replays the same row', () => {
@@ -333,8 +387,8 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       const key = nextMarker()
       const first = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`).trim())
       const second = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`).trim())
-      expect(first.outcome).toBe('created')
-      expect(second.outcome).toBe('replayed')
+      expect(first.outcome_kind).toBe('created')
+      expect(second.outcome_kind).toBe('replayed')
       expect(second.review_request_id).toBe(first.review_request_id)
     })
 
@@ -347,18 +401,18 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       expect(err).toMatch(/IDEMPOTENCY_KEY_REUSE/)
     })
 
-    it('a second live (pending) request on the same run is rejected', () => {
+    it('LIVE_REVIEW_REQUEST_EXISTS: a second live (pending) request on the same run gets a structured blocked result, not an exception', () => {
       const { extractionRunId } = createExtraction()
       createReviewRequest(extractionRunId)
-      const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-      expect(err).toMatch(/already has a live \(pending\/approved\) review request/)
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'blocked', reason_code: 'LIVE_REVIEW_REQUEST_EXISTS' })
     })
 
-    it('a run with an existing topic_assignment_decisions row can never get a new request', () => {
+    it('ALREADY_ASSIGNED: a run with an existing topic_assignment_decisions row gets a structured blocked result, never a new request', () => {
       const { extractionRunId } = createExtraction()
       dockerPsql(`select record_topic_assignment_decision('${extractionRunId}'::uuid, 'QUARANTINE', 'below_confidence_threshold', '{}'::jsonb, '${nextMarker()}', NULL);`)
-      const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-      expect(err).toMatch(/already has a topic_assignment_decisions row/)
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'blocked', reason_code: 'ALREADY_ASSIGNED' })
     })
 
     it('only service_role may call it -- direct authenticated call is denied', () => {
@@ -496,8 +550,8 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       const { extractionRunId } = createExtraction()
       const { id } = createReviewRequest(extractionRunId)
       dockerPsql(asReviewer(REVIEWER_A, REJECT_ARGS(id, nextMarker(), 'insufficient_evidence')))
-      const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-      expect(err).toMatch(/already has a topic_assignment_decisions row/)
+      const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+      expect(body).toMatchObject({ ok: false, outcome_kind: 'blocked', reason_code: 'ALREADY_ASSIGNED' })
     })
 
     it('the OLD record_topic_assignment_decision RPC still rejects human_review_rejected via its own gate (unmodified, expected)', () => {
@@ -985,10 +1039,17 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
           dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`),
           dockerPsqlAsync(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`),
         ])
-        const successCount = [a, b].filter((r) => r.ok).length
+        // Both processes now exit 0 (LIVE_REVIEW_REQUEST_EXISTS is a
+        // structured JSONB return, not a raised exception) -- the win/loss
+        // is decided by the RPC's OWN `ok` field inside each body, not by
+        // process exit code.
+        expect(a.ok && b.ok).toBe(true)
+        const bodyA = JSON.parse(a.out.trim())
+        const bodyB = JSON.parse(b.out.trim())
+        const successCount = [bodyA, bodyB].filter((body) => body.ok === true).length
         expect(successCount).toBe(1)
-        const loser = a.ok ? b : a
-        expect(loser.out).toMatch(/already has a live \(pending\/approved\) review request/)
+        const loser = bodyA.ok ? bodyB : bodyA
+        expect(loser).toMatchObject({ ok: false, outcome_kind: 'blocked', reason_code: 'LIVE_REVIEW_REQUEST_EXISTS' })
         const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${extractionRunId}';`).trim()
         expect(rowCount).toBe('1')
       })
@@ -1296,8 +1357,8 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
         const { id } = createReviewRequest(extractionRunId)
         dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(id, nextMarker(), 'CREATE_NEW', null)))
         dockerPsql(`select execute_approved_topic_assignment_review('${id}'::uuid, '${nextMarker()}');`)
-        const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-        expect(err).toMatch(/already has a topic_assignment_decisions row/)
+        const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+        expect(body).toMatchObject({ ok: false, outcome_kind: 'blocked', reason_code: 'ALREADY_ASSIGNED' })
       })
     })
 
@@ -1385,8 +1446,8 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
         const first = createReviewRequest(extractionRunId)
         dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(first.id, nextMarker(), 'ATTACH_EXISTING', topicId)))
         dockerPsql(`select execute_approved_topic_assignment_review('${first.id}'::uuid, '${nextMarker()}');`)
-        const err = dockerPsqlExpectError(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`)
-        expect(err).toMatch(/already has a topic_assignment_decisions row/)
+        const body = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${nextMarker()}');`).trim())
+        expect(body).toMatchObject({ ok: false, outcome_kind: 'blocked', reason_code: 'ALREADY_ASSIGNED' })
       })
     })
 
@@ -1399,7 +1460,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
         for (let i = 0; i < 3; i++) {
           const retry = JSON.parse(dockerPsql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${key}');`).trim())
           expect(retry.review_request_id).toBe(first.review_request_id)
-          expect(retry.outcome).toBe('replayed')
+          expect(retry.outcome_kind).toBe('replayed')
         }
         const rowCount = dockerPsql(`select count(*) from topic_assignment_review_requests where extraction_run_id='${extractionRunId}';`).trim()
         expect(rowCount).toBe('1')

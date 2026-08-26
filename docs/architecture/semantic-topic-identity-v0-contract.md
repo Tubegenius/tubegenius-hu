@@ -463,3 +463,70 @@ Verified concretely: a `'use client'` component importing `createReviewRequest` 
 **Test evidence**: the full suite (`npx vitest run`, real local Docker Supabase stack, Anthropic mocked) was run **twice**, back to back, to prove deterministic fixture cleanup and DB-state restoration under this phase's added save/restore logic for the `ai_extraction_control` kill switch and the `ai_provider_daily_budgets` daily counters (both pre-existing, shared, cumulative local state — not reset blindly, but saved exactly and restored exactly). Both runs: `89 passed | 2 skipped` (91 test files), `1216 passed | 37 skipped` (1253 tests), 0 failed, ~875–879s each. `tsc --noEmit` and `next build` both clean.
 
 **Still deferred to later, separately-gated phases** (unchanged from §33, now the concrete next step): a reviewer UI of any kind; turning `SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED` on anywhere but a local test process; registering the expire cron in `vercel.json`; any automatic call to `executeApprovedReview`; the real reviewer-provisioning/bootstrap security gate. Production remains completely inactive; no reviewer bootstrap has occurred at any point in this phase.
+
+## 35. Human-Reviewed Candidate Workflow — Structured Orchestration Outcome Closure (`outcome_kind` / `reason_code`, no message-text branching)
+
+**Status: local application code only**, same posture as §33/§34. This gate replaces every regex-/message-text-based branch that `create_topic_assignment_review_request` (078) and its two application-layer callers (`human-review-service.ts`, `human-review-extraction-hook.ts`) used, with a stable, DB-derived, machine-readable `outcome_kind` + `reason_code` contract. §34's "re-classify by matching the RPC's message text" design — while functionally correct — is now fully retired for this one RPC; every other 078 RPC wrapper (decision/cancel/revoke/execute/expire, all handled by the shared `mapReviewRpcError`) is unaffected and still uses its own established UPPER_SNAKE_CASE message-tag convention, since that part of the contract was explicitly out of scope for this gate.
+
+**Function identity unchanged**: name, parameters (`p_extraction_run_id UUID, p_idempotency_key TEXT`), owner (`postgres`), `SECURITY DEFINER`, `search_path = public, pg_temp`, ACL (`postgres` + `service_role` `EXECUTE` only), and the `0.8500` confidence ceiling are all byte-identical to §32/§34. Only the function **body**'s success/failure communication shape changed.
+
+### Database outcome contract (`create_topic_assignment_review_request`'s JSONB return, every branch)
+
+| SQL branch | Returns | `outcome_kind` | `reason_code` |
+|---|---|---|---|
+| fresh insert succeeds | `RETURN` | `created` | `NULL` |
+| idempotency-key replay (pre-insert or post-`unique_violation` re-fetch, digest matches) | `RETURN` | `replayed` | `NULL` |
+| `status <> 'completed'` | `RETURN` | `ineligible` | `EXTRACTION_NOT_COMPLETED` |
+| `structured_output` / `specificity` / `confidence` / `supporting_spans` malformed or `NULL` (new guard, see below) | `RETURN` | `ineligible` | `INVALID_STRUCTURED_OUTPUT` |
+| `specificity <> 'specific'` | `RETURN` | `ineligible` | `NOT_SPECIFIC` |
+| `confidence >= 0.8500` | `RETURN` | `ineligible` | `CONFIDENCE_NOT_REVIEW_ELIGIBLE` |
+| `jsonb_array_length(supporting_spans) < 1` | `RETURN` | `ineligible` | `NO_SUPPORTING_SPANS` |
+| an existing `topic_assignment_decisions` row already exists for this run | `RETURN` | `blocked` | `ALREADY_ASSIGNED` |
+| `unique_violation` on `idx_topic_assignment_review_requests_one_live_per_run` (concurrency loser) | `RETURN` | `blocked` | `LIVE_REVIEW_REQUEST_EXISTS` |
+| idempotency key reused for a different `extraction_run_id`, or same run with a genuinely different payload | `RAISE EXCEPTION` (unchanged) | — | — (message-tagged `IDEMPOTENCY_KEY_REUSE`, deliberately left as a raised, controlled conflict — see below) |
+| `extraction_run_id` not found (pre- or post-advisory-lock) | `RAISE EXCEPTION` (unchanged) | — | — |
+
+`UNSUPPORTED_EXTRACTION_VERSION` was **not** added: the actual RPC body has no `extraction_schema_version`/`normalization_version` gate anywhere in `create_topic_assignment_review_request`, and this gate's brief explicitly forbade inventing a check that isn't implemented.
+
+**Why `IDEMPOTENCY_KEY_REUSE` and "not found" stay as `RAISE EXCEPTION`, unconverted**: both remain a controlled, non-leaking conflict/error (the raw `unique_violation`/message never reaches the caller — this was already true before this gate) but are not part of the closed `outcome_kind`/`reason_code` return contract. This is deliberate, not an oversight: the extraction hook's own fail-closed default (any thrown exception → `retryable_failure`, see below) already handles both correctly and safely without any dedicated mapping, and the real orchestration path (`maybeRequestHumanReview()`) derives its idempotency key deterministically from the extraction run's own id, so a genuine `IDEMPOTENCY_KEY_REUSE` from that call site is already an anomaly, not a normal outcome needing its own hook-level branch.
+
+**`INVALID_STRUCTURED_OUTPUT` — a real, found-and-fixed correctness gap, not new business logic**: in PL/pgSQL, `IF NULL THEN ... END IF` evaluates the comparison to SQL `NULL`, which is treated as `false` — the branch is silently *skipped*, not entered. Before this gate, if `structured_output->>'specificity'` (or `confidence`, or `supporting_spans`) were ever SQL `NULL` on a `'completed'` row, the `specificity <> 'specific'` / `confidence >= ceiling` / `jsonb_array_length(...) < 1` checks would all silently evaluate to `NULL` and be skipped — letting a malformed extraction slip through as "eligible". Verified concretely: inserting a `'completed'` extraction run with `"specificity": null` via `record_topic_extraction_run` (074 does not reject a `null` specificity value; only the application-layer validator in `structured-output-schema.ts` does, and that layer is bypassed by direct-SQL fixtures) previously would have passed straight through the old code to a live review-request creation. The new guard (`structured_output IS NULL OR ...->>'specificity' IS NULL OR ...->>'confidence' IS NULL OR jsonb_typeof(...->'supporting_spans') IS DISTINCT FROM 'array'`) closes this precisely, before any of the three original checks run. This does not change what counts as eligible for any extraction actually produced by this codebase's real write path (which already guarantees non-null values) — it only converts a previously-silent, always-unintended bypass into an explicit, structured `ineligible` result.
+
+### Application mapping (`lib/semantic-topic/human-review-service.ts`, `lib/semantic-topic/human-review-extraction-hook.ts`)
+
+`createReviewRequest()`'s `CreateReviewRequestResult` is a discriminated union keyed on `outcome`: `'success'` (carries `outcomeKind: 'created' | 'replayed'`), `'blocked'` (carries `reasonCode: 'ALREADY_ASSIGNED' | 'LIVE_REVIEW_REQUEST_EXISTS'`), `'ineligible'` (carries `reasonCode` from the five-value ineligible set), `'database_error'`, `'invalid_rpc_response'`. It parses the RPC's JSONB body directly by field (`body.ok`, `body.outcome_kind`, `body.reason_code`), validated against closed `Set`s of the known reason codes — never a regex or `.includes()` against `body.message`. A thrown RPC exception (the two unconverted branches above, or any real connection/transport failure) is mapped uniformly to `database_error` without inspecting `error.message` at all — `mapReviewRpcError`'s shared, message-pattern-matching fallback (still used by every other 078 RPC wrapper) is deliberately **not** called from `createReviewRequest()` any more.
+
+`maybeRequestHumanReview()` (`human-review-extraction-hook.ts`) then switches exhaustively on that typed result:
+
+| `createReviewRequest()` result | `HumanReviewOrchestrationResult` |
+|---|---|
+| `{ outcome: 'success', outcomeKind: 'created' }` | `{ outcome: 'created', ... }` |
+| `{ outcome: 'success', outcomeKind: 'replayed' }` | `{ outcome: 'replayed', ... }` |
+| `{ outcome: 'blocked', reasonCode: 'LIVE_REVIEW_REQUEST_EXISTS' }` | `{ outcome: 'pending' }` |
+| `{ outcome: 'blocked', reasonCode: 'ALREADY_ASSIGNED' }` | `{ outcome: 'already_assigned' }` |
+| `{ outcome: 'ineligible', reasonCode: <any of the 5> }` | `{ outcome: 'not_eligible', message }` |
+| `{ outcome: 'database_error' | 'invalid_rpc_response' }` | `{ outcome: 'retryable_failure', message }` |
+| anything else (a future/mismatched shape TypeScript's exhaustive switch doesn't recognize) | `{ outcome: 'retryable_failure', ... }` — explicit fail-closed default, never reached if the union stays exhaustive, kept as a last-resort guard |
+
+**Fail-closed rule, restated precisely**: an unrecognized or missing `outcome_kind`/`reason_code` pair can **never** resolve to `not_eligible`, `already_assigned`, or `pending` — only an explicitly recognized, closed-set value can. Every unrecognized shape resolves to `retryable_failure`, so the caller never mistakes "we don't understand this response" for "this run is settled" and never lets an unrecognized state silently continue into the old assignment/QUARANTINE path.
+
+**`message` is diagnostic-only, by test, not just by convention**: a dedicated DB-integration test (`tests/semantic-topic-human-review-rpcs-db-integration.test.ts`, "changing the human-readable message text alone never changes outcome_kind/reason_code") and a unit test (`tests/human-review-extraction-hook.test.ts`, "not_eligible mapping is identical regardless of message content") both assert the same `outcome_kind`/`reason_code` pair with two completely different `message` strings.
+
+**No regex/message branching — proven, not just claimed**: two static source-scan tests (`tests/human-review-extraction-hook.test.ts`) strip comment lines and assert no `.test(`, `.exec(`, or `message.includes(` call exists anywhere in `human-review-extraction-hook.ts`, and no `mapReviewRpcError(` call exists inside `createReviewRequest()`'s own function body.
+
+**`tests/human-review-error-mapping.test.ts` regression, found and fixed by this gate's own full-suite run**: this pre-existing unit-test file asserted that `mapReviewRpcError` classified five `create_topic_assignment_review_request`-specific message strings as `not_eligible` — exactly the regex branch this gate removes. Since `createReviewRequest()` no longer calls `mapReviewRpcError` at all, and the RPC no longer raises those five messages (they are now structured `ineligible`/`blocked` returns), those five assertions were updated to expect the correct new behavior: an unrecognized message now falls through `mapReviewRpcError`'s generic `database_error` default. This was caught by the mandated full local `npx vitest run` — a concrete instance of why this rollout requires running the complete suite, not just the newly-written tests, before every commit.
+
+### Concurrency and replay (real parallel connections, `tests/semantic-topic-human-review-rpcs-db-integration.test.ts`)
+
+- Two concurrent creates on the same run, different keys: both processes now exit 0 (no exception); the loser's JSONB body is `{ ok: false, outcome_kind: 'blocked', reason_code: 'LIVE_REVIEW_REQUEST_EXISTS' }`, distinguished from the winner by the RPC's own `ok` field, never by process exit code.
+- An already-assigned run: `{ ok: false, outcome_kind: 'blocked', reason_code: 'ALREADY_ASSIGNED' }`, structurally, in every code path that reaches it (up-front check, post-rejection, post-CREATE_NEW-execution, post-ATTACH_EXISTING-execution).
+- Identical idempotency key + identical payload: replay, unchanged (`outcome_kind: 'replayed'`).
+- Identical key + different payload/run: unchanged, controlled `IDEMPOTENCY_KEY_REUSE` exception, raw `unique_violation` never leaks.
+
+### Migration safety (078)
+
+The updated function body is applied via a **one-time, exact-hash-gated upgrade branch**, not a general drift handler: `create_topic_assignment_review_request`'s pre-existing VALIDATE path first checks whether the *currently installed* body hash equals the one known pre-release hash this exact function has ever had in any local/disposable dev DB (`e66bbbbc216ad678965c8c6906f7903a`) — if so, and only so, it performs a scoped `DROP FUNCTION public.create_topic_assignment_review_request(UUID, TEXT)` followed by the ordinary CREATE branch, landing on the new hash (`b2dc0bf3cde341c21efc5023dd32ac04`). Any other unrecognized existing body still hits the original fail-closed drift exception, unchanged. No `CASCADE`, no overload is left behind (confirmed by the pre-existing overload-count fail-closed check), and this upgrade path is explicitly documented as a one-time pre-release transition — this function has never been deployed to production or pushed to a shared branch prior to this gate. A second migration run against the now-current body is a byte-exact no-op (verified). All 8 RPCs' topology, `cancel_topic_assignment_review_request`'s single-parameter signature, and `record_topic_assignment_decision`'s (074) body hash/signature/ACL remain unchanged and re-verified by the migration's own final self-check.
+
+### No automatic execution, unchanged
+
+Nothing in this gate changes §33/§34's guarantee: `execute_approved_topic_assignment_review` is still never called automatically by anything in this codebase.

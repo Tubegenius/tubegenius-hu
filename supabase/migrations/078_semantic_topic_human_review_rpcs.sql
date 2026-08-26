@@ -118,11 +118,30 @@ DECLARE
   v_oid oid;
   v_prosrc text;
   v_hash text;
-  v_expected_hash CONSTANT text := 'e66bbbbc216ad678965c8c6906f7903a';
+  v_expected_hash CONSTANT text := 'b2dc0bf3cde341c21efc5023dd32ac04';
+  -- Structured Orchestration Outcome Closure gate: the exact, single,
+  -- documented pre-release body hash of this function as it existed before
+  -- this gate (regex-/message-based outcome branching). This function has
+  -- never been pushed or deployed beyond a local/disposable dev DB -- see
+  -- the upgrade check just below, which recognizes ONLY this one exact
+  -- hash and performs a targeted DROP+CREATE, never a generic
+  -- drift/version-ladder handler and never a production upgrade path.
+  v_pre_release_hash CONSTANT text := 'e66bbbbc216ad678965c8c6906f7903a';
   v_expected_args CONSTANT text := 'p_extraction_run_id uuid, p_idempotency_key text';
 BEGIN
   SELECT count(*) INTO v_name_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = 'create_topic_assignment_review_request';
+
+  IF v_name_count = 1 THEN
+    SELECT p.oid INTO v_oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'create_topic_assignment_review_request';
+    SELECT prosrc INTO v_prosrc FROM pg_proc WHERE oid = v_oid;
+    IF md5(replace(v_prosrc, E'\r\n', E'\n')) = v_pre_release_hash THEN
+      RAISE NOTICE '078: create_topic_assignment_review_request has the known pre-release (regex/message-branching) body -- upgrading in place to the structured outcome_kind/reason_code contract (exact, one-time, documented transition; never deployed beyond local/disposable dev).';
+      DROP FUNCTION public.create_topic_assignment_review_request(UUID, TEXT);
+      v_name_count := 0;
+    END IF;
+  END IF;
 
   IF v_name_count = 0 THEN
     RAISE NOTICE '078: create_topic_assignment_review_request does not exist -- CREATE branch.';
@@ -160,20 +179,62 @@ BEGIN
         RAISE EXCEPTION 'create_topic_assignment_review_request: extraction_run % not found (post-lock)', p_extraction_run_id;
       END IF;
       IF v_extraction.status <> 'completed' THEN
-        RAISE EXCEPTION 'create_topic_assignment_review_request: extraction_run % is not completed (status=%)', p_extraction_run_id, v_extraction.status;
+        RETURN jsonb_build_object(
+          'ok', false, 'outcome_kind', 'ineligible', 'reason_code', 'EXTRACTION_NOT_COMPLETED',
+          'message', format('create_topic_assignment_review_request: extraction_run %s is not completed (status=%s)', p_extraction_run_id, v_extraction.status)
+        );
       END IF;
+
+      -- Structured-output null-safety (Structured Orchestration Outcome
+      -- Closure gate finding). The three eligibility checks below compare
+      -- structured_output's own fields with `<>`/`<`/jsonb_array_length. In
+      -- PL/pgSQL, `IF NULL THEN` is silently treated as false (a comparison
+      -- against SQL NULL yields NULL, never TRUE) -- so if specificity,
+      -- confidence, or supporting_spans were ever SQL NULL, every one of
+      -- those checks would be silently SKIPPED rather than failing, letting
+      -- a malformed extraction appear eligible. This guard makes that
+      -- previously-implicit precondition an explicit, structured failure.
+      -- It changes no eligibility outcome for any well-formed extraction --
+      -- every extraction actually written through the real application
+      -- validator (lib/semantic-topic/structured-output-schema.ts) already
+      -- guarantees non-null specificity/confidence/supporting_spans; this
+      -- closes the gap only for a structured_output written by any other
+      -- path.
+      IF v_extraction.structured_output IS NULL
+         OR v_extraction.structured_output->>'specificity' IS NULL
+         OR v_extraction.structured_output->>'confidence' IS NULL
+         OR jsonb_typeof(v_extraction.structured_output->'supporting_spans') IS DISTINCT FROM 'array'
+      THEN
+        RETURN jsonb_build_object(
+          'ok', false, 'outcome_kind', 'ineligible', 'reason_code', 'INVALID_STRUCTURED_OUTPUT',
+          'message', format('create_topic_assignment_review_request: extraction_run %s has a malformed or incomplete structured_output', p_extraction_run_id)
+        );
+      END IF;
+
       IF v_extraction.structured_output->>'specificity' <> 'specific' THEN
-        RAISE EXCEPTION 'create_topic_assignment_review_request: requires structured_output.specificity=specific (got %)', v_extraction.structured_output->>'specificity';
+        RETURN jsonb_build_object(
+          'ok', false, 'outcome_kind', 'ineligible', 'reason_code', 'NOT_SPECIFIC',
+          'message', format('create_topic_assignment_review_request: requires structured_output.specificity=specific (got %s)', v_extraction.structured_output->>'specificity')
+        );
       END IF;
       IF (v_extraction.structured_output->>'confidence')::numeric >= v_review_confidence_ceiling THEN
-        RAISE EXCEPTION 'create_topic_assignment_review_request: requires confidence < % (got %) -- at/above threshold goes through the automatic path, not human review', v_review_confidence_ceiling, v_extraction.structured_output->>'confidence';
+        RETURN jsonb_build_object(
+          'ok', false, 'outcome_kind', 'ineligible', 'reason_code', 'CONFIDENCE_NOT_REVIEW_ELIGIBLE',
+          'message', format('create_topic_assignment_review_request: requires confidence < %s (got %s) -- at/above threshold goes through the automatic path, not human review', v_review_confidence_ceiling, v_extraction.structured_output->>'confidence')
+        );
       END IF;
       IF jsonb_array_length(v_extraction.structured_output->'supporting_spans') < 1 THEN
-        RAISE EXCEPTION 'create_topic_assignment_review_request: requires at least one supporting_spans entry';
+        RETURN jsonb_build_object(
+          'ok', false, 'outcome_kind', 'ineligible', 'reason_code', 'NO_SUPPORTING_SPANS',
+          'message', 'create_topic_assignment_review_request: requires at least one supporting_spans entry'
+        );
       END IF;
 
       IF EXISTS (SELECT 1 FROM public.topic_assignment_decisions WHERE extraction_run_id = p_extraction_run_id) THEN
-        RAISE EXCEPTION 'create_topic_assignment_review_request: extraction_run % already has a topic_assignment_decisions row -- no new review request is possible', p_extraction_run_id;
+        RETURN jsonb_build_object(
+          'ok', false, 'outcome_kind', 'blocked', 'reason_code', 'ALREADY_ASSIGNED',
+          'message', format('create_topic_assignment_review_request: extraction_run %s already has a topic_assignment_decisions row -- no new review request is possible', p_extraction_run_id)
+        );
       END IF;
 
       -- request_payload_digest -- built from the extraction's OWN already-canonical
@@ -210,7 +271,7 @@ BEGIN
           ), 'UTF8')), 'hex');
         IF v_existing_digest = v_existing.request_operation_digest THEN
           RETURN jsonb_build_object(
-            'ok', true, 'outcome', 'replayed', 'review_request_id', v_existing.id, 'generation', v_existing.generation,
+            'ok', true, 'outcome_kind', 'replayed', 'reason_code', NULL, 'review_request_id', v_existing.id, 'generation', v_existing.generation,
             'status', v_existing.status, 'expires_at', v_existing.expires_at, 'idempotency_key', v_existing.request_idempotency_key
           );
         ELSE
@@ -247,7 +308,7 @@ BEGIN
         );
 
         RETURN jsonb_build_object(
-          'ok', true, 'outcome', 'created', 'review_request_id', v_new_id, 'generation', v_generation,
+          'ok', true, 'outcome_kind', 'created', 'reason_code', NULL, 'review_request_id', v_new_id, 'generation', v_generation,
           'status', 'pending', 'expires_at', v_expires_at, 'idempotency_key', p_idempotency_key
         );
 
@@ -267,14 +328,17 @@ BEGIN
             ), 'UTF8')), 'hex');
           IF v_existing_digest = v_existing.request_operation_digest THEN
             RETURN jsonb_build_object(
-              'ok', true, 'outcome', 'replayed', 'review_request_id', v_existing.id, 'generation', v_existing.generation,
+              'ok', true, 'outcome_kind', 'replayed', 'reason_code', NULL, 'review_request_id', v_existing.id, 'generation', v_existing.generation,
               'status', v_existing.status, 'expires_at', v_existing.expires_at, 'idempotency_key', v_existing.request_idempotency_key
             );
           ELSE
             RAISE EXCEPTION 'create_topic_assignment_review_request: IDEMPOTENCY_KEY_REUSE -- idempotency_key % already used with a different request', p_idempotency_key;
           END IF;
         ELSIF v_constraint_name = 'idx_topic_assignment_review_requests_one_live_per_run' THEN
-          RAISE EXCEPTION 'create_topic_assignment_review_request: extraction_run % already has a live (pending/approved) review request', p_extraction_run_id;
+          RETURN jsonb_build_object(
+            'ok', false, 'outcome_kind', 'blocked', 'reason_code', 'LIVE_REVIEW_REQUEST_EXISTS',
+            'message', format('create_topic_assignment_review_request: extraction_run %s already has a live (pending/approved) review request', p_extraction_run_id)
+          );
         ELSE
           RAISE;
         END IF;

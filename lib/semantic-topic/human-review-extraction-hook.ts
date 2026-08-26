@@ -34,6 +34,15 @@
 // only felügyelt pilot scripts use it manually) -- so a `not_eligible`
 // result simply means this hook does nothing further, exactly matching
 // today's actual (lack of) automatic behavior.
+//
+// STRUCTURED ORCHESTRATION OUTCOME CLOSURE gate: the switch below branches
+// exclusively on typed `result.outcome`/`result.reasonCode` fields parsed
+// by human-review-service.ts's createReviewRequest() from
+// create_topic_assignment_review_request's (078) own outcome_kind/
+// reason_code JSONB contract -- no regex, no `message.includes`, no
+// database-error-text pattern matching anywhere in this file. See
+// docs/architecture/semantic-topic-identity-v0-contract.md SS35 for the
+// full DB reason-code table and the exact SQL branch each one comes from.
 import { createReviewRequest } from './human-review-service'
 import { isHumanReviewEnabled } from './human-review-flag'
 import type { SemanticTopicAdminClient } from './human-review-types'
@@ -89,38 +98,53 @@ export async function maybeRequestHumanReview(
   const idempotencyKey = deriveHumanReviewIdempotencyKey(input.extractionRunId)
   const result = await createReviewRequest({ extractionRunId: input.extractionRunId, idempotencyKey }, input.client)
 
-  if (result.outcome === 'success') {
-    return result.result === 'created'
-      ? { outcome: 'created', reviewRequestId: result.reviewRequestId, generation: result.generation, expiresAt: result.expiresAt }
-      : { outcome: 'replayed', reviewRequestId: result.reviewRequestId, generation: result.generation, expiresAt: result.expiresAt }
+  // Structured Orchestration Outcome Closure gate: this switch branches
+  // EXCLUSIVELY on typed fields (result.outcome, result.reasonCode) that
+  // createReviewRequest() has already parsed from create_topic_assignment_review_request's
+  // (078) own outcome_kind/reason_code JSONB contract -- never on
+  // result.message text. See docs/architecture/semantic-topic-identity-v0-contract.md
+  // SS35 for the full DB reason-code table and this mapping's rationale.
+  switch (result.outcome) {
+    case 'success':
+      return result.outcomeKind === 'created'
+        ? { outcome: 'created', reviewRequestId: result.reviewRequestId, generation: result.generation, expiresAt: result.expiresAt }
+        : { outcome: 'replayed', reviewRequestId: result.reviewRequestId, generation: result.generation, expiresAt: result.expiresAt }
+
+    case 'blocked':
+      // Both reason codes in this bucket are exhaustively known and
+      // enumerated by CreateReviewRequestBlockedReasonCode -- a switch here
+      // (rather than an if/else) makes a future third value a compile-time
+      // error in this file, not a silent fail-open.
+      switch (result.reasonCode) {
+        case 'ALREADY_ASSIGNED':
+          return { outcome: 'already_assigned' }
+        case 'LIVE_REVIEW_REQUEST_EXISTS':
+          return { outcome: 'pending' }
+      }
+      break
+
+    case 'ineligible':
+      // Every value of CreateReviewRequestIneligibleReasonCode is a
+      // genuine, explicit policy-ineligibility signal from the RPC's own
+      // eligibility gate (never duplicated or second-guessed here) -- any
+      // one of them maps to the same orchestration outcome.
+      return { outcome: 'not_eligible', message: result.message }
+
+    case 'database_error':
+      // A transient RPC/transport failure -- fail-closed. The completed
+      // extraction stays untouched and safely retryable either way; this
+      // deliberately never becomes a terminal QUARANTINE decision.
+      return { outcome: 'retryable_failure', message: result.error.message }
+    case 'invalid_rpc_response':
+      // The RPC returned successfully but with a shape createReviewRequest()
+      // does not recognize (missing fields, or an outcome_kind/reason_code
+      // pair not in this codebase's closed vocabulary) -- also fail-closed.
+      return { outcome: 'retryable_failure', message: `invalid_rpc_response: ${result.operation}` }
   }
 
-  if (result.outcome === 'not_eligible') {
-    // Re-classify the RPC's single generic "not eligible" bucket into the
-    // three semantically distinct cases this orchestration contract needs
-    // (C/D from the closure gate's spec) -- never invent a new RPC-side
-    // reason value, this is purely a client-side re-read of the SAME
-    // message text create_topic_assignment_review_request already produces
-    // (see the 078 migration source for the exact three patterns matched).
-    if (/already has a topic_assignment_decisions row/.test(result.message)) {
-      return { outcome: 'already_assigned' }
-    }
-    if (/already has a live \(pending\/approved\)/.test(result.message)) {
-      return { outcome: 'pending' }
-    }
-    // Genuinely ineligible: confidence too high, non-specific, or no
-    // supporting spans -- the RPC's eligibility gate is the sole source of
-    // truth, never duplicated here.
-    return { outcome: 'not_eligible', message: result.message }
-  }
-
-  // Every other failure shape (database_error, invalid_rpc_response,
-  // unauthenticated, validation_error) is a transient/unexpected condition
-  // from this call site's perspective -- service_role calls never
-  // legitimately hit unauthenticated/validation_error here, so treating
-  // them as retryable (rather than inventing a more specific bucket) is the
-  // correct fail-closed default: the completed extraction stays untouched
-  // and safely retryable either way.
-  const message = 'message' in result ? result.message : `outcome=${result.outcome}`
-  return { outcome: 'retryable_failure', message }
+  // Unreachable if CreateReviewRequestResult's own union stays exhaustive --
+  // kept as an explicit fail-closed default (never a fail-open) in case a
+  // future outcome/reasonCode value is added to that type without this
+  // switch being updated to handle it.
+  return { outcome: 'retryable_failure', message: `unrecognized createReviewRequest result: ${JSON.stringify(result)}` }
 }

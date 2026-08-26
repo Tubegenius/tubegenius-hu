@@ -23,15 +23,49 @@
 // not just a source-scan test.
 import 'server-only'
 import { createAdminClient } from '@/lib/supabase-server'
-import { mapReviewRpcError, type ReviewOperationFailure, type SemanticTopicAdminClient } from './human-review-types'
+import {
+  mapReviewRpcError,
+  toDatabaseErrorShape,
+  type DatabaseErrorShape,
+  type ReviewOperationFailure,
+  type SemanticTopicAdminClient,
+} from './human-review-types'
 
 function admin(client?: SemanticTopicAdminClient): SemanticTopicAdminClient {
   return client ?? createAdminClient()
 }
 
+// Structured Orchestration Outcome Closure gate: create_topic_assignment_review_request
+// (078) now returns a closed, machine-readable `outcome_kind`/`reason_code`
+// pair on EVERY controlled non-success branch, instead of a RAISE EXCEPTION
+// whose message text had to be regex-matched. This type mirrors that
+// contract exactly -- see docs/architecture/semantic-topic-identity-v0-contract.md
+// SS35 for the full outcome/reason table and the exact SQL branch each one
+// comes from. `message` is carried through for logs/diagnostics only; no
+// branching anywhere may key off it.
+export type CreateReviewRequestBlockedReasonCode = 'ALREADY_ASSIGNED' | 'LIVE_REVIEW_REQUEST_EXISTS'
+export type CreateReviewRequestIneligibleReasonCode =
+  | 'EXTRACTION_NOT_COMPLETED'
+  | 'NOT_SPECIFIC'
+  | 'CONFIDENCE_NOT_REVIEW_ELIGIBLE'
+  | 'NO_SUPPORTING_SPANS'
+  | 'INVALID_STRUCTURED_OUTPUT'
+
 export type CreateReviewRequestResult =
-  | { outcome: 'success'; result: 'created' | 'replayed'; reviewRequestId: string; generation: number; status: string; expiresAt: string }
-  | ReviewOperationFailure
+  | { outcome: 'success'; outcomeKind: 'created' | 'replayed'; reviewRequestId: string; generation: number; status: string; expiresAt: string }
+  | { outcome: 'blocked'; reasonCode: CreateReviewRequestBlockedReasonCode; message: string }
+  | { outcome: 'ineligible'; reasonCode: CreateReviewRequestIneligibleReasonCode; message: string }
+  | { outcome: 'database_error'; operation: string; error: DatabaseErrorShape }
+  | { outcome: 'invalid_rpc_response'; operation: string }
+
+const BLOCKED_REASON_CODES = new Set<string>(['ALREADY_ASSIGNED', 'LIVE_REVIEW_REQUEST_EXISTS'])
+const INELIGIBLE_REASON_CODES = new Set<string>([
+  'EXTRACTION_NOT_COMPLETED',
+  'NOT_SPECIFIC',
+  'CONFIDENCE_NOT_REVIEW_ELIGIBLE',
+  'NO_SUPPORTING_SPANS',
+  'INVALID_STRUCTURED_OUTPUT',
+])
 
 // idempotencyKey is ALWAYS caller-supplied -- this wrapper never generates
 // one internally. A retry of the SAME logical create attempt must pass the
@@ -46,19 +80,55 @@ export async function createReviewRequest(
     p_extraction_run_id: input.extractionRunId,
     p_idempotency_key: input.idempotencyKey,
   })
-  if (error) return mapReviewRpcError('create_topic_assignment_review_request', error)
-  const body = data as { ok?: boolean; outcome?: string; review_request_id?: string; generation?: number; status?: string; expires_at?: string } | null
-  if (!body || body.ok !== true || !body.outcome || !body.review_request_id || typeof body.generation !== 'number' || !body.status || !body.expires_at) {
-    return { outcome: 'invalid_rpc_response', operation: 'create_topic_assignment_review_request' }
+  // create_topic_assignment_review_request's own error-thrown paths (the
+  // extraction_run not found, IDEMPOTENCY_KEY_REUSE) are deliberately NOT
+  // pattern-matched by message text here -- they remain genuine RAISE
+  // EXCEPTIONs (078's own documented contract keeps them that way; see the
+  // migration source's comments), and this wrapper treats ANY thrown error
+  // uniformly as a generic, structured database_error -- never inspecting
+  // error.message to guess a more specific outcome. mapReviewRpcError's
+  // shared, message-pattern-matching fallback is used by every OTHER 078 RPC
+  // wrapper in this module family, but deliberately not by this one.
+  if (error) return { outcome: 'database_error', operation: 'create_topic_assignment_review_request', error: toDatabaseErrorShape(error) }
+
+  const body = data as {
+    ok?: boolean
+    outcome_kind?: string
+    reason_code?: string | null
+    message?: string
+    review_request_id?: string
+    generation?: number
+    status?: string
+    expires_at?: string
+  } | null
+
+  const isSuccessKind = body?.ok === true && (body.outcome_kind === 'created' || body.outcome_kind === 'replayed')
+  if (isSuccessKind) {
+    if (!body!.review_request_id || typeof body!.generation !== 'number' || !body!.status || !body!.expires_at) {
+      return { outcome: 'invalid_rpc_response', operation: 'create_topic_assignment_review_request' }
+    }
+    return {
+      outcome: 'success',
+      outcomeKind: body!.outcome_kind as 'created' | 'replayed',
+      reviewRequestId: body!.review_request_id,
+      generation: body!.generation,
+      status: body!.status,
+      expiresAt: body!.expires_at,
+    }
   }
-  return {
-    outcome: 'success',
-    result: body.outcome as 'created' | 'replayed',
-    reviewRequestId: body.review_request_id,
-    generation: body.generation,
-    status: body.status,
-    expiresAt: body.expires_at,
+
+  if (body?.ok === false && body.outcome_kind === 'blocked' && typeof body.reason_code === 'string' && BLOCKED_REASON_CODES.has(body.reason_code)) {
+    return { outcome: 'blocked', reasonCode: body.reason_code as CreateReviewRequestBlockedReasonCode, message: body.message ?? '' }
   }
+  if (body?.ok === false && body.outcome_kind === 'ineligible' && typeof body.reason_code === 'string' && INELIGIBLE_REASON_CODES.has(body.reason_code)) {
+    return { outcome: 'ineligible', reasonCode: body.reason_code as CreateReviewRequestIneligibleReasonCode, message: body.message ?? '' }
+  }
+
+  // Any other shape (missing fields, an unrecognized outcome_kind/reason_code
+  // pair, a future RPC change this wrapper doesn't know about yet) is
+  // deliberately NOT guessed at -- it is always invalid_rpc_response, which
+  // the extraction hook's fail-closed default maps to retryable_failure.
+  return { outcome: 'invalid_rpc_response', operation: 'create_topic_assignment_review_request' }
 }
 
 export type ExpireStaleReviewRequestsResult = { outcome: 'success'; expiredCount: number; expiredIds: string[] } | ReviewOperationFailure

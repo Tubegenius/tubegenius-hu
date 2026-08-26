@@ -56,12 +56,12 @@ describe('mapReviewRpcError', () => {
     expect(mapReviewRpcError('op', pgErr('... REVIEW_REQUEST_NOT_EXECUTABLE -- status=pending'))).toEqual({ outcome: 'not_executable' })
   })
 
-  it('maps eligibility-gate messages to not_eligible (not an error the caller should see as a 500)', () => {
-    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: requires confidence < 0.8500 (got 0.90)')).outcome).toBe('not_eligible')
-    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: requires structured_output.specificity=specific (got generic)')).outcome).toBe('not_eligible')
-    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: requires at least one supporting_spans entry')).outcome).toBe('not_eligible')
-    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: extraction_run x already has a topic_assignment_decisions row -- no new review request is possible')).outcome).toBe('not_eligible')
-    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: extraction_run x already has a live (pending/approved) review request')).outcome).toBe('not_eligible')
+  it('Structured Orchestration Outcome Closure gate: create_topic_assignment_review_request eligibility-gate message text is no longer pattern-matched here -- it now falls through to database_error, because createReviewRequest() (human-review-service.ts) no longer calls mapReviewRpcError at all for this RPC, and 078 no longer raises these messages for these branches (they are structured outcome_kind/reason_code JSONB returns instead). These fixtures document the OLD message text purely to prove no accidental partial match still fires here.', () => {
+    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: requires confidence < 0.8500 (got 0.90)')).outcome).toBe('database_error')
+    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: requires structured_output.specificity=specific (got generic)')).outcome).toBe('database_error')
+    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: requires at least one supporting_spans entry')).outcome).toBe('database_error')
+    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: extraction_run x already has a topic_assignment_decisions row -- no new review request is possible')).outcome).toBe('database_error')
+    expect(mapReviewRpcError('op', pgErr('create_topic_assignment_review_request: extraction_run x already has a live (pending/approved) review request')).outcome).toBe('database_error')
   })
 
   it('maps structured-snapshot validation failures to validation_error, never to database_error', () => {

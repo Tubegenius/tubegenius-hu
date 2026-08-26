@@ -176,6 +176,14 @@ export function toDatabaseErrorShape(error: unknown): DatabaseErrorShape {
 // ReviewOperationFailure vocabulary above. Falls through to a generic
 // database_error for anything unrecognized -- never guesses at a more
 // specific outcome than the message actually proves.
+//
+// NOT used by createReviewRequest() (human-review-service.ts) -- since the
+// Structured Orchestration Outcome Closure gate, that one RPC's controlled
+// non-success branches return a typed outcome_kind/reason_code JSONB
+// payload instead of raising, and are parsed directly, never through this
+// message-pattern-matching fallback. This function still serves every OTHER
+// 078 RPC wrapper in this module family (decision/cancel/revoke/execute/
+// expire), which are unchanged by that gate.
 export function mapReviewRpcError(operation: string, error: unknown): ReviewOperationFailure {
   const shaped = toDatabaseErrorShape(error)
   const message = shaped.message
@@ -192,9 +200,6 @@ export function mapReviewRpcError(operation: string, error: unknown): ReviewOper
   if (/REVIEW_APPROVAL_NOT_REVOCABLE/.test(message)) return { outcome: 'not_revocable' }
   if (/REVIEW_REQUEST_NOT_DECIDABLE/.test(message)) return { outcome: 'not_decidable' }
   if (/REVIEW_REQUEST_NOT_EXECUTABLE/.test(message)) return { outcome: 'not_executable' }
-  if (/requires confidence <|requires structured_output\.specificity|requires at least one supporting_spans|already has a live \(pending\/approved\)|already has a topic_assignment_decisions row/.test(message)) {
-    return { outcome: 'not_eligible', message }
-  }
   if (/requires the full structured review snapshot|requires lane_neutral_confirmed|requires evidence_adequacy|requires proposed_outcome|must not supply target_semantic_topic_id|requires target_semantic_topic_id|requires a valid rejection_reason|requires reviewer_rationale/.test(message)) {
     return { outcome: 'validation_error', message }
   }
