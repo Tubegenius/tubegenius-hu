@@ -292,6 +292,7 @@ export default function ReviewDetail({ reviewRequestId, onBack }: ReviewDetailPr
 
       {actions.canDecide && (
         <DecisionForm
+          key={reviewRequestId}
           reviewRequestId={reviewRequestId}
           onApprovedOrRejected={result => {
             setBanner({

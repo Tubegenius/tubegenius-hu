@@ -52,7 +52,7 @@ export default function SemanticTopicReviewsPage() {
         </p>
       </div>
 
-      {reviewRequestId ? <ReviewDetail reviewRequestId={reviewRequestId} onBack={backToList} /> : <ReviewQueueList onOpen={openReview} />}
+      {reviewRequestId ? <ReviewDetail key={reviewRequestId} reviewRequestId={reviewRequestId} onBack={backToList} /> : <ReviewQueueList onOpen={openReview} />}
     </div>
   )
 }

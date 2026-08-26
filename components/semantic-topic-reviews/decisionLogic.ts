@@ -126,14 +126,43 @@ export function validateRejectionFields(f: RejectionFormFields): ValidationResul
 
 export interface IdempotencyAttempt {
   key: string
+  reviewRequestId: string
   payloadJson: string
 }
 
-// Retry ugyanazzal a payloaddal -> ugyanaz a kulcs (network timeout után NEM
-// generál új kulcsot). Bármilyen mezőmódosítás (== eltérő payloadJson) ->
-// friss kulcs. `makeKey` injektálva, hogy a teszt determinisztikus tudjon
-// lenni crypto.randomUUID() mockolása nélkül is.
-export function resolveIdempotencyKey(previous: IdempotencyAttempt | null, payloadJson: string, makeKey: () => string): IdempotencyAttempt {
-  if (previous && previous.payloadJson === payloadJson) return previous
-  return { key: makeKey(), payloadJson }
+// Reviewer UI Runtime and Visual QA Closure gate finding: an earlier
+// version of this function compared ONLY `payloadJson`, never
+// `reviewRequestId` -- if a caller ever held onto a stale `previous` value
+// across two DIFFERENT review requests that happened to produce a
+// byte-identical canonical payload (a real, reachable risk once
+// DecisionForm/ReviewDetail are mounted once and re-used across an `id`
+// prop change, e.g. via direct URL edits or certain browser back/forward
+// sequences -- not merely a hypothetical), the second request's decision
+// would have silently reused the FIRST request's idempotency key. The DB's
+// own decision_idempotency_key uniqueness constraint would likely have
+// caught this as a confusing IDEMPOTENCY_KEY_REUSE conflict rather than
+// corrupting data, but it is still a genuine cross-request isolation bug,
+// not merely a UX nuisance.
+//
+// Fixed on two independent layers (defense in depth, not just one):
+// 1. Structural: DecisionForm.tsx / ReviewDetail.tsx are now mounted with
+//    `key={reviewRequestId}` wherever they appear, so React fully
+//    unmounts and remounts them (discarding every internal ref/state,
+//    including any in-flight idempotency attempt) whenever the request
+//    identity changes -- this is the primary, structural guarantee.
+// 2. Logical: this function itself now REQUIRES `reviewRequestId` as an
+//    explicit part of the identity check, so even if some future refactor
+//    ever removed the `key` prop above, a stale attempt from a DIFFERENT
+//    request can never be silently reused -- it fails closed to a fresh
+//    key instead.
+//
+// Retry semantics, unchanged and still exactly right: the SAME request +
+// an unmodified payload (an unknown-outcome retry, e.g. after a dropped
+// connection) reuses the SAME key; the SAME request with a modified
+// payload gets a fresh key; a DIFFERENT request -- even with a coincidentally
+// identical payload -- also always gets a fresh key. `makeKey` is injected
+// so this stays unit-testable without mocking crypto.randomUUID().
+export function resolveIdempotencyKey(previous: IdempotencyAttempt | null, reviewRequestId: string, payloadJson: string, makeKey: () => string): IdempotencyAttempt {
+  if (previous && previous.reviewRequestId === reviewRequestId && previous.payloadJson === payloadJson) return previous
+  return { key: makeKey(), reviewRequestId, payloadJson }
 }

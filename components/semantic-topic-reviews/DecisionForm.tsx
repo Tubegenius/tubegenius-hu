@@ -64,6 +64,8 @@ export default function DecisionForm({ reviewRequestId, onApprovedOrRejected, on
   const firstErrorRef = useRef<HTMLDivElement>(null)
 
   const lastAttemptRef = useRef<IdempotencyAttempt | null>(null)
+  // Szinkron re-entrancy zár -- lásd submit() elején a magyarázatot.
+  const inFlightRef = useRef(false)
 
   function selectOutcome(next: DecisionOutcome) {
     if (outcome === next) return
@@ -117,11 +119,20 @@ export default function DecisionForm({ reviewRequestId, onApprovedOrRejected, on
   }
 
   async function submit(payload: StructuredDecisionPayload) {
+    // Szinkron, React state-frissítéstől független double-submit zár --
+    // egy state-alapú `submitting` check/set NEM lenne feltétlenül elég
+    // gyors két, ütemezés szerint egymást azonnal követő kattintás ellen
+    // (a re-render nem garantáltan fut le a második esemény előtt); egy
+    // ref viszont AZONNAL, szinkron módon frissül.
+    if (inFlightRef.current) return
+    inFlightRef.current = true
+
     const payloadJson = JSON.stringify(payload)
-    // Retry ugyanazzal a payloaddal -> ugyanaz a kulcs. Bármilyen módosítás
-    // -> friss kulcs. Ez pontosan a decision idempotency szerződés -- lásd
-    // decisionLogic.ts:resolveIdempotencyKey és annak dedikált tesztjeit.
-    const attempt = resolveIdempotencyKey(lastAttemptRef.current, payloadJson, generateIdempotencyKey)
+    // Retry ugyanazzal a request-tel és változatlan payloaddal -> ugyanaz a
+    // kulcs. Bármilyen módosítás, VAGY egy másik review request -> friss
+    // kulcs. Lásd decisionLogic.ts:resolveIdempotencyKey és annak dedikált
+    // tesztjeit a cross-request izolációs garanciáért.
+    const attempt = resolveIdempotencyKey(lastAttemptRef.current, reviewRequestId, payloadJson, generateIdempotencyKey)
     const key = attempt.key
     lastAttemptRef.current = attempt
 
@@ -148,6 +159,7 @@ export default function DecisionForm({ reviewRequestId, onApprovedOrRejected, on
       setServerError('Hálózati hiba történt. A megegyező adatokkal újrapróbálható, anélkül hogy duplikált döntés jönne létre.')
     } finally {
       setSubmitting(false)
+      inFlightRef.current = false
     }
   }
 

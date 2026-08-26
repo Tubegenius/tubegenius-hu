@@ -157,7 +157,7 @@ describe('resolveIdempotencyKey -- decision submission idempotency', () => {
   it('generates a fresh key on the first attempt', () => {
     let calls = 0
     const makeKey = () => `key-${++calls}`
-    const attempt = resolveIdempotencyKey(null, '{"a":1}', makeKey)
+    const attempt = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
     expect(attempt.key).toBe('key-1')
     expect(calls).toBe(1)
   })
@@ -165,8 +165,8 @@ describe('resolveIdempotencyKey -- decision submission idempotency', () => {
   it('reuses the SAME key when the payload is unchanged (network-timeout retry)', () => {
     let calls = 0
     const makeKey = () => `key-${++calls}`
-    const first = resolveIdempotencyKey(null, '{"a":1}', makeKey)
-    const retry = resolveIdempotencyKey(first, '{"a":1}', makeKey)
+    const first = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
+    const retry = resolveIdempotencyKey(first, 'req-1', '{"a":1}', makeKey)
     expect(retry.key).toBe(first.key)
     expect(calls).toBe(1) // makeKey never called a second time
   })
@@ -174,9 +174,44 @@ describe('resolveIdempotencyKey -- decision submission idempotency', () => {
   it('generates a NEW key when the payload changed (explicit modified decision)', () => {
     let calls = 0
     const makeKey = () => `key-${++calls}`
-    const first = resolveIdempotencyKey(null, '{"a":1}', makeKey)
-    const modified = resolveIdempotencyKey(first, '{"a":2}', makeKey)
+    const first = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
+    const modified = resolveIdempotencyKey(first, 'req-1', '{"a":2}', makeKey)
     expect(modified.key).not.toBe(first.key)
+    expect(calls).toBe(2)
+  })
+
+  it('generates a NEW key for a DIFFERENT review request even with an identical payload (cross-request isolation)', () => {
+    let calls = 0
+    const makeKey = () => `key-${++calls}`
+    const first = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
+    const otherRequestSamePayload = resolveIdempotencyKey(first, 'req-2', '{"a":1}', makeKey)
+    expect(otherRequestSamePayload.key).not.toBe(first.key)
+    expect(otherRequestSamePayload.reviewRequestId).toBe('req-2')
+    expect(calls).toBe(2)
+  })
+
+  it('never lets a stale attempt leak back in after switching requests and switching back', () => {
+    let calls = 0
+    const makeKey = () => `key-${++calls}`
+    const first = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
+    const switched = resolveIdempotencyKey(first, 'req-2', '{"a":1}', makeKey)
+    const backToOriginalRequest = resolveIdempotencyKey(switched, 'req-1', '{"a":1}', makeKey)
+    expect(backToOriginalRequest.key).not.toBe(first.key)
+    expect(backToOriginalRequest.key).not.toBe(switched.key)
+    expect(calls).toBe(3)
+  })
+
+  it('a successful decision is never reused by a subsequent, new decision attempt on the same request', () => {
+    // Models DecisionForm's real lifecycle: after a successful submit, the
+    // component either unmounts (navigates back to the list) or the caller
+    // resets its attempt ref to null before allowing a brand-new decision --
+    // it must never hand the old IdempotencyAttempt back into
+    // resolveIdempotencyKey for a fresh submission.
+    let calls = 0
+    const makeKey = () => `key-${++calls}`
+    const first = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
+    const afterSuccessReset = resolveIdempotencyKey(null, 'req-1', '{"a":1}', makeKey)
+    expect(afterSuccessReset.key).not.toBe(first.key)
     expect(calls).toBe(2)
   })
 })
