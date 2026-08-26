@@ -153,7 +153,12 @@ describe('runShadowExtraction', () => {
 
     const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-1' })
 
-    expect(result).toEqual({ outcome: 'cache_hit', extractionRunId: 'cached-run-id' })
+    // humanReview: disabled by default (SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED
+    // is unset in this unit-test environment) -- added by the Application
+    // Integration Closure gate; see extraction-service.ts's cache_hit
+    // branch and human-review-extraction-hook.ts for why cache_hit must
+    // also carry this field, not just the completed branch.
+    expect(result).toEqual({ outcome: 'cache_hit', extractionRunId: 'cached-run-id', humanReview: { outcome: 'disabled' } })
     expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
   })

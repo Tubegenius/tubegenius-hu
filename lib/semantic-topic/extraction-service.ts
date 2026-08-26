@@ -61,6 +61,7 @@ import {
 } from './ai-quota'
 import { callAnthropicForExtraction, classifyProviderError, isDefinitelyUnbilledProviderError } from './provider-adapter'
 import { findCompletedExtractionRun, recordCompletedExtractionRun, recordFailedExtractionRun } from './extraction-writer'
+import { maybeRequestHumanReview, type HumanReviewOrchestrationResult } from './human-review-extraction-hook'
 import { assertPromptTemplateRegistered } from '@/lib/prompts/template-registry'
 import '@/lib/prompts/catalog'
 import type { SemanticTopicAdminClient } from './quota-types'
@@ -135,13 +136,27 @@ export interface ShadowExtractionInput {
 
 export type ShadowExtractionResult =
   | { outcome: 'input_too_large'; totalInputBytes: number }
-  | { outcome: 'cache_hit'; extractionRunId: string }
+  // cache_hit ALSO carries humanReview (same reasoning as completed below):
+  // a cache-hit run is just as much a "completed extraction that now
+  // exists" as a freshly-produced one -- if the hook were skipped here, a
+  // run that was first shadow-extracted while the flag was off (or before
+  // this integration existed at all) would NEVER get a review request even
+  // after the flag turns on, since every later call for the identical
+  // evidence/config would keep landing on this cache-hit branch instead of
+  // 'completed'. Found and fixed during this gate's own live E2E test.
+  | { outcome: 'cache_hit'; extractionRunId: string; humanReview: HumanReviewOrchestrationResult }
   | { outcome: 'disabled_or_rejected'; message: string }
   | { outcome: 'budget_exhausted' }
   | { outcome: 'attempt_not_started'; reservationId: string; message: string }
   | { outcome: 'uncertain'; reservationId: string; errorClass: string }
   | { outcome: 'failed'; reservationId: string; extractionRunId: string; errorClass: string; capBreach: boolean }
-  | { outcome: 'completed'; reservationId: string; extractionRunId: string; structuredOutput: TopicExtractionOutputV1; capBreach: boolean }
+  // humanReview: added by the Application Integration Closure gate -- see
+  // human-review-extraction-hook.ts. Always present (never optional), so
+  // every caller must explicitly handle it. Flag=false (the default)
+  // resolves it to { outcome: 'disabled' } with zero extra DB/network
+  // calls -- every OTHER field on this branch is byte-identical to before
+  // this field was added.
+  | { outcome: 'completed'; reservationId: string; extractionRunId: string; structuredOutput: TopicExtractionOutputV1; capBreach: boolean; humanReview: HumanReviewOrchestrationResult }
 
 export async function runShadowExtraction(input: ShadowExtractionInput): Promise<ShadowExtractionResult> {
   assertPromptTemplateRegistered(SEMANTIC_TOPIC_PROMPT_ID, SEMANTIC_TOPIC_PROMPT_VERSION, SEMANTIC_TOPIC_PROMPT_LOCALE)
@@ -174,7 +189,8 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   // 1. Completed-cache pre-check -- read-only, no reservation spent.
   const cached = await findCompletedExtractionRun(input.signalEvidenceId, normalizedInputDigest, extractionConfigDigest, input.client)
   if (cached) {
-    return { outcome: 'cache_hit', extractionRunId: cached.extractionRunId }
+    const humanReview = await maybeRequestHumanReview({ extractionRunId: cached.extractionRunId, client: input.client })
+    return { outcome: 'cache_hit', extractionRunId: cached.extractionRunId, humanReview }
   }
 
   const { system, user } = buildPrompts(normalizedInput)
@@ -311,5 +327,15 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   }, input.client)
   await finalizeAiProviderReservationOutcome(reservationId, recorded.extractionRunId, 'completed', input.client)
 
-  return { outcome: 'completed', reservationId, extractionRunId: recorded.extractionRunId, structuredOutput: validation.value, capBreach }
+  // 8. Human-Reviewed Candidate Workflow integration point (Application
+  // Integration Closure gate). This call lives HERE, inside this function,
+  // because a repository-wide audit confirmed runShadowExtraction() has no
+  // external orchestrator to hook into instead -- see
+  // human-review-extraction-hook.ts's header for the full rationale.
+  // Flag=false (the default) makes maybeRequestHumanReview() an immediate,
+  // zero-side-effect no-op -- every field above this line is computed
+  // exactly as before this integration existed.
+  const humanReview = await maybeRequestHumanReview({ extractionRunId: recorded.extractionRunId, client: input.client })
+
+  return { outcome: 'completed', reservationId, extractionRunId: recorded.extractionRunId, structuredOutput: validation.value, capBreach, humanReview }
 }

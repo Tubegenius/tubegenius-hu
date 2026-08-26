@@ -12,11 +12,16 @@
 //
 // This module must never be imported from anything under components/ or any
 // 'use client' file -- it calls createAdminClient(), which reads
-// SUPABASE_SERVICE_ROLE_KEY. There is no build-time enforcement of this in
-// the repo today (no `server-only` package, no custom ESLint rule -- see the
-// existing lib/semantic-topic/* modules, which rely on the same convention),
-// so this is the same discipline every other admin-client module in this
-// codebase already depends on, not a new gap introduced here.
+// SUPABASE_SERVICE_ROLE_KEY. Enforced at BUILD TIME (not just by
+// convention) via `import 'server-only'` -- a LOCAL, network-free
+// reimplementation of the official `server-only` npm package (that package
+// is not present anywhere in this repo's dependency graph, and installing
+// one from the network was out of scope for this gate; see
+// docs/architecture/semantic-topic-identity-v0-contract.md SS34 for the
+// exact rationale and the build-time proof this reproduction really works).
+// A client-bundle import of this module now fails the Next.js build itself,
+// not just a source-scan test.
+import 'server-only'
 import { createAdminClient } from '@/lib/supabase-server'
 import { mapReviewRpcError, type ReviewOperationFailure, type SemanticTopicAdminClient } from './human-review-types'
 

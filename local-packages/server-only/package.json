@@ -1,0 +1,8 @@
+{
+  "name": "server-only",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local, network-free reimplementation of the official `server-only` npm package. The official package is not present anywhere in this repo's dependency graph, and no package may be installed from the network for this gate -- see docs/architecture/semantic-topic-identity-v0-contract.md SS34 for the exact rationale and the build-time proof this reproduction really works. `main` (index.js) is a no-op, resolved by Node.js/server contexts (vitest tests, Next.js server components/API routes) -- these must NOT throw, only a genuine client-bundle import must. `browser` (error.js) is what a browser-targeted bundler resolves instead. Empirically confirmed: Next.js's build additionally has a built-in check keyed on the literal import specifier 'server-only' itself (a client-bundle import of this exact module name fails the build with Next.js's own official error message, verified before this package existed under any other name) -- the browser-field split matters for correctness in every OTHER bundler/runtime, and is kept for that reason even though Next.js's own detection does not strictly require it.",
+  "main": "index.js",
+  "browser": "error.js"
+}
