@@ -29,7 +29,6 @@ import {
 } from './support/db'
 import { loginAs } from './support/login'
 
-const PASSWORD = 'PwTest12345!'
 
 let reviewer: TestUser
 let nonReviewer: TestUser
@@ -41,8 +40,8 @@ test.beforeAll(async () => {
   assertLocalStackAvailable()
   expect(getAiExtractionControlEnabled(), 'ai_extraction_control must start false').toBe(false)
 
-  reviewer = await createTestUser(`${RUN_MARKER}-reviewer`, PASSWORD)
-  nonReviewer = await createTestUser(`${RUN_MARKER}-nonreviewer`, PASSWORD)
+  reviewer = await createTestUser(`${RUN_MARKER}-reviewer`)
+  nonReviewer = await createTestUser(`${RUN_MARKER}-nonreviewer`)
   userIds.push(reviewer.id, nonReviewer.id)
   seedReviewerAllowlist(reviewer.id, `${RUN_MARKER} Playwright E2E fixture -- not a real bootstrap`)
   seedProfileOnboarded(reviewer.id)
@@ -85,7 +84,7 @@ test.describe('A - Authentication and authorization', () => {
   })
 
   test('authenticated non-reviewer sees Access denied, no data leak', async ({ page }) => {
-    await loginAs(page, nonReviewer.email, PASSWORD)
+    await loginAs(page, nonReviewer.email, nonReviewer.password)
     const apiResponse = page.waitForResponse((r) => r.url().includes('/api/admin/semantic-topic-reviews') && r.request().method() === 'GET')
     await page.goto('/dashboard/semantic-topic-reviews')
     const res = await apiResponse
@@ -112,7 +111,7 @@ test.describe('B - Pending queue and detail', () => {
   })
 
   test('reviewer sees the request in the pending queue, opens it via a real click, and evidence/confidence/XSS render safely', async ({ page }) => {
-    await loginAs(page, reviewer.email, PASSWORD)
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto('/dashboard/semantic-topic-reviews')
 
     const row = page.locator('li, div').filter({ hasText: `${RUN_MARKER}-b-queue phenomenon` }).first()
@@ -162,7 +161,7 @@ test.describe('C - CREATE_NEW approval', () => {
     page.on('console', (msg) => { if (msg.type() === 'error') consoleErrors.push(msg.text()) })
     page.on('pageerror', (err) => consoleErrors.push(String(err)))
 
-    await loginAs(page, reviewer.email, PASSWORD)
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
     // -- client-side validation: select approve, submit immediately empty --
@@ -223,7 +222,7 @@ test.describe('D - Rejection', () => {
   })
 
   test('rejection requires confirmation, then produces exactly one terminal QUARANTINE decision', async ({ page }) => {
-    await loginAs(page, reviewer.email, PASSWORD)
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
     await page.getByRole('radio', { name: '⛔ Elutasítás' }).click()
@@ -265,7 +264,7 @@ test.describe('E - ATTACH_EXISTING approval', () => {
   })
 
   test('an invalid UUID is rejected client-side; a valid local target topic approves and executes as a new membership only', async ({ page }) => {
-    await loginAs(page, reviewer.email, PASSWORD)
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
     await fillApprovalCommonFields(page, label)
@@ -310,7 +309,7 @@ test.describe('F - Cancel pending request', () => {
   })
 
   test('cancelling a pending request requires confirmation and reaches a terminal, action-free state', async ({ page }) => {
-    await loginAs(page, reviewer.email, PASSWORD)
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
     await page.getByRole('button', { name: 'Kérés visszavonása (cancel)' }).click()
@@ -344,7 +343,7 @@ test.describe('G - Revoke approval', () => {
   })
 
   test('revoking an approved-but-not-yet-executed request removes the revoke action and blocks execution', async ({ page }) => {
-    await loginAs(page, reviewer.email, PASSWORD)
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
     await fillApprovalCommonFields(page, label)
@@ -382,7 +381,7 @@ test.describe('Idempotency regression', () => {
   test('a rapid double-click on submit produces exactly one decision request and one DB decision', async ({ page }) => {
     const { reviewRequestId } = createReviewRequest('idem-doubleclick')
     try {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
       await fillApprovalCommonFields(page, `${RUN_MARKER}-idem-doubleclick canonical label`)
@@ -407,7 +406,7 @@ test.describe('Idempotency regression', () => {
   test('an unchanged retry after a simulated dropped response reuses the same key and produces no duplicate decision', async ({ page }) => {
     const { reviewRequestId } = createReviewRequest('idem-retry')
     try {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
       await fillApprovalCommonFields(page, `${RUN_MARKER}-idem-retry canonical label`)
       await page.getByRole('radio', { name: '🆕 Új topic létrehozása' }).click()
@@ -452,7 +451,7 @@ test.describe('Idempotency regression', () => {
     const first = createReviewRequest('idem-cross-a')
     const second = createReviewRequest('idem-cross-b')
     try {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       const sameLabel = 'identical payload across two different requests'
 
       await page.goto(`/dashboard/semantic-topic-reviews?id=${first.reviewRequestId}`)
@@ -485,7 +484,7 @@ test.describe('Accessibility and responsive layout', () => {
   test('keyboard-only decision flow: tab order, Enter/Space activation, and focus-visible', async ({ page }) => {
     const { reviewRequestId } = createReviewRequest('a11y-keyboard')
     try {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
       const approveRadio = page.getByRole('radio', { name: '✅ Jóváhagyás' })
@@ -505,7 +504,7 @@ test.describe('Accessibility and responsive layout', () => {
   test('cancel confirmation modal: focus trap and Escape-to-close', async ({ page }) => {
     const { reviewRequestId } = createReviewRequest('a11y-modal')
     try {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
 
       await page.getByRole('button', { name: 'Kérés visszavonása (cancel)' }).click()
@@ -529,7 +528,7 @@ test.describe('Accessibility and responsive layout', () => {
   test('desktop and narrow mobile viewports render the queue and detail without horizontal overflow', async ({ page }) => {
     const { reviewRequestId } = createReviewRequest('a11y-viewport')
     try {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
 
       await page.setViewportSize({ width: 1280, height: 900 })
       await page.goto('/dashboard/semantic-topic-reviews')

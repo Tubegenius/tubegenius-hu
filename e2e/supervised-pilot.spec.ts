@@ -42,7 +42,6 @@ import {
 } from './support/db'
 import { loginAs } from './support/login'
 
-const PASSWORD = 'PwTest12345!'
 const REVIEW_CONFIDENCE_CEILING = 0.85 // read from the 078 RPC contract, never invented here
 
 let reviewer: TestUser
@@ -53,7 +52,7 @@ test.describe.configure({ mode: 'serial' })
 test.beforeAll(async () => {
   assertLocalStackAvailable()
   expect(getAiExtractionControlEnabled(), 'ai_extraction_control must start false').toBe(false)
-  reviewer = await createTestUser(`${RUN_MARKER}-pilot-reviewer`, PASSWORD)
+  reviewer = await createTestUser(`${RUN_MARKER}-pilot-reviewer`)
   userIds.push(reviewer.id)
   seedReviewerAllowlist(reviewer.id, `${RUN_MARKER} supervised local pilot -- not a real bootstrap`)
   seedProfileOnboarded(reviewer.id)
@@ -151,7 +150,7 @@ test.describe('Reviewer decisions (real browser)', () => {
     const label = `${RUN_MARKER}-pilot-01 Urban beekeeping renaissance`
 
     await test.step('reviewer logs in and opens the candidate', async () => {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
       await expect(page.getByRole('radio', { name: '✅ Jóváhagyás' })).toBeVisible()
     })
@@ -200,7 +199,7 @@ test.describe('Reviewer decisions (real browser)', () => {
     const { reviewRequestId } = createReviewRequest('pilot-02-attach-existing')
 
     await test.step('reviewer opens the candidate and fills the approval form for ATTACH_EXISTING', async () => {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
       await page.getByRole('radio', { name: '✅ Jóváhagyás' }).click()
       await page.getByLabel('Kanonikus topic-címke').fill(`${RUN_MARKER}-pilot-02 Sourdough starter maintenance ritual`)
@@ -249,7 +248,7 @@ test.describe('Reviewer decisions (real browser)', () => {
     rejectedExtractionRunId = extractionRunId
 
     await test.step('reviewer selects rejection with a documented reason and rationale', async () => {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
       await page.getByRole('radio', { name: '⛔ Elutasítás' }).click()
       await page.getByLabel('Elutasítás oka').selectOption('duplicate_without_valid_target')
@@ -282,7 +281,7 @@ test.describe('Reviewer decisions (real browser)', () => {
     const { reviewRequestId } = createReviewRequest('pilot-04-cancel')
 
     await test.step('reviewer cancels the pending request with confirmation', async () => {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
       await page.getByRole('button', { name: 'Kérés visszavonása (cancel)' }).click()
       const modal = page.getByRole('dialog')
@@ -302,7 +301,7 @@ test.describe('Reviewer decisions (real browser)', () => {
     const label = `${RUN_MARKER}-pilot-05 Competitive speedcubing technique innovations`
 
     await test.step('reviewer approves as CREATE_NEW', async () => {
-      await loginAs(page, reviewer.email, PASSWORD)
+      await loginAs(page, reviewer.email, reviewer.password)
       await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
       await page.getByRole('radio', { name: '✅ Jóváhagyás' }).click()
       await page.getByLabel('Kanonikus topic-címke').fill(label)

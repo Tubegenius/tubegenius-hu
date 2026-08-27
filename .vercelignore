@@ -1,2 +1,11 @@
 .codex-dev-server.err.log
 .codex-dev-server.log
+
+# Local Playwright E2E assets -- never part of the deploy artifact. Next.js
+# build never touches these (they live outside app/), but excluding them
+# here keeps the uploaded source bundle itself clean too.
+e2e/
+playwright.config.ts
+test-results/
+playwright-report/
+e2e/.auth/

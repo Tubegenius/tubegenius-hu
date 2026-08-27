@@ -32,7 +32,21 @@ export interface TestUser {
   password: string
 }
 
-export async function createTestUser(emailPrefix: string, password: string): Promise<TestUser> {
+// A fresh, strong password per test user per run -- never a fixed, repo-
+// committed literal. Never logged, printed to a report, or included in a
+// Playwright trace: it only ever exists in this Node-side process memory
+// and inside the (browser-side, type="password", therefore masked) login
+// form field -- Playwright's trace/video capture covers only the page's
+// own browser activity, never this file's Node-side fetch() calls.
+export function generateTestPassword(): string {
+  const random = crypto.randomBytes(18).toString('base64url')
+  // Append one of each required character class so this passes even a
+  // stricter-than-default GoTrue password policy, regardless of what
+  // randomBytes happened to produce.
+  return `${random}Aa1!`
+}
+
+export async function createTestUser(emailPrefix: string, password: string = generateTestPassword()): Promise<TestUser> {
   const email = `${emailPrefix}@example.test`
   const res = await fetch(`${LOCAL_SUPABASE_URL}/auth/v1/admin/users`, {
     method: 'POST',

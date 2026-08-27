@@ -4,26 +4,25 @@
 // click) -- never element.click()/dispatchEvent() and never a direct
 // reviewer-API/wrapper call in place of the browser action.
 import { test, expect } from '@playwright/test'
-import { createTestUser, deleteTestUser } from './support/auth'
+import { createTestUser, deleteTestUser, type TestUser } from './support/auth'
 import { assertLocalStackAvailable, createReviewRequest, seedReviewerAllowlist, seedProfileOnboarded, cleanupRunFixtures, RUN_MARKER } from './support/db'
 import { loginAs } from './support/login'
 
 test.describe('Diagnostic: CREATE_NEW approval submit', () => {
-  let reviewerId: string
+  let reviewer: TestUser
   let reviewRequestId: string
 
   test.beforeAll(async () => {
     assertLocalStackAvailable()
-    const reviewer = await createTestUser(`${RUN_MARKER}-diag-reviewer`, 'PwTest12345!')
-    reviewerId = reviewer.id
-    seedReviewerAllowlist(reviewerId, `${RUN_MARKER} diagnostic fixture -- not a real bootstrap`)
-    seedProfileOnboarded(reviewerId)
+    reviewer = await createTestUser(`${RUN_MARKER}-diag-reviewer`)
+    seedReviewerAllowlist(reviewer.id, `${RUN_MARKER} diagnostic fixture -- not a real bootstrap`)
+    seedProfileOnboarded(reviewer.id)
     ;({ reviewRequestId } = createReviewRequest('diag'))
   })
 
   test.afterAll(async () => {
-    cleanupRunFixtures([reviewerId])
-    await deleteTestUser(reviewerId)
+    cleanupRunFixtures([reviewer.id])
+    await deleteTestUser(reviewer.id)
   })
 
   test('locator-driven submit either fires the decision request or surfaces a real diagnosable failure', async ({ page }) => {
@@ -34,7 +33,7 @@ test.describe('Diagnostic: CREATE_NEW approval submit', () => {
     })
     page.on('pageerror', (err) => pageErrors.push(String(err)))
 
-    await loginAs(page, `${RUN_MARKER}-diag-reviewer@example.test`, 'PwTest12345!')
+    await loginAs(page, reviewer.email, reviewer.password)
     await page.goto(`/dashboard/semantic-topic-reviews?id=${reviewRequestId}`)
     await expect(page.getByRole('radio', { name: '✅ Jóváhagyás' })).toBeVisible()
 
