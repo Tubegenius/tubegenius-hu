@@ -64,7 +64,16 @@ import { findCompletedExtractionRun, recordCompletedExtractionRun, recordFailedE
 import { maybeRequestHumanReview, type HumanReviewOrchestrationResult } from './human-review-extraction-hook'
 import { assertPromptTemplateRegistered } from '@/lib/prompts/template-registry'
 import '@/lib/prompts/catalog'
-import type { SemanticTopicAdminClient } from './quota-types'
+import type { AiQuotaOperationFailure, SemanticTopicAdminClient } from './quota-types'
+
+// Closed, stable discriminant for why a reservation attempt was rejected or
+// never truly began -- exactly AiQuotaOperationFailure's own `outcome`
+// union (quota-types.ts), re-exported here so a caller (the supervised
+// intake runner in particular) can branch on a real code instead of parsing
+// the free-text `message` field, which stays present unchanged for
+// diagnostics/logging only. Added for the supervised intake runner without
+// changing any existing field's value or removing anything.
+export type ExtractionRejectionReasonCode = AiQuotaOperationFailure['outcome']
 
 // Correction-gate item 3: conservative, provable upper bound (see
 // extraction-config.ts AI_QUOTA_INPUT_TOKEN_SAFETY_MARGIN header) -- UTF-8
@@ -145,9 +154,9 @@ export type ShadowExtractionResult =
   // evidence/config would keep landing on this cache-hit branch instead of
   // 'completed'. Found and fixed during this gate's own live E2E test.
   | { outcome: 'cache_hit'; extractionRunId: string; humanReview: HumanReviewOrchestrationResult }
-  | { outcome: 'disabled_or_rejected'; message: string }
+  | { outcome: 'disabled_or_rejected'; reasonCode: ExtractionRejectionReasonCode; message: string }
   | { outcome: 'budget_exhausted' }
-  | { outcome: 'attempt_not_started'; reservationId: string; message: string }
+  | { outcome: 'attempt_not_started'; reservationId: string; reasonCode: ExtractionRejectionReasonCode; message: string }
   | { outcome: 'uncertain'; reservationId: string; errorClass: string }
   | { outcome: 'failed'; reservationId: string; extractionRunId: string; errorClass: string; capBreach: boolean }
   // humanReview: added by the Application Integration Closure gate -- see
@@ -217,7 +226,7 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   if (reservation.outcome === 'budget_exhausted') return { outcome: 'budget_exhausted' }
   if (reservation.outcome !== 'reserved') {
     const message = 'message' in reservation ? reservation.message : reservation.outcome
-    return { outcome: 'disabled_or_rejected', message: String(message) }
+    return { outcome: 'disabled_or_rejected', reasonCode: reservation.outcome, message: String(message) }
   }
   const reservationId = reservation.reservationId
 
@@ -232,7 +241,7 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   if (started.outcome !== 'success') {
     await releaseAiProviderUnits(reservationId, input.client)
     const message = 'message' in started ? started.message : started.outcome
-    return { outcome: 'attempt_not_started', reservationId, message: String(message) }
+    return { outcome: 'attempt_not_started', reservationId, reasonCode: started.outcome, message: String(message) }
   }
 
   // 5. Exactly one provider call.

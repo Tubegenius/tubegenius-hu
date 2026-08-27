@@ -202,7 +202,28 @@ describe('runShadowExtraction', () => {
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
   })
 
-  it('timeout BEFORE the call: markAttemptStarted fails -> release, never outcome_unknown', async () => {
+  it('reservation disabled/rejected: exposes a stable reasonCode alongside the existing message, no provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'invalid_request', message: 'ai_extraction_control.enabled is false' })
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-2b' })
+
+    expect(result).toEqual({ outcome: 'disabled_or_rejected', reasonCode: 'invalid_request', message: 'ai_extraction_control.enabled is false' })
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('reservation disabled/rejected: a database_error reservation outcome carries reasonCode database_error, not a free-text-derived value', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'database_error', operation: 'reserve_ai_provider_units', error: { message: 'connection reset' } })
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-2c' })
+
+    expect(result.outcome).toBe('disabled_or_rejected')
+    expect((result as { reasonCode: string }).reasonCode).toBe('database_error')
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('timeout BEFORE the call: markAttemptStarted fails -> release, never outcome_unknown, reasonCode reflects the underlying quota-op outcome', async () => {
     mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
     mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'reserved', reservationId: 'res-1' })
     mockedFn(markAiProviderAttemptStarted).mockResolvedValue({ outcome: 'invalid_transition', message: 'timed out marking started' })
@@ -211,6 +232,8 @@ describe('runShadowExtraction', () => {
     const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-3' })
 
     expect(result.outcome).toBe('attempt_not_started')
+    expect((result as { reasonCode: string }).reasonCode).toBe('invalid_transition')
+    expect((result as { message: string }).message).toBe('timed out marking started')
     expect(mockedFn(releaseAiProviderUnits)).toHaveBeenCalledWith('res-1', undefined)
     expect(mockedFn(markAiProviderOutcomeUnknown)).not.toHaveBeenCalled()
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
