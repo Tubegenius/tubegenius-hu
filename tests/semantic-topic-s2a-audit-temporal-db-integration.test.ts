@@ -127,6 +127,74 @@ function restoreS3AExtractionRunFk() {
   `)
 }
 
+// Since migration 079 (PFM Supervised Production Candidate Intake v0),
+// three of this suite's own drift-experiment tables --
+// topic_extraction_runs, topic_assignment_review_requests (077), and
+// ai_provider_budget_reservations (075) -- gained NEW incoming FKs from
+// supervised_intake_batch_items / supervised_intake_attempts /
+// supervised_intake_events, none of which existed when
+// dropHumanReviewObjects()/dropS2AObjects() and the explicit
+// `DROP TABLE ... topic_extraction_runs CASCADE` in the topology-gate test
+// below were written. Two distinct failure modes result if these six FKs
+// are not accounted for explicitly:
+//   (a) a plain (non-CASCADE) DROP TABLE on topic_assignment_review_requests
+//       inside dropHumanReviewObjects() now hard-fails outright (the
+//       supervised_intake_* rows still reference it), aborting that
+//       function's multi-statement script PARTWAY THROUGH -- since each
+//       statement auto-commits individually, this leaves exactly the table
+//       dropped by the one statement that ran before the failure (e.g.
+//       topic_assignment_review_events) permanently gone, a genuine 3-of-4
+//       partial topology that 077's own migration then correctly, but
+//       unrecoverably, fail-closes on.
+//   (b) the explicit `DROP TABLE ... topic_extraction_runs CASCADE` further
+//       below succeeds (CASCADE never errors), but silently takes all three
+//       079 FKs pointing at topic_extraction_runs down with it as an
+//       untracked side effect -- exactly the class of problem
+//       restoreS3AExtractionRunFk() already exists to solve for 075's own
+//       FK onto the same table.
+// Drop/restore these explicitly and by name, same convention as the S3A FK
+// above -- never CASCADE, never implicit. No-op when 079 was never applied
+// locally (IF EXISTS guards on every statement).
+const SUPERVISED_INTAKE_DOWNSTREAM_FKS: Array<{ table: string; constraint: string; column: string; target: string }> = [
+  { table: 'supervised_intake_batch_items', constraint: 'supervised_intake_batch_items_extraction_run_id_fkey', column: 'extraction_run_id', target: 'topic_extraction_runs' },
+  { table: 'supervised_intake_attempts', constraint: 'supervised_intake_attempts_extraction_run_id_fkey', column: 'extraction_run_id', target: 'topic_extraction_runs' },
+  { table: 'supervised_intake_events', constraint: 'supervised_intake_events_extraction_run_id_fkey', column: 'extraction_run_id', target: 'topic_extraction_runs' },
+  { table: 'supervised_intake_batch_items', constraint: 'supervised_intake_batch_items_review_request_id_fkey', column: 'review_request_id', target: 'topic_assignment_review_requests' },
+  { table: 'supervised_intake_events', constraint: 'supervised_intake_events_review_request_id_fkey', column: 'review_request_id', target: 'topic_assignment_review_requests' },
+  { table: 'supervised_intake_attempts', constraint: 'supervised_intake_attempts_provider_reservation_id_fkey', column: 'provider_reservation_id', target: 'ai_provider_budget_reservations' },
+]
+
+function dropSupervisedIntake079DownstreamFks() {
+  const statements = SUPERVISED_INTAKE_DOWNSTREAM_FKS.map(
+    ({ table, constraint }) => `ALTER TABLE IF EXISTS public.${table} DROP CONSTRAINT IF EXISTS ${constraint};`,
+  ).join('\n')
+  dockerPsql(statements)
+}
+
+// Idempotent, dependency-aware: only (re)adds an FK when both its owning
+// table and its target table exist and the constraint is currently
+// missing -- a no-op when 079 was never applied locally, or when a given FK
+// is already present and correct. Each FK is checked/restored independently
+// so a target table that hasn't come back yet (e.g. 077 mid-restore) never
+// blocks restoring the others.
+function restoreSupervisedIntake079DownstreamFks() {
+  const doBlocks = SUPERVISED_INTAKE_DOWNSTREAM_FKS.map(({ table, constraint, column, target }) => `
+    DO $restore_sti_fk$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='${table}')
+         AND EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='${target}')
+         AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='${constraint}')
+      THEN
+        ALTER TABLE public.${table}
+          ADD CONSTRAINT ${constraint}
+          FOREIGN KEY (${column}) REFERENCES public.${target}(id) ON DELETE RESTRICT;
+      END IF;
+    END;
+    $restore_sti_fk$;
+  `).join('\n')
+  dockerPsql(doBlocks)
+}
+
 // Since migration 077, topic_assignment_review_requests carries FKs onto
 // topic_extraction_runs, semantic_topics, and topic_assignment_decisions --
 // this file's own topology-gate/drift tests DROP those 073 objects directly,
@@ -158,6 +226,11 @@ function restoreHumanReviewObjects() {
 }
 
 function dropS2AObjects() {
+  // Must run BEFORE dropHumanReviewObjects() and the topic_extraction_runs
+  // drop below: both would otherwise hit a 079 downstream FK (see comment
+  // above SUPERVISED_INTAKE_DOWNSTREAM_FKS) -- one as a hard mid-script
+  // failure, the other as a silent CASCADE loss.
+  dropSupervisedIntake079DownstreamFks()
   dropHumanReviewObjects()
   dropS3AExtractionRunFkIfPresent()
   dockerPsql(`
@@ -188,6 +261,33 @@ function ensureFullyApplied() {
     }
   }
   restoreHumanReviewObjects()
+  // Unconditional and idempotent: covers every branch above, including the
+  // out !== '3' path where topic_extraction_runs is recreated fresh (a new
+  // OID, so any FK 079 had onto the old one is gone regardless of whether
+  // dropS2AObjects() was ever called this time).
+  restoreSupervisedIntake079DownstreamFks()
+}
+
+// Shared by afterEach AND afterAll (guaranteed-restoration requirement):
+// runs every schema-restoration step in dependency order, each in its own
+// try/catch so one step's failure never skips the others, and re-throws
+// the first error only after every step has been attempted.
+function runGuaranteedSchemaRestoration() {
+  const steps: Array<[string, () => void]> = [
+    ['restoreS3AExtractionRunFk', restoreS3AExtractionRunFk],
+    ['restoreHumanReviewObjects', restoreHumanReviewObjects],
+    ['restoreSupervisedIntake079DownstreamFks', restoreSupervisedIntake079DownstreamFks],
+  ]
+  let firstError: unknown = null
+  for (const [name, step] of steps) {
+    try {
+      step()
+    } catch (e) {
+      if (firstError === null) firstError = e
+      console.error(`schema restoration step "${name}" failed:`, e)
+    }
+  }
+  if (firstError !== null) throw firstError
 }
 
 function cleanupTestData() {
@@ -346,20 +446,24 @@ describeIfLocalDb('Semantic Topic Identity v0 S2A -- audit/provenance schema + t
     evidenceB = insertFixtureEvidence(sourceId, runId, `sti-s2a-b-${Date.now()}`)
   })
 
+  // Belt-and-suspenders final guarantee at file teardown, in addition to
+  // the per-test afterEach below: runs even if e.g. beforeAll itself threw
+  // before any test (and afterEach) ever ran.
   afterAll(() => {
     cleanupTestData()
+    runGuaranteedSchemaRestoration()
   })
 
   // Runs after EVERY test in this file, pass or fail, regardless of which
   // test ran or in what order -- guarantees the S3A (075) extraction_run_id
-  // FK, and the 077 human-review tables, are never left missing as a side
-  // effect of this suite's own drift experiments on topic_extraction_runs /
+  // FK, the 077 human-review tables, and the 079 supervised-intake downstream
+  // FKs onto both of them are never left missing as a side effect of this
+  // suite's own drift experiments on topic_extraction_runs /
   // topic_assignment_decisions (see dropS2AObjects/restoreS3AExtractionRunFk/
-  // restoreHumanReviewObjects above). A test failure partway through does
-  // not skip this.
+  // restoreHumanReviewObjects/restoreSupervisedIntake079DownstreamFks above).
+  // A test failure partway through does not skip this.
   afterEach(() => {
-    restoreS3AExtractionRunFk()
-    restoreHumanReviewObjects()
+    runGuaranteedSchemaRestoration()
   })
 
   // ------------------------------------------------------------

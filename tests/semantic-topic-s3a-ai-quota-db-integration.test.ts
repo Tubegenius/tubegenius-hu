@@ -92,6 +92,37 @@ function dropAllTables() {
   `)
 }
 
+// Since migration 079 (PFM Supervised Production Candidate Intake v0),
+// supervised_intake_attempts.provider_reservation_id carries its own FK to
+// ai_provider_budget_reservations. Every `... cascade` drop of
+// ai_provider_budget_reservations in this file (dropAllTables() above, and
+// the two explicit `drop table ... cascade` calls in the artificial-drift
+// tests near the end of this file) silently takes that FK down as an
+// untracked side effect -- CASCADE never errors, so nothing here would
+// otherwise notice. Same convention as
+// semantic-topic-s2a-audit-temporal-db-integration.test.ts's
+// restoreS3AExtractionRunFk()/restoreSupervisedIntake079DownstreamFks():
+// explicit, named, idempotent restore, never assumed. No-op when 079 was
+// never applied locally.
+const SUPERVISED_INTAKE_PROVIDER_RESERVATION_FK = 'supervised_intake_attempts_provider_reservation_id_fkey'
+
+function restoreSupervisedIntakeProviderReservationFk() {
+  dockerPsql(`
+    DO $restore_sti_reservation_fk$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='supervised_intake_attempts')
+         AND EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='public' AND tablename='ai_provider_budget_reservations')
+         AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='${SUPERVISED_INTAKE_PROVIDER_RESERVATION_FK}')
+      THEN
+        ALTER TABLE public.supervised_intake_attempts
+          ADD CONSTRAINT ${SUPERVISED_INTAKE_PROVIDER_RESERVATION_FK}
+          FOREIGN KEY (provider_reservation_id) REFERENCES public.ai_provider_budget_reservations(id) ON DELETE RESTRICT;
+      END IF;
+    END;
+    $restore_sti_reservation_fk$;
+  `)
+}
+
 // Defensive, not just a topology count: ai_provider_budget_reservations
 // carries a genuine FK to topic_extraction_runs (074's table), which
 // another suite's own artificial-drift test (semantic-topic-s2a-audit-
@@ -122,6 +153,10 @@ function ensureFullyApplied() {
     if (rebuilt.threw) {
       throw new Error(`ensureFullyApplied: migration failed even after a full 0/3+0/7 rebuild -- ${rebuilt.out}`)
     }
+    // ai_provider_budget_reservations was just dropped+recreated (a new
+    // OID) inside dropAllTables() above -- restore 079's downstream FK onto
+    // it before returning, never left to a later file to notice.
+    restoreSupervisedIntakeProviderReservationFk()
     return
   }
 
@@ -241,8 +276,14 @@ describeIfLocalDb('Semantic Topic Identity v0 S3A -- AI-provider quota RPCs (rea
     setControlEnabled(true)
     cleanupTestData()
   })
+  // Guaranteed, unconditional, idempotent -- covers not just the
+  // ensureFullyApplied() recovery path above but also the two artificial-
+  // drift tests near the end of this file that call `drop table ...
+  // ai_provider_budget_reservations cascade` directly in their own bodies.
+  // Runs even if a test above failed partway through.
   afterAll(() => {
     cleanupTestData()
+    restoreSupervisedIntakeProviderReservationFk()
   })
   // Every test starts from a fresh $0/0-requests today's budget -- the
   // shared daily limit (10 requests) is far smaller than the total number
