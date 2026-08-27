@@ -32,6 +32,32 @@ import { register } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
+// Node-version preflight (section 9): this CLI relies on this Node
+// version's native TypeScript support to even parse this file at all, so a
+// version old enough to lack it entirely (pre-22.6) fails at Node's own
+// module-load stage before a single line here ever runs -- already fail-
+// closed (zero DB writes, zero provider calls), just with Node's own
+// generic error instead of ours. What THIS check catches is the narrower,
+// silent-risk range: a Node new enough to parse the file (TS stripping
+// available, possibly only experimental/inconsistent) but older than the
+// version this CLI is actually validated against. Checked as the very
+// first executable statement, before register() and before any real-
+// application import, so an unsupported version never reaches the DB/
+// provider boundary either.
+const MINIMUM_NODE_MAJOR_VERSION = 24
+{
+  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '', 10)
+  if (!Number.isFinite(major) || major < MINIMUM_NODE_MAJOR_VERSION) {
+    console.error(JSON.stringify({
+      ts: new Date().toISOString(),
+      level: 'error',
+      message: `unsupported Node.js version -- this CLI requires Node.js >= ${MINIMUM_NODE_MAJOR_VERSION} for its native TypeScript support`,
+      fields: { detectedNodeVersion: process.versions.node, requiredMajor: MINIMUM_NODE_MAJOR_VERSION },
+    }))
+    process.exit(2)
+  }
+}
+
 register('./ts-alias-loader.mjs', import.meta.url)
 
 const EXIT_CODE = {
@@ -118,6 +144,20 @@ async function main(): Promise<number> {
   const parsed = parseSupervisedIntakeBatchInputJson(raw)
   if (!parsed.ok) {
     logger.log({ level: 'error', message: 'batch input validation failed', fields: { errors: parsed.errors } })
+    return EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
+  }
+
+  // Checked explicitly, BEFORE constructing the admin client: createAdminClient()
+  // (lib/supabase-server.ts, shared across the whole app) throws immediately
+  // on an empty/missing URL, which would otherwise surface as the generic
+  // UNEXPECTED_INTERNAL_ERROR (5) catch-all at the bottom of this file --
+  // correct in the sense of never proceeding, but not the documented,
+  // secret-free VALIDATION_OR_CONFIG_ERROR (2) this exact, foreseeable
+  // operator misconfiguration should produce.
+  const missingEnvVars = (['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'] as const)
+    .filter((name) => typeof process.env[name] !== 'string' || process.env[name]!.length === 0)
+  if (missingEnvVars.length > 0) {
+    logger.log({ level: 'error', message: 'required environment variable(s) not set', fields: { missing: missingEnvVars } })
     return EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
   }
 

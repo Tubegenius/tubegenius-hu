@@ -23,7 +23,20 @@ const PROJECT_ROOT = pathToFileURL(process.cwd() + '/').href
 const CANDIDATE_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.js', '/index.ts', '/index.tsx', '/index.mjs', '/index.js']
 
 export async function resolve(specifier, context, nextResolve) {
-  const target = specifier.startsWith('@/') ? new URL(specifier.slice(2), PROJECT_ROOT).href : specifier
+  let target = specifier
+  if (specifier.startsWith('@/')) {
+    target = new URL(specifier.slice(2), PROJECT_ROOT).href
+    // Defense in depth (section 9): every real call site in this closed
+    // source tree only ever writes a plain, traversal-free `@/...`
+    // specifier, so this can never fire in practice today -- but nothing
+    // in URL resolution itself stops a `@/../../outside` specifier from
+    // resolving past PROJECT_ROOT, so this hook must refuse to hand
+    // Node's own resolver a target outside the project root rather than
+    // silently loading whatever that path happens to be.
+    if (!target.startsWith(PROJECT_ROOT)) {
+      throw new Error(`ts-alias-loader: refusing to resolve "${specifier}" outside the project root`)
+    }
+  }
 
   try {
     return await nextResolve(target, context)

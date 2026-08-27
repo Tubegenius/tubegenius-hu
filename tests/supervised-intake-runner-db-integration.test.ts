@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 
 vi.setConfig({ testTimeout: 20000 })
 import { execSync } from 'node:child_process'
-import type { ShadowExtractionResult } from '@/lib/semantic-topic/extraction-service'
+import type { ShadowExtractionInput, ShadowExtractionResult } from '@/lib/semantic-topic/extraction-service'
 import type { SupervisedIntakeBatchInput } from '@/lib/semantic-topic/supervised-intake-types'
 import { EXIT_CODE } from '@/lib/semantic-topic/supervised-intake-types'
 
@@ -107,7 +107,7 @@ const VALID_CONFIG = {
   deterministicExtractorVersion: null,
 }
 
-async function buildDeps(overrides: { runShadowExtraction?: (input: unknown) => Promise<ShadowExtractionResult> } = {}) {
+async function buildDeps(overrides: { runShadowExtraction?: (input: ShadowExtractionInput) => Promise<ShadowExtractionResult> } = {}) {
   const { createAdminClient } = await import('@/lib/supabase-server')
   const { createConsoleLogger } = await import('@/lib/semantic-topic/supervised-intake-runner')
   const client = createAdminClient()
@@ -200,6 +200,120 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     expect(batchStatus).toBe('completed_with_failures')
   })
 
+  it('budget_exhausted: fail_item_and_stop_batch via the real RPCs, batch stopped|BUDGET_EXHAUSTED, item failed|INVALID_EVIDENCE_STATE|retryable', async () => {
+    enableControlForFixture()
+    const evidenceId = createEvidence('budget-exhausted')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    const { deps } = await buildDeps({
+      runShadowExtraction: async () => ({ outcome: 'budget_exhausted' } satisfies ShadowExtractionResult),
+    })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-budget'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const result = await runSupervisedIntake(deps, input)
+
+    expect(result.exitCode).toBe(EXIT_CODE.BATCH_STOPPED)
+    const row = dockerPsql(`select status||'|'||reason_code from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(row).toBe('stopped|BUDGET_EXHAUSTED')
+    const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}');`).trim()
+    expect(itemRow).toBe('failed|INVALID_EVIDENCE_STATE|true')
+    expect(deps.claimStateStore.current).toBeNull()
+  })
+
+  it('failed/provider_rejected_unbilled: item-local via fail_intake_item, batch still finalizes completed_with_failures (never stopped), retryable=true (confirmed zero-cost attempt)', async () => {
+    enableControlForFixture()
+    const evidenceId = createEvidence('unbilled')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    const { deps } = await buildDeps({
+      runShadowExtraction: async () => ({ outcome: 'failed', reservationId: 'res-unbilled', extractionRunId: 'run-unbilled', errorClass: 'provider_rejected_unbilled', capBreach: false } satisfies ShadowExtractionResult),
+    })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-unbilled'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const result = await runSupervisedIntake(deps, input)
+
+    expect(result.exitCode).toBe(EXIT_CODE.COMPLETED)
+    const batchStatus = dockerPsql(`select status from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(batchStatus).toBe('completed_with_failures')
+    const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}');`).trim()
+    expect(itemRow).toBe('failed|INVALID_EVIDENCE_STATE|true')
+    expect(deps.claimStateStore.current).toBeNull()
+  })
+
+  it('failed/malformed_output: item-local via fail_intake_item, retryable=FALSE (charged-failure retry policy -- see supervised-intake-runner.ts decideItemOutcome header), batch still finalizes completed_with_failures', async () => {
+    enableControlForFixture()
+    const evidenceId = createEvidence('malformed')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    const { deps } = await buildDeps({
+      runShadowExtraction: async () => ({ outcome: 'failed', reservationId: 'res-malformed', extractionRunId: 'run-malformed', errorClass: 'malformed_output', capBreach: false } satisfies ShadowExtractionResult),
+    })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-malformed'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const result = await runSupervisedIntake(deps, input)
+
+    expect(result.exitCode).toBe(EXIT_CODE.COMPLETED)
+    const batchStatus = dockerPsql(`select status from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(batchStatus).toBe('completed_with_failures')
+    const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}');`).trim()
+    expect(itemRow).toBe('failed|INVALID_STRUCTURED_OUTPUT|false')
+    // authorize_intake_item_retry (079) refuses any item whose retryable is not exactly true --
+    // proves the charged-failure policy is actually enforced end-to-end, not just set and ignored.
+    expect(() => dockerPsql(`select authorize_intake_item_retry((select id from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}')), 'db-integration-test', 'OPERATOR_REVIEWED', '${nextMarker('retry-attempt')}');`)).toThrow(/ITEM_NOT_RETRYABLE/)
+  })
+
+  it('uncertain: stop_batch_only, batch reconciliation_pending|PROVIDER_OUTCOME_UNCERTAIN, item/attempt LEFT UNRESOLVED (never fail_intake_item -- no assertion about an unconfirmed outcome), claim-state PRESERVED not cleared', async () => {
+    enableControlForFixture()
+    const evidenceId = createEvidence('uncertain')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    const { deps } = await buildDeps({
+      runShadowExtraction: async () => ({ outcome: 'uncertain', reservationId: 'res-uncertain', errorClass: 'timeout' } satisfies ShadowExtractionResult),
+    })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-uncertain'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const result = await runSupervisedIntake(deps, input)
+
+    expect(result.exitCode).toBe(EXIT_CODE.RECONCILIATION_REQUIRED)
+    const row = dockerPsql(`select status||'|'||reason_code from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(row).toBe('reconciliation_pending|PROVIDER_OUTCOME_UNCERTAIN')
+    const itemStatus = dockerPsql(`select status from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}');`).trim()
+    expect(itemStatus).toBe('claimed') // never resolved by this runner
+    const attemptStatus = dockerPsql(`select status from supervised_intake_attempts where batch_item_id in (select id from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}'));`).trim()
+    expect(attemptStatus).toBe('calling') // never re-driven, never auto-resolved
+    expect(deps.claimStateStore.current).not.toBeNull() // preserved for a separate reconciliation pass
+  })
+
+  it('failed with an unrecognized future errorClass: fails closed, batch-fatal via the real stop_intake_batch RPC (never silently treated as item-local)', async () => {
+    enableControlForFixture()
+    const evidenceId = createEvidence('unknown-errorclass')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    const { deps } = await buildDeps({
+      runShadowExtraction: async () => ({ outcome: 'failed', reservationId: 'res-x', extractionRunId: 'run-x', errorClass: 'brand_new_never_seen_before', capBreach: false } as ShadowExtractionResult),
+    })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-unknown-err'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const result = await runSupervisedIntake(deps, input)
+
+    expect(result.exitCode).toBe(EXIT_CODE.BATCH_STOPPED)
+    const row = dockerPsql(`select status||'|'||reason_code from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(row).toBe('stopped|AUTHORIZATION_OR_CONFIG_ERROR')
+  })
+
+  it('an entirely unrecognized future ShadowExtractionResult outcome (not just errorClass): decideItemOutcome throws, propagates out of runSupervisedIntake rather than silently continuing -- the CLI\'s own top-level catch is what maps this to UNEXPECTED_INTERNAL_ERROR', async () => {
+    enableControlForFixture()
+    const evidenceId = createEvidence('unknown-outcome')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    const { deps } = await buildDeps({
+      runShadowExtraction: async () => ({ outcome: 'brand_new_outcome_from_the_future' } as unknown as ShadowExtractionResult),
+    })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-unknown-outcome'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    await expect(runSupervisedIntake(deps, input)).rejects.toThrow(/unhandled ShadowExtractionResult outcome/)
+
+    // The batch is left running/claimed (never silently finalized as if
+    // nothing happened) -- a real operator would see this exception in the
+    // process's own crash output and exit code 5, not a clean summary line.
+    const batchStatus = dockerPsql(`select status from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(['batch_created', 'running']).toContain(batchStatus)
+  })
+
   it('disabled_or_rejected-shaped outcome: batch-fatal, stops the batch via the real stop_intake_batch RPC', async () => {
     enableControlForFixture()
     const evidenceId = createEvidence('disabled')
@@ -214,6 +328,30 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     expect(result.exitCode).toBe(EXIT_CODE.BATCH_STOPPED)
     const row = dockerPsql(`select status||'|'||reason_code from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
     expect(row).toBe('stopped|AUTHORIZATION_OR_CONFIG_ERROR')
+  })
+
+  it('REAL runShadowExtraction (not mocked) against a genuinely disabled ai_extraction_control: batch stopped with reason_code exactly AI_EXTRACTION_DISABLED, zero reservations, zero provider calls', async () => {
+    enableControlForFixture() // supervised_intake_control enabled -- ai_extraction_control is NEVER touched by this suite and stays false throughout (asserted in afterAll)
+    const evidenceId = createEvidence('real-disabled')
+    const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
+    // The REAL extraction-service.ts orchestration, not the usual injected
+    // mock -- proves the kill-switch pre-check inside reserveAiProviderUnits
+    // (ai-quota.ts) actually fires end-to-end. Safe to use for real here:
+    // the rejection happens before any reservation, so callAnthropicForExtraction
+    // is never reached and ANTHROPIC_API_KEY is never needed.
+    const { runShadowExtraction } = await import('@/lib/semantic-topic/extraction-service')
+    const { deps } = await buildDeps({ runShadowExtraction })
+
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-real-disabled'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const result = await runSupervisedIntake(deps, input)
+
+    expect(result.exitCode).toBe(EXIT_CODE.BATCH_STOPPED)
+    const row = dockerPsql(`select status||'|'||reason_code from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(row).toBe('stopped|AI_EXTRACTION_DISABLED')
+    const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}');`).trim()
+    expect(itemRow).toBe('failed|INVALID_EVIDENCE_STATE|true')
+    expect(dockerPsql(`select count(*) from ai_provider_budget_reservations where signal_evidence_id='${evidenceId}';`).trim()).toBe('0')
+    expect(deps.claimStateStore.current).toBeNull()
   })
 
   it('a disabled supervised_intake_control policy rejects create_supervised_intake_batch itself, no batch row is ever created, never calls the provider adapter', async () => {
