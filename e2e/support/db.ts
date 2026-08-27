@@ -83,6 +83,23 @@ export function createReviewRequest(suffix: string): { reviewRequestId: string; 
   return { reviewRequestId: body.review_request_id as string, extractionRunId }
 }
 
+export interface CreateReviewRequestRpcResult {
+  ok: boolean
+  outcome_kind: string
+  reason_code?: string
+  review_request_id?: string
+  generation?: number
+  message?: string
+}
+
+// Raw RPC call, exposing the full outcome_kind/reason_code contract --
+// used by the eligibility-gate pilot cases (ineligible/blocked/replayed),
+// where the point IS to observe the non-success branches, not just extract
+// a review_request_id on the assumption of success.
+export function attemptCreateReviewRequest(extractionRunId: string, idempotencyKey: string): CreateReviewRequestRpcResult {
+  return JSON.parse(psql(`select create_topic_assignment_review_request('${extractionRunId}'::uuid, '${idempotencyKey}');`))
+}
+
 export function createTargetTopic(suffix: string): string {
   const tag = m(suffix)
   const digest = createHash('sha256').update(`${tag}-attach-target`).digest('hex')
