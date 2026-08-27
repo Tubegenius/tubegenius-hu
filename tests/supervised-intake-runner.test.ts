@@ -229,9 +229,9 @@ describe('decideItemOutcome', () => {
     expect(decideItemOutcome(result)).toEqual({ kind: 'fail_item_continue', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: false, diagnosticCode: 'input_too_large' })
   })
 
-  it('failed/malformed_output -> fail_item_continue, retryable, INVALID_STRUCTURED_OUTPUT', () => {
+  it('failed/malformed_output -> fail_item_continue, NOT retryable (charged attempt, no cost-aware retry gate in 079 v0)', () => {
     const result: ShadowExtractionResult = { outcome: 'failed', reservationId: 'res-3', extractionRunId: 'run-3', errorClass: 'malformed_output', capBreach: false }
-    expect(decideItemOutcome(result)).toEqual({ kind: 'fail_item_continue', reasonCode: 'INVALID_STRUCTURED_OUTPUT', retryable: true, diagnosticCode: 'malformed_output' })
+    expect(decideItemOutcome(result)).toEqual({ kind: 'fail_item_continue', reasonCode: 'INVALID_STRUCTURED_OUTPUT', retryable: false, diagnosticCode: 'malformed_output' })
   })
 
   it('failed/provider_rejected_unbilled -> fail_item_continue, retryable, INVALID_EVIDENCE_STATE', () => {
@@ -255,6 +255,22 @@ describe('decideItemOutcome', () => {
     const result: ShadowExtractionResult = { outcome: 'disabled_or_rejected', reasonCode: 'invalid_request', message: 'ai_extraction_control.enabled is false' }
     const decision = decideItemOutcome(result)
     expect(decision).toEqual({ kind: 'fail_item_and_stop_batch', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: true, diagnosticCode: 'disabled_or_rejected_invalid_request', stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR' })
+  })
+
+  it('disabled_or_rejected with reasonCode ai_extraction_disabled -> fail_item_and_stop_batch, stopReasonCode exactly AI_EXTRACTION_DISABLED (not the generic AUTHORIZATION_OR_CONFIG_ERROR)', () => {
+    const result: ShadowExtractionResult = { outcome: 'disabled_or_rejected', reasonCode: 'ai_extraction_disabled', message: 'ai_extraction_disabled' }
+    const decision = decideItemOutcome(result)
+    expect(decision).toEqual({ kind: 'fail_item_and_stop_batch', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: true, diagnosticCode: 'disabled_or_rejected_ai_extraction_disabled', stopReasonCode: 'AI_EXTRACTION_DISABLED' })
+  })
+
+  it('every OTHER disabled_or_rejected reasonCode still maps to the generic AUTHORIZATION_OR_CONFIG_ERROR, never AI_EXTRACTION_DISABLED', () => {
+    const otherReasonCodes = ['invalid_request', 'invalid_transition', 'database_error', 'invalid_rpc_response'] as const
+    for (const reasonCode of otherReasonCodes) {
+      const result: ShadowExtractionResult = { outcome: 'disabled_or_rejected', reasonCode, message: 'x' }
+      const decision = decideItemOutcome(result)
+      if (decision.kind === 'fail_item_and_stop_batch') expect(decision.stopReasonCode).toBe('AUTHORIZATION_OR_CONFIG_ERROR')
+      else throw new Error('expected fail_item_and_stop_batch')
+    }
   })
 
   it('budget_exhausted -> fail_item_and_stop_batch, BUDGET_EXHAUSTED', () => {

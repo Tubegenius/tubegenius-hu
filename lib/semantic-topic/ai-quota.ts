@@ -32,6 +32,15 @@ export interface ReserveAiProviderUnitsInput {
 export type ReserveAiProviderUnitsResult =
   | { outcome: 'reserved'; reservationId: string }
   | { outcome: 'budget_exhausted' }
+  // Stable, closed discriminant for the kill-switch specifically -- see the
+  // pre-check in reserveAiProviderUnits below for why this cannot instead
+  // come from reserve_ai_provider_units' own rejection: every validation
+  // RAISE EXCEPTION in that frozen (075, hash-locked) function shares
+  // ERRCODE='P0001', so its failure alone -- mapped through rpcFailure()
+  // below -- collapses to the exact same generic 'invalid_transition' as
+  // every other business-rule rejection in that function, with only the
+  // (never-to-be-parsed) free-text message differing.
+  | { outcome: 'ai_extraction_disabled' }
   | AiQuotaOperationFailure
 
 export type AiQuotaBooleanResult =
@@ -130,6 +139,28 @@ export async function reserveAiProviderUnits(
   const estimatedMaxOutputTokens = input.estimatedMaxOutputTokens ?? AI_QUOTA_MAX_OUTPUT_TOKENS
   if (!Number.isInteger(estimatedMaxOutputTokens) || estimatedMaxOutputTokens <= 0) {
     return invalid('estimatedMaxOutputTokens must be a positive integer.')
+  }
+
+  // Kill-switch short-circuit, read directly rather than inferred from the
+  // RPC's own rejection (see ReserveAiProviderUnitsResult's 'ai_extraction_disabled'
+  // comment above for why the RPC failure alone cannot be distinguished).
+  // This is a plain, typed read of real DB state, not a parsed error message
+  // -- and because it is used ONLY to skip the call entirely (never to
+  // reinterpret an RPC failure after the fact), a control flip in the gap
+  // between this read and the call below can only make this check MISS
+  // (falling through to the RPC's own generic, still fail-closed rejection),
+  // never mislabel a call that actually went through, and never itself
+  // causes an extra provider call or a false-positive label. A failed read
+  // here (network hiccup etc.) is not fail-closed on its own -- it falls
+  // through to the RPC, whose own server-side check stays authoritative.
+  const precheckClient = admin(client)
+  const { data: controlRow, error: controlError } = await precheckClient
+    .from('ai_extraction_control')
+    .select('enabled')
+    .eq('id', 1)
+    .maybeSingle()
+  if (!controlError && controlRow && (controlRow as { enabled: boolean }).enabled === false) {
+    return { outcome: 'ai_extraction_disabled' }
   }
 
   const operation = 'reserve_ai_provider_units'

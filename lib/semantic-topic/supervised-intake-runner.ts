@@ -320,6 +320,25 @@ export async function fetchEvidenceForExtraction(
 // variant added to ShadowExtractionResult without updating this switch is a
 // COMPILE ERROR (see the `never` assertion in the default branch), not a
 // silent fail-open.
+//
+// Charged-failure retry policy: authorize_intake_item_retry (079) has no
+// concept of "was this attempt actually billed" -- it only ever checks the
+// item's stored (status='failed', retryable=true) pair, which THIS function
+// is the sole author of. That makes `retryable` here the entire safety
+// boundary for whether a later, separately-authorized operator action could
+// ever trigger a fresh paid provider call for this item:
+//   - not-yet-started / never-billed attempts (input_too_large,
+//     provider_rejected_unbilled, budget_exhausted, disabled_or_rejected,
+//     attempt_not_started) -> may be retryable=true; no confirmed spend.
+//   - a charged/potentially-charged failed attempt (malformed_output --
+//     extraction-service.ts commits real, non-zero token usage before
+//     validating output shape) -> always retryable=false. A future paid
+//     retry needs its own explicit financial/operator authorization and a
+//     cost-aware RPC contract that does not exist in v0 -- never something
+//     this runner grants on its own.
+//   - uncertain (committed_unknown) -> never resolved by fail_intake_item
+//     at all (see the 'uncertain' case below) -- reconciliation_required,
+//     never retryable through this path either.
 // ===========================================================================
 
 export type ItemOutcomeDecision =
@@ -377,12 +396,20 @@ export function decideItemOutcome(result: ShadowExtractionResult): ItemOutcomeDe
       // future value is handled by the fail-closed default below, batch-
       // fatal rather than silently treated as item-local.
       if (result.errorClass === 'malformed_output') {
-        // A real, charged attempt whose provider output failed strict
-        // validation -- non-deterministic (a retry may succeed), item-
-        // local, batch continues. INVALID_STRUCTURED_OUTPUT mirrors 078's
-        // own reuse of this exact code for the identical underlying
-        // condition (a structurally invalid extraction output).
-        return { kind: 'fail_item_continue', reasonCode: 'INVALID_STRUCTURED_OUTPUT', retryable: true, diagnosticCode: 'malformed_output' }
+        // A real, CHARGED attempt (extraction-service.ts commits the
+        // provider's actual, non-zero token usage before validating its
+        // output shape) whose output then failed strict validation --
+        // item-local, batch continues, but retryable=false: charged-failure
+        // retry policy (see this function's header) requires any billed or
+        // potentially-billed failed attempt to default to non-retryable,
+        // because authorize_intake_item_retry (079) has no cost-awareness
+        // of its own -- it only ever checks this stored retryable flag, so
+        // this flag IS the entire safety boundary. A future, separately
+        // and explicitly authorized paid retry is deliberately out of
+        // scope for v0; this item stays terminal (failed_terminal) until
+        // then. INVALID_STRUCTURED_OUTPUT mirrors 078's own reuse of this
+        // exact code for the identical underlying condition.
+        return { kind: 'fail_item_continue', reasonCode: 'INVALID_STRUCTURED_OUTPUT', retryable: false, diagnosticCode: 'malformed_output' }
       }
       if (result.errorClass === 'provider_rejected_unbilled') {
         // A confirmed pre-generation provider rejection (4xx) -- real,
@@ -403,18 +430,23 @@ export function decideItemOutcome(result: ShadowExtractionResult): ItemOutcomeDe
 
     case 'disabled_or_rejected':
       // Reservation-layer rejection BEFORE any provider call -- reasonCode
-      // is one of the closed AiQuotaOperationFailure outcomes (never
-      // parsed from free text, see extraction-service.ts's
-      // ExtractionRejectionReasonCode). Treated as batch-fatal: this class
-      // of rejection (control disabled, malformed RPC args, a genuine DB
-      // error) is far more likely to affect every remaining item in the
-      // batch identically than to be evidence-specific.
+      // is one of the closed ExtractionRejectionReasonCode values (never
+      // parsed from free text, see extraction-service.ts). Treated as
+      // batch-fatal: this class of rejection (control disabled, malformed
+      // RPC args, a genuine DB error) is far more likely to affect every
+      // remaining item in the batch identically than to be evidence-
+      // specific. The kill switch gets its own stop_reason_code
+      // (AI_EXTRACTION_DISABLED, already a valid 079 stop_intake_batch
+      // reason -- see migration 079's stop_intake_batch reason_code CHECK)
+      // instead of the generic AUTHORIZATION_OR_CONFIG_ERROR every other
+      // reasonCode still maps to, purely by switching on the closed
+      // reasonCode discriminant -- never by inspecting `message`.
       return {
         kind: 'fail_item_and_stop_batch',
         reasonCode: 'INVALID_EVIDENCE_STATE',
         retryable: true,
         diagnosticCode: sanitizeDiagnosticCode(`disabled_or_rejected_${result.reasonCode}`),
-        stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+        stopReasonCode: result.reasonCode === 'ai_extraction_disabled' ? 'AI_EXTRACTION_DISABLED' : 'AUTHORIZATION_OR_CONFIG_ERROR',
       }
 
     case 'budget_exhausted':

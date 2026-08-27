@@ -67,13 +67,14 @@ import '@/lib/prompts/catalog'
 import type { AiQuotaOperationFailure, SemanticTopicAdminClient } from './quota-types'
 
 // Closed, stable discriminant for why a reservation attempt was rejected or
-// never truly began -- exactly AiQuotaOperationFailure's own `outcome`
-// union (quota-types.ts), re-exported here so a caller (the supervised
+// never truly began -- AiQuotaOperationFailure's own `outcome` union
+// (quota-types.ts) plus reserveAiProviderUnits' own 'ai_extraction_disabled'
+// short-circuit (ai-quota.ts), re-exported here so a caller (the supervised
 // intake runner in particular) can branch on a real code instead of parsing
 // the free-text `message` field, which stays present unchanged for
 // diagnostics/logging only. Added for the supervised intake runner without
 // changing any existing field's value or removing anything.
-export type ExtractionRejectionReasonCode = AiQuotaOperationFailure['outcome']
+export type ExtractionRejectionReasonCode = AiQuotaOperationFailure['outcome'] | 'ai_extraction_disabled'
 
 // Correction-gate item 3: conservative, provable upper bound (see
 // extraction-config.ts AI_QUOTA_INPUT_TOKEN_SAFETY_MARGIN header) -- UTF-8

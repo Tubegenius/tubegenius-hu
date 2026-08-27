@@ -212,6 +212,16 @@ describe('runShadowExtraction', () => {
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
   })
 
+  it('reservation disabled/rejected: the ai_extraction_disabled kill-switch outcome carries that exact reasonCode through, no provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'ai_extraction_disabled' })
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-2d' })
+
+    expect(result).toEqual({ outcome: 'disabled_or_rejected', reasonCode: 'ai_extraction_disabled', message: 'ai_extraction_disabled' })
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
   it('reservation disabled/rejected: a database_error reservation outcome carries reasonCode database_error, not a free-text-derived value', async () => {
     mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
     mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'database_error', operation: 'reserve_ai_provider_units', error: { message: 'connection reset' } })
