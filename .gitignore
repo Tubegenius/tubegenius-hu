@@ -29,6 +29,11 @@ yarn-error.log*
 /playwright-report/
 /e2e/.auth/
 
+# Supervised intake runner local claim-state file -- carries a live claim
+# token in plaintext; never committed, never shared. See
+# lib/semantic-topic/supervised-intake-runner.ts's ClaimStateStore.
+/.supervised-intake/
+
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
