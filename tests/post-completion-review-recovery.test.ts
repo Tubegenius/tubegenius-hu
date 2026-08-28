@@ -8,6 +8,7 @@ import {
   exitCodeForOutcome,
   fetchExtractionRunPreview,
   projectGuardPasses,
+  redactForDisplay,
   resolveProjectIdentity,
   runPostCompletionReviewRecovery,
   type RecoveryOutcome,
@@ -99,6 +100,34 @@ describe('fetchExtractionRunPreview', () => {
       expect(result.preview.supportingSpansCount).toBe(3)
       expect(result.preview.signalEvidenceIdPrefix).toBe(EVIDENCE_ID.slice(0, 8))
       expect(result.preview.signalEvidenceIdPrefix.length).toBeLessThan(EVIDENCE_ID.length)
+      // Remediation regression guard: the preview must NEVER carry the full
+      // run id under any field name -- only a prefix, matching the evidence
+      // field's own convention exactly. This is the exact bug this gate
+      // fixes: the full id was previously stored verbatim on this object.
+      expect(result.preview.extractionRunIdPrefix).toBe(RUN_ID.slice(0, 8))
+      expect(result.preview.extractionRunIdPrefix.length).toBeLessThan(RUN_ID.length)
+      expect(JSON.stringify(result.preview)).not.toContain(RUN_ID)
+      expect(JSON.stringify(result.preview)).not.toContain(EVIDENCE_ID)
+    }
+  })
+
+  it('a not-found run never echoes the full run id in its error message', async () => {
+    const client = createMockClient()
+    wireExtractionRunLookup(client, { data: null, error: null })
+    const result = await fetchExtractionRunPreview(client, RUN_ID)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).not.toContain(RUN_ID)
+  })
+
+  it('a raw DB error message containing a full UUID is shortened before it ever leaves this function', async () => {
+    const client = createMockClient()
+    const leakyMessage = `duplicate key value violates unique constraint (id=${RUN_ID})`
+    wireExtractionRunLookup(client, { data: null, error: { message: leakyMessage } })
+    const result = await fetchExtractionRunPreview(client, RUN_ID)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.message).not.toContain(RUN_ID)
+      expect(result.message).toContain(RUN_ID.slice(0, 8))
     }
   })
 
@@ -214,6 +243,93 @@ describe('runPostCompletionReviewRecovery', () => {
     client.rpc.mockResolvedValue({ data: { unexpected: true }, error: null })
     const outcome = await runPostCompletionReviewRecovery(client, { extractionRunId: RUN_ID, dryRun: false })
     expect(outcome.kind).toBe('database_error')
+  })
+
+  // Remediation gate (Section D.2): every possible outcome shape, scanned
+  // for a full UUID anywhere in its serialized form -- not just the fields
+  // this test file happens to assert on individually above. This is the
+  // structural guard against a FUTURE field regressing the same way
+  // preview.extractionRunId originally did.
+  const FULL_REQUEST_ID = '33333333-3333-4333-8333-333333333333'
+  const ANY_FULL_UUID = [RUN_ID, EVIDENCE_ID, FULL_REQUEST_ID]
+
+  it.each([
+    ['created', { ok: true, outcome_kind: 'created', reason_code: null, review_request_id: FULL_REQUEST_ID, generation: 1, status: 'pending', expires_at: '2026-09-04T00:00:00Z' }],
+    ['replayed', { ok: true, outcome_kind: 'replayed', reason_code: null, review_request_id: FULL_REQUEST_ID, generation: 1, status: 'pending', expires_at: '2026-09-04T00:00:00Z' }],
+    ['ineligible', { ok: false, outcome_kind: 'ineligible', reason_code: 'NOT_SPECIFIC', message: `run ${RUN_ID} not specific` }],
+    ['blocked', { ok: false, outcome_kind: 'blocked', reason_code: 'ALREADY_ASSIGNED', message: `run ${RUN_ID} already assigned` }],
+  ])('outcome "%s" never contains a full UUID anywhere in its serialized form, even when the RPC message itself leaks one', async (_label, rpcData) => {
+    const client = createMockClient()
+    wireExtractionRunLookup(client, mockExtractionRunRow())
+    client.rpc.mockResolvedValue({ data: rpcData, error: null })
+    const outcome = await runPostCompletionReviewRecovery(client, { extractionRunId: RUN_ID, dryRun: false })
+    const serialized = JSON.stringify(outcome)
+    for (const fullId of ANY_FULL_UUID) expect(serialized).not.toContain(fullId)
+  })
+
+  it('dry_run outcome never contains a full UUID anywhere in its serialized form', async () => {
+    const client = createMockClient()
+    wireExtractionRunLookup(client, mockExtractionRunRow())
+    const outcome = await runPostCompletionReviewRecovery(client, { extractionRunId: RUN_ID, dryRun: true })
+    const serialized = JSON.stringify(outcome)
+    for (const fullId of ANY_FULL_UUID) expect(serialized).not.toContain(fullId)
+  })
+})
+
+// ===========================================================================
+// redactForDisplay -- the central, mandatory display-boundary redactor.
+// ===========================================================================
+describe('redactForDisplay', () => {
+  it('shortens a bare UUID string to an 8-char prefix + ellipsis', () => {
+    expect(redactForDisplay(RUN_ID)).toBe(`${RUN_ID.slice(0, 8)}…`)
+  })
+
+  it('shortens every UUID-shaped substring inside a longer string, leaving the rest intact', () => {
+    const message = `duplicate key (id=${RUN_ID}) references (id=${EVIDENCE_ID})`
+    const result = redactForDisplay(message) as string
+    expect(result).not.toContain(RUN_ID)
+    expect(result).not.toContain(EVIDENCE_ID)
+    expect(result).toContain(RUN_ID.slice(0, 8))
+    expect(result).toContain(EVIDENCE_ID.slice(0, 8))
+    expect(result).toContain('duplicate key')
+    expect(result).toContain('references')
+  })
+
+  it('recurses into nested objects and arrays', () => {
+    const input = { a: { b: [RUN_ID, { c: EVIDENCE_ID }] } }
+    const result = redactForDisplay(input) as typeof input
+    expect(JSON.stringify(result)).not.toContain(RUN_ID)
+    expect(JSON.stringify(result)).not.toContain(EVIDENCE_ID)
+  })
+
+  it('fully masks (never merely shortens) a value whose key name looks secret-like, case/separator-insensitive', () => {
+    const input = {
+      SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_abcdefghijklmnopqrstuvwxyz',
+      apiKey: 'sk-ant-abcdefghijklmnop',
+      'api-key': 'sk-ant-abcdefghijklmnop',
+      Authorization: 'Bearer abc.def.ghi',
+      normalField: 'not a secret',
+    }
+    const result = redactForDisplay(input) as Record<string, unknown>
+    expect(result.SUPABASE_SERVICE_ROLE_KEY).toBe('[redacted]')
+    expect(result.apiKey).toBe('[redacted]')
+    expect(result['api-key']).toBe('[redacted]')
+    expect(result.Authorization).toBe('[redacted]')
+    expect(result.normalField).toBe('not a secret')
+  })
+
+  it('never mutates the original input object', () => {
+    const input = { id: RUN_ID }
+    const original = JSON.stringify(input)
+    redactForDisplay(input)
+    expect(JSON.stringify(input)).toBe(original)
+  })
+
+  it('passes through non-string, non-object primitives unchanged', () => {
+    expect(redactForDisplay(42)).toBe(42)
+    expect(redactForDisplay(true)).toBe(true)
+    expect(redactForDisplay(null)).toBe(null)
+    expect(redactForDisplay(undefined)).toBe(undefined)
   })
 })
 

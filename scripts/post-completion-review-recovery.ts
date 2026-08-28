@@ -111,12 +111,18 @@ async function main(): Promise<number> {
   }
 
   // Every real-application import happens here, AFTER register() above.
-  const { resolveProjectIdentity, projectGuardPasses, runPostCompletionReviewRecovery, exitCodeForOutcome } =
+  const { resolveProjectIdentity, projectGuardPasses, runPostCompletionReviewRecovery, exitCodeForOutcome, redactForDisplay } =
     await import('../lib/semantic-topic/post-completion-review-recovery')
   const { isHumanReviewEnabled } = await import('../lib/semantic-topic/human-review-flag')
 
+  // The ONE presenter this CLI ever uses to print anything. `fields` is
+  // ALWAYS routed through redactForDisplay() here -- no call site below is
+  // permitted to print a field object directly, so a future field nobody
+  // remembered to pre-truncate (a raw RPC result, a raw error object, a
+  // preview containing a full id) is still caught at this single boundary.
   const log = (level: 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => {
-    const line = JSON.stringify({ ts: new Date().toISOString(), level, message, ...fields })
+    const safeFields = fields ? (redactForDisplay(fields) as Record<string, unknown>) : undefined
+    const line = JSON.stringify({ ts: new Date().toISOString(), level, message, ...safeFields })
     if (level === 'error') console.error(line)
     else console.log(line)
   }
@@ -165,11 +171,20 @@ async function main(): Promise<number> {
   return exitCodeForOutcome(outcome)
 }
 
+// A minimal, self-contained UUID-shortener duplicated here on purpose: this
+// catch-all must still redact even if main() threw before ever reaching its
+// dynamic import of redactForDisplay() (e.g. a module-resolution failure),
+// so it cannot depend on that import having succeeded.
+function shortenUuidsFallback(text: string): string {
+  return text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (m) => `${m.slice(0, 8)}…`)
+}
+
 main()
   .then((exitCode) => {
     process.exitCode = exitCode
   })
   .catch((err) => {
-    console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'unexpected internal error', error: err instanceof Error ? err.message : String(err) }))
+    const rawMessage = err instanceof Error ? err.message : String(err)
+    console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'unexpected internal error', error: shortenUuidsFallback(rawMessage) }))
     process.exitCode = EXIT_CODE.UNEXPECTED_ERROR
   })

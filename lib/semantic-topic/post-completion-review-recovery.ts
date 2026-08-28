@@ -38,6 +38,58 @@ export const RECOVERY_EXIT_CODE = {
 export type RecoveryExitCode = (typeof RECOVERY_EXIT_CODE)[keyof typeof RECOVERY_EXIT_CODE]
 
 // ===========================================================================
+// Central display/logging redactor -- the ONLY function anything on the
+// CLI's output boundary may pass a value through before printing it.
+// Belt-and-suspenders on top of every DTO above already being shaped to
+// carry prefixes, not full ids: this is the safety net for a raw Postgres/
+// PostgREST error message, a future field someone forgets to pre-truncate,
+// or any other value nobody explicitly reasoned about at the point it was
+// produced. Never used to shape a value used for an actual DB/RPC call --
+// exclusively a display-time transform, applied last, right before
+// JSON.stringify/console.log/console.error.
+// ===========================================================================
+
+// Broader than the strict v4-only pattern used for CLI argument validation
+// (UUID_PATTERN in scripts/post-completion-review-recovery.ts) -- this one
+// exists purely to FIND and shorten any UUID-shaped substring wherever it
+// appears, not to validate one, so it deliberately matches any RFC-4122-
+// shaped string regardless of version/variant nibble.
+const ANY_UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+// Key names whose VALUE is always fully masked, never merely shortened --
+// mirrors supervised-intake-runner.ts's own NEVER_LOGGED_FIELD_NAMES
+// denylist convention (matched case-insensitively, underscores/hyphens
+// ignored, so 'SUPABASE_SERVICE_ROLE_KEY', 'serviceRoleKey', and
+// 'service-role-key' are all treated identically).
+const SECRET_FIELD_NAME_FRAGMENTS = ['servicerolekey', 'apikey', 'authorization', 'password', 'secret', 'token', 'bearer', 'jwt', 'credential']
+
+function isSecretFieldName(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[_-]/g, '')
+  return SECRET_FIELD_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment))
+}
+
+function shortenUuids(value: string): string {
+  return value.replace(ANY_UUID_REGEX, (match) => `${match.slice(0, 8)}…`)
+}
+
+// Recursively walks objects/arrays/strings. Never mutates its input --
+// always returns a fresh value, so the caller's own (un-redacted) copy,
+// used for real logic elsewhere, is never at risk of being silently altered
+// by a logging call.
+export function redactForDisplay(value: unknown): unknown {
+  if (typeof value === 'string') return shortenUuids(value)
+  if (Array.isArray(value)) return value.map((item) => redactForDisplay(item))
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(value)) {
+      out[key] = isSecretFieldName(key) ? '[redacted]' : redactForDisplay(val)
+    }
+    return out
+  }
+  return value
+}
+
+// ===========================================================================
 // Project-identity guard (Section E) -- pure string parsing, no I/O. Exists
 // so the CLI can refuse to proceed unless the operator's own
 // --confirm-production value matches the project the service client will
@@ -81,7 +133,7 @@ export function projectGuardPasses(identity: ProjectIdentity, confirmProduction:
 // structured_output object at all.
 // ===========================================================================
 export interface ExtractionRunPreview {
-  extractionRunId: string
+  extractionRunIdPrefix: string
   status: string
   confidenceRaw: string | null
   specificity: string | null
@@ -103,8 +155,12 @@ export async function fetchExtractionRunPreview(
     .select('id, status, signal_evidence_id, structured_output')
     .eq('id', extractionRunId)
     .maybeSingle()
-  if (error) return { ok: false, message: error.message }
-  if (!data) return { ok: false, message: `extraction_run ${extractionRunId} not found` }
+  // error.message is a raw Postgres/PostgREST message and MUST NOT be
+  // returned verbatim -- it could echo the queried id back (e.g. a cast
+  // error). Routed through redactForDisplay() before ever leaving this
+  // function, exactly like every other message on this module's boundary.
+  if (error) return { ok: false, message: redactForDisplay(error.message) as string }
+  if (!data) return { ok: false, message: 'extraction_run not found' }
 
   const row = data as { id: string; status: string; signal_evidence_id: string; structured_output: Record<string, unknown> | null }
   const structured = row.structured_output
@@ -112,7 +168,7 @@ export async function fetchExtractionRunPreview(
   return {
     ok: true,
     preview: {
-      extractionRunId: row.id,
+      extractionRunIdPrefix: row.id.slice(0, 8),
       status: row.status,
       confidenceRaw: structured && structured.confidence != null ? String(structured.confidence) : null,
       specificity: structured && typeof structured.specificity === 'string' ? structured.specificity : null,
@@ -150,6 +206,9 @@ export async function runPostCompletionReviewRecovery(
   const { preview } = previewResult
 
   if (preview.status !== 'completed') {
+    // preview.status is a closed, small DB enum value (never caller input,
+    // never free text) -- safe to include verbatim; it can never itself
+    // contain a UUID or secret.
     return { kind: 'configuration_error', message: `extraction_run is not completed (status=${preview.status})` }
   }
 

@@ -117,6 +117,18 @@ function assertNeverCalledProvider(result: CliResult) {
   expect(combined).not.toContain('Anthropic is not configured')
 }
 
+// Remediation gate: a strict, unbounded scan for ANY RFC-4122-shaped UUID
+// substring in the combined output -- not just a check against the one
+// specific run id this test happened to create. Catches a leak of the
+// evidence id, a review-request id, or any other UUID this CLI might ever
+// touch, not only the exact field that leaked originally.
+const ANY_UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+function assertNoFullUuidAnywhere(result: CliResult) {
+  const combined = result.stdout + result.stderr
+  const matches = combined.match(ANY_UUID_REGEX) ?? []
+  expect(matches).toEqual([])
+}
+
 const BASE_ENV = { NEXT_PUBLIC_SUPABASE_URL: LOCAL_URL, SUPABASE_SERVICE_ROLE_KEY: LOCAL_SERVICE_ROLE_KEY, SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED: 'true' }
 
 describeIfLocalDb('Post-Completion Review Handoff Recovery CLI -- REAL subprocess E2E', () => {
