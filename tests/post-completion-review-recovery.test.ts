@@ -18,6 +18,13 @@ import type { SemanticTopicAdminClient } from '@/lib/semantic-topic/human-review
 const RUN_ID = '11111111-1111-4111-8111-111111111111'
 const EVIDENCE_ID = '22222222-2222-4222-8222-222222222222'
 
+// Synthetic, non-production project ref/URL for exercising
+// resolveProjectIdentity()'s remote-host parsing branch -- deliberately NOT
+// a real Supabase project ref, so this test fixture never doubles as a
+// production identifier leak.
+const TEST_PROJECT_REF = 'abcdefghijklmnopqrst'
+const TEST_SUPABASE_URL = `https://${TEST_PROJECT_REF}.supabase.co`
+
 function createMockClient() {
   const rpc = vi.fn()
   const from = vi.fn()
@@ -50,8 +57,8 @@ function wireExtractionRunLookup(client: ReturnType<typeof createMockClient>, re
 // resolveProjectIdentity / projectGuardPasses -- pure, no I/O.
 // ===========================================================================
 describe('resolveProjectIdentity', () => {
-  it('recognizes a Supabase-hosted production URL and extracts the project ref', () => {
-    expect(resolveProjectIdentity('https://sdvqzrcdvdtozfpjhnkh.supabase.co')).toEqual({ kind: 'remote', projectRef: 'sdvqzrcdvdtozfpjhnkh' })
+  it('recognizes a Supabase-hosted remote URL and extracts the project ref', () => {
+    expect(resolveProjectIdentity(TEST_SUPABASE_URL)).toEqual({ kind: 'remote', projectRef: TEST_PROJECT_REF })
   })
   it('recognizes localhost', () => {
     expect(resolveProjectIdentity('http://localhost:54321')).toEqual({ kind: 'local', host: 'localhost' })
