@@ -24,6 +24,7 @@ import {
   runSupervisedIntake,
   resolveResumeState,
   createConsoleLogger,
+  checkCumulativeDailyCapacity,
   type ClaimStateStore,
   type RunnerLogEvent,
   type SupervisedIntakeRunnerDeps,
@@ -125,10 +126,42 @@ describe('validateSupervisedIntakeBatchInput', () => {
 // Shared test doubles
 // ===========================================================================
 
+// checkCumulativeDailyCapacity (section G) unconditionally reads
+// supervised_intake_control + supervised_intake_attempts before every fresh
+// batch creation -- every pre-existing control-flow test in this file
+// predates that preflight and never configures either table itself, so both
+// the base client and every `mockFromChain(client, '<some other table>', ...)`
+// fallback must default these two to "plenty of capacity, zero attempts
+// today" (never blocking, never throwing) unless a test deliberately
+// overrides one of them to exercise the preflight itself.
+function defaultCapacityTableChain(table: string): { select: ReturnType<typeof vi.fn> } | null {
+  if (table === 'supervised_intake_control') {
+    const maybeSingleMock = vi.fn().mockResolvedValue({ data: { enabled: true, max_daily_claimed_items: 1_000_000 }, error: null })
+    return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: maybeSingleMock })) }
+  }
+  if (table === 'supervised_intake_attempts') {
+    // Two distinct chain shapes land on this table name: the restart-resume
+    // check (.select('status').eq('id', ...).maybeSingle(), defaulted here
+    // to "not found" -- irrelevant unless a test supplies an existing local
+    // claim-state file, which every such test already configures itself)
+    // and the capacity preflight (.select('id', {count}).gte('created_at',
+    // ...), defaulted to zero attempts today).
+    const maybeSingleMock = vi.fn().mockResolvedValue({ data: null, error: null })
+    const gteMock = vi.fn().mockResolvedValue({ count: 0, error: null })
+    return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: maybeSingleMock, gte: gteMock })) }
+  }
+  return null
+}
+
 function createMockClient() {
   const rpc = vi.fn()
   const fromTables: Record<string, { select: ReturnType<typeof vi.fn> }> = {}
   const from = vi.fn((table: string) => {
+    const capacityDefault = defaultCapacityTableChain(table)
+    if (capacityDefault) {
+      fromTables[table] = capacityDefault
+      return capacityDefault
+    }
     const eqMock = vi.fn().mockReturnThis()
     const maybeSingleMock = vi.fn()
     const selectMock = vi.fn(() => ({ eq: eqMock, maybeSingle: maybeSingleMock }))
@@ -139,13 +172,20 @@ function createMockClient() {
 }
 
 // Simplified chainable .from().select().eq().maybeSingle() mock builder --
-// each call configures what the NEXT maybeSingle() resolves to.
+// each call configures what the NEXT maybeSingle() resolves to. Also wires a
+// default .gte() (zero count) onto the configured table itself, since the
+// capacity preflight's .gte() chain can land on the SAME table name a test
+// is otherwise configuring for a different purpose (e.g. a resume-state
+// test configuring supervised_intake_attempts via .eq().maybeSingle()).
 function mockFromChain(client: ReturnType<typeof createMockClient>, table: string, response: { data: unknown; error: unknown }) {
   const eqMock = vi.fn().mockReturnThis()
   const maybeSingleMock = vi.fn().mockResolvedValue(response)
-  const selectMock = vi.fn(() => ({ eq: eqMock, maybeSingle: maybeSingleMock }))
+  const gteMock = vi.fn().mockResolvedValue({ count: 0, error: null })
+  const selectMock = vi.fn(() => ({ eq: eqMock, maybeSingle: maybeSingleMock, gte: gteMock }))
   ;(client.from as ReturnType<typeof vi.fn>).mockImplementation((t: string) => {
     if (t === table) return { select: selectMock }
+    const capacityDefault = defaultCapacityTableChain(t)
+    if (capacityDefault) return capacityDefault
     return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) }
   })
   return { eqMock, maybeSingleMock, selectMock }
@@ -706,5 +746,114 @@ describe('static source guarantees', () => {
     }
     walk(appDir)
     expect(anyReferencesScripts).toBe(false)
+  })
+
+  it('the CLI imports the shared redaction/guard primitives from operator-cli-security.ts, never a local reimplementation', () => {
+    expect(runnerSource).toMatch(/import\s*\{\s*redactForDisplay\s*\}\s*from\s*['"]\.\/operator-cli-security['"]/)
+    expect(runnerSource).not.toMatch(/function\s+redactForDisplay/)
+  })
+
+  it('the CLI top-level catch-all redacts via its own self-contained shortener, never printing a raw error object', () => {
+    expect(cliSource).toMatch(/shortenUuidsFallback/)
+    expect(cliSource).toMatch(/error:\s*shortenUuidsFallback\(rawMessage\)/)
+  })
+
+  it('createConsoleLogger is the ONE place in the runner that calls console.log/console.error -- every other log line goes through the injected RunnerLogger', () => {
+    const outsideLogger = runnerSource.replace(/export function createConsoleLogger[\s\S]*?\n}\n/, '')
+    expect(outsideLogger).not.toMatch(/console\.(log|error)\(/)
+  })
+})
+
+// ===========================================================================
+// 9. Cumulative daily-capacity preflight (section G)
+// ===========================================================================
+describe('checkCumulativeDailyCapacity', () => {
+  it('reports remainingCapacity = absoluteLimit - claimedOrAttemptedToday when the policy is enabled', async () => {
+    const { client } = makeDeps()
+    ;(client.from as ReturnType<typeof vi.fn>).mockImplementation((t: string) => {
+      if (t === 'supervised_intake_control') return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { enabled: true, max_daily_claimed_items: 50 }, error: null }) })) }
+      if (t === 'supervised_intake_attempts') return { select: vi.fn(() => ({ gte: vi.fn().mockResolvedValue({ count: 12, error: null }) })) }
+      return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) }
+    })
+
+    const result = await checkCumulativeDailyCapacity(client)
+
+    expect(result).toEqual({ ok: true, policyEnabled: true, claimedOrAttemptedToday: 12, absoluteLimit: 50, remainingCapacity: 38 })
+  })
+
+  it('the attempts count query filters by created_at >= UTC midnight of "now", matching claim_next_intake_item (080) exactly', async () => {
+    const { client } = makeDeps()
+    const gteMock = vi.fn().mockResolvedValue({ count: 0, error: null })
+    ;(client.from as ReturnType<typeof vi.fn>).mockImplementation((t: string) => {
+      if (t === 'supervised_intake_control') return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { enabled: true, max_daily_claimed_items: 10 }, error: null }) })) }
+      if (t === 'supervised_intake_attempts') return { select: vi.fn(() => ({ gte: gteMock })) }
+      return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) }
+    })
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-29T17:42:13.500Z'))
+      await checkCumulativeDailyCapacity(client)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(gteMock).toHaveBeenCalledWith('created_at', '2026-08-29T00:00:00.000Z')
+  })
+
+  it('a disabled policy is reported as policyEnabled=false even when remainingCapacity computes to zero (the at-rest 0 baseline)', async () => {
+    const { client } = makeDeps()
+    ;(client.from as ReturnType<typeof vi.fn>).mockImplementation((t: string) => {
+      if (t === 'supervised_intake_control') return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { enabled: false, max_daily_claimed_items: 0 }, error: null }) })) }
+      if (t === 'supervised_intake_attempts') return { select: vi.fn(() => ({ gte: vi.fn().mockResolvedValue({ count: 0, error: null }) })) }
+      return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) }
+    })
+
+    const result = await checkCumulativeDailyCapacity(client)
+
+    expect(result).toEqual({ ok: true, policyEnabled: false, claimedOrAttemptedToday: 0, absoluteLimit: 0, remainingCapacity: 0 })
+  })
+
+  it('fails closed (ok:false) when supervised_intake_control cannot be read', async () => {
+    const { client } = makeDeps()
+    ;(client.from as ReturnType<typeof vi.fn>).mockImplementation((t: string) => {
+      if (t === 'supervised_intake_control') return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection reset' } }) })) }
+      return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) }
+    })
+
+    const result = await checkCumulativeDailyCapacity(client)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toContain('connection reset')
+  })
+
+  it('runSupervisedIntake refuses to create a new batch (BATCH_STOPPED) when the policy is enabled and remainingCapacity <= 0, without ever calling create_supervised_intake_batch', async () => {
+    const { client, logger, deps } = makeDeps()
+    ;(client.from as ReturnType<typeof vi.fn>).mockImplementation((t: string) => {
+      if (t === 'supervised_intake_control') return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: { enabled: true, max_daily_claimed_items: 5 }, error: null }) })) }
+      if (t === 'supervised_intake_attempts') return { select: vi.fn(() => ({ gte: vi.fn().mockResolvedValue({ count: 5, error: null }) })) }
+      return { select: vi.fn(() => ({ eq: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) })) }
+    })
+
+    const result = await runSupervisedIntake(deps, VALID_INPUT)
+
+    expect(result.exitCode).toBe(EXIT_CODE.BATCH_STOPPED)
+    expect((client.rpc as ReturnType<typeof vi.fn>).mock.calls.some((c) => c[0] === 'create_supervised_intake_batch')).toBe(false)
+    expect(JSON.stringify(logger.events)).toMatch(/UTC daily cumulative absolute limit/)
+  })
+
+  it('a cache_hit outcome still counted as "attempted" -- the preflight never re-derives capacity from extraction outcomes, only from the attempts table claim_next_intake_item itself writes to', async () => {
+    // Structural guarantee: checkCumulativeDailyCapacity never references
+    // ShadowExtractionResult/cache_hit/decideItemOutcome at all -- capacity
+    // accounting is entirely a function of supervised_intake_attempts row
+    // creation (one per claim, regardless of the later extraction outcome),
+    // never of this runner's own cache/outcome bookkeeping.
+    const runnerSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/supervised-intake-runner.ts'), 'utf8')
+    const fnMatch = runnerSource.match(/export async function checkCumulativeDailyCapacity[\s\S]*?\n}\n/)
+    expect(fnMatch).not.toBeNull()
+    if (fnMatch) {
+      expect(fnMatch[0]).not.toMatch(/cache_hit|decideItemOutcome|ShadowExtractionResult/)
+      expect(fnMatch[0]).toMatch(/supervised_intake_attempts/)
+    }
   })
 })

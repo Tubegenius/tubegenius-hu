@@ -26,6 +26,7 @@ import type { ShadowExtractionInput, ShadowExtractionResult } from './extraction
 import type { HumanReviewOrchestrationResult } from './human-review-extraction-hook'
 import { computeExtractionConfigDigest } from './digest'
 import type { SemanticTopicAdminClient } from './quota-types'
+import { redactForDisplay } from './operator-cli-security'
 import {
   CLAIM_STATE_FILE_VERSION,
   EXIT_CODE,
@@ -50,29 +51,23 @@ export interface RunnerLogger {
   log(event: RunnerLogEvent): void
 }
 
-// Fields that must NEVER reach a log line, checked defensively at the
-// logger boundary itself (belt-and-suspenders on top of every call site
-// already being written to never pass these) -- see section 10's explicit
-// deny-list.
-const NEVER_LOGGED_FIELD_NAMES = new Set([
-  'claimtoken', 'claim_token', 'servicerolekey', 'service_role_key',
-  'authorization', 'apikey', 'api_key', 'idempotencykey', 'idempotency_key',
-  'password', 'secret', 'token',
-])
-
-function redactFields(fields: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!fields) return fields
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(fields)) {
-    out[key] = NEVER_LOGGED_FIELD_NAMES.has(key.toLowerCase()) ? '[redacted]' : value
-  }
-  return out
-}
-
+// The ONE safe presenter this runner ever prints through (section H/10):
+// every field object is routed through the shared redactForDisplay() before
+// JSON.stringify/console.*, exactly like execute-approved-review.ts and
+// post-completion-review-recovery.ts's own single-presenter contract (see
+// tests/execute-approved-review-source-policy.test.ts for that established
+// pattern). redactForDisplay() recursively shortens every UUID-shaped
+// substring to an 8-char prefix (evidence/batch/item/attempt/reservation/
+// extraction/correlation IDs alike) and fully masks any field whose NAME
+// matches a secret fragment (token/claimToken/claimTokenDigest/apiKey/
+// serviceRoleKey/authorization/bearer/jwt/credential/password/secret) --
+// never a raw args object, raw DB/RPC result, or raw Error passed directly
+// to console.* anywhere else in this module.
 export function createConsoleLogger(): RunnerLogger {
   return {
     log(event) {
-      const line = JSON.stringify({ ts: new Date().toISOString(), level: event.level, message: event.message, ...redactFields(event.fields) })
+      const safeFields = event.fields ? (redactForDisplay(event.fields) as Record<string, unknown>) : undefined
+      const line = JSON.stringify({ ts: new Date().toISOString(), level: event.level, message: event.message, ...safeFields })
       if (event.level === 'error') console.error(line)
       else console.log(line)
     },
@@ -768,6 +763,84 @@ export async function resolveResumeState(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Cumulative daily-capacity preflight (section G) -- a read-only, UTC-daily
+// CUMULATIVE ABSOLUTE-LIMIT preview, checked once, before this runner ever
+// creates a NEW batch or claims a first item. Deliberately mirrors, as
+// closely as a plain client-side SELECT can, the exact query
+// claim_next_intake_item (080) evaluates server-side under its own
+// singleton-row FOR UPDATE lock:
+//   count(*) FROM supervised_intake_attempts
+//     WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+// compared against supervised_intake_control.max_daily_claimed_items. An
+// attempt row is created once per successful claim (regardless of whether
+// that claim's extraction later resolves as a fresh provider call or a
+// cache_hit) -- so "claimedOrAttemptedToday" here means exactly what
+// claim_next_intake_item itself already counts, never a runner-local guess.
+//
+// This is UX-only, never the security boundary: nothing prevents a
+// concurrent claim (this runner or another operator invocation) from
+// consuming the remaining capacity between this read and the real
+// create_supervised_intake_batch/claim_next_intake_item call. The DB's own
+// FOR UPDATE lock on supervised_intake_control inside claim_next_intake_item
+// is, and remains, the sole authoritative enforcement point -- this preflight
+// never adjusts, raises, or overrides that limit; it only gives the operator
+// an early, clear, fail-closed stop before paying the cost of creating a new
+// batch when the UTC daily cumulative absolute limit is already exhausted.
+export interface CumulativeDailyCapacityCheck {
+  ok: true
+  // false when supervised_intake_control.enabled is itself false: the
+  // at-rest baseline for a disabled policy conventionally pairs enabled=false
+  // with max_daily_claimed_items=0, which is NOT the same condition as a
+  // genuinely exhausted daily cap while the policy is actively enabled --
+  // when enabled is false, create_supervised_intake_batch's own existing
+  // INTAKE_POLICY_DISABLED check (079) is the correct, already-tested
+  // rejection path (VALIDATION_OR_CONFIG_ERROR), so the caller must never
+  // treat remainingCapacity<=0 as a capacity-exhaustion stop in that case.
+  policyEnabled: boolean
+  claimedOrAttemptedToday: number
+  absoluteLimit: number
+  remainingCapacity: number
+}
+export interface CumulativeDailyCapacityFailure {
+  ok: false
+  message: string
+}
+
+export async function checkCumulativeDailyCapacity(
+  client: SemanticTopicAdminClient,
+): Promise<CumulativeDailyCapacityCheck | CumulativeDailyCapacityFailure> {
+  const { data: controlRow, error: controlError } = await client
+    .from('supervised_intake_control')
+    .select('enabled, max_daily_claimed_items')
+    .eq('id', 1)
+    .maybeSingle()
+  if (controlError) return { ok: false, message: `could not read supervised_intake_control: ${controlError.message}` }
+  if (!controlRow) return { ok: false, message: 'supervised_intake_control row (id=1) not found' }
+  const policyEnabled = (controlRow as { enabled: boolean }).enabled
+  const absoluteLimit = (controlRow as { max_daily_claimed_items: number }).max_daily_claimed_items
+
+  // UTC day boundary, matching date_trunc('day', now() AT TIME ZONE 'UTC')
+  // exactly: midnight UTC of the current UTC calendar day.
+  const utcMidnight = new Date()
+  utcMidnight.setUTCHours(0, 0, 0, 0)
+
+  const { count, error: countError } = await client
+    .from('supervised_intake_attempts')
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', utcMidnight.toISOString())
+  if (countError) return { ok: false, message: `could not read supervised_intake_attempts: ${countError.message}` }
+
+  const claimedOrAttemptedToday = count ?? 0
+  return {
+    ok: true,
+    policyEnabled,
+    claimedOrAttemptedToday,
+    absoluteLimit,
+    remainingCapacity: absoluteLimit - claimedOrAttemptedToday,
+  }
+}
+
 export async function runSupervisedIntake(
   deps: SupervisedIntakeRunnerDeps,
   input: SupervisedIntakeBatchInput,
@@ -808,6 +881,29 @@ export async function runSupervisedIntake(
 
   // --- 1. create_supervised_intake_batch -----------------------------------
   if (batchId === null) {
+    // Section G: UTC daily cumulative absolute-limit preflight, checked
+    // once, before this run ever creates a new batch. See
+    // checkCumulativeDailyCapacity's own header for the exact semantics and
+    // why this is a UX-only early stop, never the real security boundary.
+    const capacity = await checkCumulativeDailyCapacity(deps.client)
+    if (!capacity.ok) {
+      log.log({ level: 'error', message: 'cumulative daily capacity preflight could not be evaluated', fields: { error: capacity.message } })
+      return { exitCode: EXIT_CODE.VALIDATION_OR_CONFIG_ERROR, summary: `cumulative daily capacity preflight failed: ${capacity.message}` }
+    }
+    log.log({
+      level: 'info',
+      message: 'cumulative daily capacity preflight (UTC daily cumulative absolute limit; the DB lock inside claim_next_intake_item remains the real security boundary)',
+      fields: { policyEnabled: capacity.policyEnabled, claimedOrAttemptedToday: capacity.claimedOrAttemptedToday, absoluteLimit: capacity.absoluteLimit, remainingCapacity: capacity.remainingCapacity },
+    })
+    // Only a genuinely exhausted cap WHILE the policy is enabled is this
+    // preflight's concern -- a disabled policy's own at-rest zero limit is
+    // create_supervised_intake_batch's existing INTAKE_POLICY_DISABLED
+    // rejection to make (see checkCumulativeDailyCapacity's policyEnabled doc).
+    if (capacity.policyEnabled && capacity.remainingCapacity <= 0) {
+      log.log({ level: 'error', message: 'UTC daily cumulative absolute limit already reached -- refusing to create a new batch before any claim', fields: { claimedOrAttemptedToday: capacity.claimedOrAttemptedToday, absoluteLimit: capacity.absoluteLimit } })
+      return { exitCode: EXIT_CODE.BATCH_STOPPED, summary: `UTC daily cumulative absolute limit reached (claimedOrAttemptedToday=${capacity.claimedOrAttemptedToday} >= absoluteLimit=${capacity.absoluteLimit}); refusing to create a new batch` }
+    }
+
     const created = await createSupervisedIntakeBatch(deps.client, input)
     if (!created.ok) {
       log.log({ level: 'error', message: 'create_supervised_intake_batch failed', fields: { operation: created.operation, error: created.message } })

@@ -193,11 +193,24 @@ async function main(): Promise<number> {
   return result.exitCode
 }
 
+// A minimal, self-contained UUID-shortener duplicated here on purpose (see
+// lib/semantic-topic/operator-cli-security.ts's own header comment): this
+// catch-all must still redact even if main() threw before ever reaching its
+// dynamic import of createConsoleLogger()/redactForDisplay (e.g. a module-
+// resolution failure), so it cannot depend on that import having succeeded.
+// Deliberately not imported from operator-cli-security.ts for the same
+// reason -- matches scripts/execute-approved-review.ts and
+// scripts/post-completion-review-recovery.ts's own identical fallback.
+function shortenUuidsFallback(text: string): string {
+  return text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (m) => `${m.slice(0, 8)}…`)
+}
+
 main()
   .then((exitCode) => {
     process.exitCode = exitCode
   })
   .catch((err) => {
-    console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'unexpected internal error', error: err instanceof Error ? err.message : String(err) }))
+    const rawMessage = err instanceof Error ? err.message : String(err)
+    console.error(JSON.stringify({ ts: new Date().toISOString(), level: 'error', message: 'unexpected internal error', error: shortenUuidsFallback(rawMessage) }))
     process.exitCode = EXIT_CODE.UNEXPECTED_INTERNAL_ERROR
   })
