@@ -201,7 +201,29 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Supervised Production Candidate
   // 1. Migration idempotency and topology/hash drift
   // ------------------------------------------------------------
   describe('migration idempotency and topology', () => {
-    it('079 second run is a byte-exact no-op for all tables and RPCs', () => {
+    // Migration 080 (supabase/migrations/080_supervised_intake_stopped_batch_recovery.sql)
+    // deliberately upgrades claim_next_intake_item and stop_intake_batch past
+    // their original 079 bodies. When 080 has already been applied to this
+    // same persistent local DB (true whenever this suite runs after the 080
+    // suite in one sequential process -- see
+    // tests/semantic-topic-supervised-intake-080-db-integration.test.ts),
+    // re-running 079's file verbatim is EXPECTED to be rejected by 079's own
+    // internal, pre-existing drift-guard ("079 CRITICAL: ... body hash
+    // changed ... this migration must NEVER silently redefine a drifted
+    // function"): it correctly cannot tell an audited, later upgrade apart
+    // from unauthorized drift, and refuses either way. That is a required
+    // safety property (an earlier migration must never be able to silently
+    // claw back a later one's state), not a bug -- so this test asserts
+    // EXACTLY that, rather than assuming an isolated, 079-only environment.
+    function currentFunctionHash(name: string): string {
+      return dockerPsql(`select md5(replace(prosrc, E'\r\n', E'\n')) from pg_proc where proname='${name}';`).trim()
+    }
+    function is080Applied(): boolean {
+      return dockerPsql(`select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='abandon_unclaimed_intake_item';`).trim() === '1'
+    }
+
+    it('079 second run is a byte-exact no-op for all tables and RPCs (079-only environment)', () => {
+      if (is080Applied()) return // covered by the next test instead
       const result = runMigration(MIGRATION_079_PATH)
       expect(result.threw).toBe(false)
       for (const name of TABLE_NAMES) {
@@ -211,6 +233,23 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Supervised Production Candidate
         expect(result.out).toMatch(new RegExp(`${name} already exists and matches exactly`))
       }
       expect(result.out).not.toMatch(/drift/i)
+    })
+
+    it('079 second run fails closed on its own drift-guard (never silently overwrites) when 080 has already upgraded claim_next_intake_item/stop_intake_batch, and the DB is provably unchanged afterward', () => {
+      if (!is080Applied()) return // covered by the previous test instead
+      const preClaimHash = currentFunctionHash('claim_next_intake_item')
+      const preStopHash = currentFunctionHash('stop_intake_batch')
+
+      const result = runMigration(MIGRATION_079_PATH)
+
+      expect(result.threw).toBe(true)
+      expect(result.out).toMatch(/079 CRITICAL: claim_next_intake_item body hash changed/)
+      // The whole file runs inside one BEGIN/COMMIT (see its own header) --
+      // an aborted transaction commits nothing, so both 080-upgraded
+      // functions must be byte-identical to their pre-attempt bodies.
+      expect(currentFunctionHash('claim_next_intake_item')).toBe(preClaimHash)
+      expect(currentFunctionHash('stop_intake_batch')).toBe(preStopHash)
+      expect(is080Applied()).toBe(true)
     })
 
     it('079 fails closed if 077/078 dependency is not applied', () => {
