@@ -27,6 +27,13 @@
 import { createReviewRequest } from './human-review-service'
 import { deriveHumanReviewIdempotencyKey } from './human-review-extraction-hook'
 import type { SemanticTopicAdminClient } from './human-review-types'
+// Redaction and project-identity-guard logic now live in the shared
+// operator-cli-security module (reused by execute-approved-review.ts too)
+// -- re-exported here unchanged so this module's public API, and every
+// existing import site (including the CLI script's own dynamic import),
+// stays identical.
+export { redactForDisplay, resolveProjectIdentity, projectGuardPasses, type ProjectIdentity } from './operator-cli-security'
+import { redactForDisplay } from './operator-cli-security'
 
 export const RECOVERY_EXIT_CODE = {
   OK: 0,
@@ -36,95 +43,6 @@ export const RECOVERY_EXIT_CODE = {
   UNEXPECTED_ERROR: 5,
 } as const
 export type RecoveryExitCode = (typeof RECOVERY_EXIT_CODE)[keyof typeof RECOVERY_EXIT_CODE]
-
-// ===========================================================================
-// Central display/logging redactor -- the ONLY function anything on the
-// CLI's output boundary may pass a value through before printing it.
-// Belt-and-suspenders on top of every DTO above already being shaped to
-// carry prefixes, not full ids: this is the safety net for a raw Postgres/
-// PostgREST error message, a future field someone forgets to pre-truncate,
-// or any other value nobody explicitly reasoned about at the point it was
-// produced. Never used to shape a value used for an actual DB/RPC call --
-// exclusively a display-time transform, applied last, right before
-// JSON.stringify/console.log/console.error.
-// ===========================================================================
-
-// Broader than the strict v4-only pattern used for CLI argument validation
-// (UUID_PATTERN in scripts/post-completion-review-recovery.ts) -- this one
-// exists purely to FIND and shorten any UUID-shaped substring wherever it
-// appears, not to validate one, so it deliberately matches any RFC-4122-
-// shaped string regardless of version/variant nibble.
-const ANY_UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
-
-// Key names whose VALUE is always fully masked, never merely shortened --
-// mirrors supervised-intake-runner.ts's own NEVER_LOGGED_FIELD_NAMES
-// denylist convention (matched case-insensitively, underscores/hyphens
-// ignored, so 'SUPABASE_SERVICE_ROLE_KEY', 'serviceRoleKey', and
-// 'service-role-key' are all treated identically).
-const SECRET_FIELD_NAME_FRAGMENTS = ['servicerolekey', 'apikey', 'authorization', 'password', 'secret', 'token', 'bearer', 'jwt', 'credential']
-
-function isSecretFieldName(key: string): boolean {
-  const normalized = key.toLowerCase().replace(/[_-]/g, '')
-  return SECRET_FIELD_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment))
-}
-
-function shortenUuids(value: string): string {
-  return value.replace(ANY_UUID_REGEX, (match) => `${match.slice(0, 8)}…`)
-}
-
-// Recursively walks objects/arrays/strings. Never mutates its input --
-// always returns a fresh value, so the caller's own (un-redacted) copy,
-// used for real logic elsewhere, is never at risk of being silently altered
-// by a logging call.
-export function redactForDisplay(value: unknown): unknown {
-  if (typeof value === 'string') return shortenUuids(value)
-  if (Array.isArray(value)) return value.map((item) => redactForDisplay(item))
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [key, val] of Object.entries(value)) {
-      out[key] = isSecretFieldName(key) ? '[redacted]' : redactForDisplay(val)
-    }
-    return out
-  }
-  return value
-}
-
-// ===========================================================================
-// Project-identity guard (Section E) -- pure string parsing, no I/O. Exists
-// so the CLI can refuse to proceed unless the operator's own
-// --confirm-production value matches the project the service client will
-// actually talk to, and so a localhost/127.0.0.1 target can never be
-// confirmed as "production" no matter what string is passed.
-// ===========================================================================
-export type ProjectIdentity =
-  | { kind: 'local'; host: string }
-  | { kind: 'remote'; projectRef: string }
-  | { kind: 'unrecognized'; host: string }
-
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
-
-export function resolveProjectIdentity(supabaseUrl: string): ProjectIdentity {
-  let parsed: URL
-  try {
-    parsed = new URL(supabaseUrl)
-  } catch {
-    return { kind: 'unrecognized', host: supabaseUrl }
-  }
-  const host = parsed.hostname.toLowerCase()
-  if (LOCAL_HOSTS.has(host)) return { kind: 'local', host }
-  // Supabase-hosted project URLs are always <project-ref>.supabase.co --
-  // the leftmost label is the project ref, never guessed at, never derived
-  // from anything other than this exact, documented URL shape.
-  const match = /^([a-z0-9]+)\.supabase\.co$/.exec(host)
-  if (match) return { kind: 'remote', projectRef: match[1] }
-  return { kind: 'unrecognized', host }
-}
-
-// Fail-closed comparison: a 'local' or 'unrecognized' identity can never be
-// confirmed as production, regardless of what string the operator passes.
-export function projectGuardPasses(identity: ProjectIdentity, confirmProduction: string): boolean {
-  return identity.kind === 'remote' && identity.projectRef === confirmProduction
-}
 
 // ===========================================================================
 // Read-only extraction-run preview -- the ONLY data this module ever reads.
