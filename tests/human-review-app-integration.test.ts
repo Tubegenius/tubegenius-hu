@@ -338,6 +338,12 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- real application-laye
     beforeAll(() => {
       originalControlEnabled = dockerPsql(`select enabled from ai_extraction_control where id=1;`).trim() === 't'
       dockerPsql(`update ai_extraction_control set enabled=true, updated_at=now() where id=1;`)
+      // PFM Identity-Linked Workspace Header Support v0: runShadowExtraction
+      // (the REAL module, not mocked here -- only provider-adapter.ts's
+      // callAnthropicForExtraction is mocked, per runOrchestration below)
+      // now fails closed on a missing ANTHROPIC_WORKSPACE_ID before this
+      // suite's own reservation/provider-mock flow is ever reached.
+      process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
 
       const row = dockerPsql(
         `select reserved_requests, committed_requests, released_requests_total, reserved_micro_usd, committed_micro_usd, released_micro_usd_total from ai_provider_daily_budgets where provider='anthropic' and usage_type='semantic_topic_extraction' and model='claude-sonnet-4-6' and quota_date=current_date;`,
@@ -352,6 +358,7 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- real application-laye
     })
     afterAll(() => {
       dockerPsql(`update ai_extraction_control set enabled=${originalControlEnabled}, updated_at=now() where id=1;`)
+      delete process.env.ANTHROPIC_WORKSPACE_ID
       // This inner afterAll runs BEFORE the outer describe's own afterAll
       // (which calls cleanupFixtures()) -- vitest/jest run nested afterAll
       // hooks innermost-first. If the row didn't exist before this suite

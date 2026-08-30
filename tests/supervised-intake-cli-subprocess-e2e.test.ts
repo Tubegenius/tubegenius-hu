@@ -119,6 +119,13 @@ interface CliResult {
 async function runCli(args: string[], envOverrides: Record<string, string | undefined> = {}): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.ANTHROPIC_API_KEY // never inherited even if the operator's own shell happens to have it set
+  // PFM Identity-Linked Workspace Header Support v0: a valid default so
+  // every EXISTING scenario in this file reaches the same real reservation/
+  // RPC behavior it exercised before this precondition existed -- this
+  // suite's own contract is "zero provider calls" (assertNeverCalledProvider
+  // below), which is about ANTHROPIC_API_KEY/provider-adapter.ts, not this
+  // local config check.
+  env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
   for (const [k, v] of Object.entries(envOverrides)) {
     if (v === undefined) delete env[k]
     else env[k] = v
@@ -155,6 +162,7 @@ function runCliUntilLineThenSignal(
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.ANTHROPIC_API_KEY
+  env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
   for (const [k, v] of Object.entries(envOverrides)) {
     if (v === undefined) delete env[k]
     else env[k] = v

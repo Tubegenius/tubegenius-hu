@@ -134,6 +134,13 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
   beforeAll(() => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = LOCAL_URL
     process.env.SUPABASE_SERVICE_ROLE_KEY = LOCAL_SERVICE_ROLE_KEY
+    // PFM Identity-Linked Workspace Header Support v0: runShadowExtraction
+    // now fails closed on a missing ANTHROPIC_WORKSPACE_ID BEFORE ever
+    // reaching reserveAiProviderUnits -- this suite's own REAL (not mocked)
+    // runShadowExtraction calls need a valid one to reach the real 079 RPCs
+    // they're actually testing, same as ANTHROPIC_API_KEY is never needed
+    // here because the provider adapter itself stays mocked.
+    process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
     cleanupMarker()
   })
 

@@ -60,6 +60,7 @@ import {
   releaseAiProviderUnits,
 } from './ai-quota'
 import { callAnthropicForExtraction } from './provider-adapter'
+import { getConfiguredAnthropicWorkspaceId } from './anthropic-workspace-config'
 import { classifyProviderFailure, COMMIT_FAILED_CLASSIFICATION, MALFORMED_OUTPUT_CHARGED_CLASSIFICATION, type ProviderFailureClassification } from './provider-error-taxonomy'
 import { findCompletedExtractionRun, recordCompletedExtractionRun, recordFailedExtractionRun } from './extraction-writer'
 import { maybeRequestHumanReview, type HumanReviewOrchestrationResult } from './human-review-extraction-hook'
@@ -147,6 +148,14 @@ export interface ShadowExtractionInput {
 
 export type ShadowExtractionResult =
   | { outcome: 'input_too_large'; totalInputBytes: number }
+  // PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID
+  // is missing or fails the documented wrkspc_ format check -- caught here,
+  // BEFORE any reservation or provider call (same "checked before reserve"
+  // position as input_too_large just above), so a misconfiguration can
+  // never consume quota or attempt a call that would fail identically for
+  // every remaining item. See anthropic-workspace-config.ts for the full
+  // contract this enforces.
+  | { outcome: 'configuration_error'; reasonCode: 'anthropic_workspace_id_missing' | 'anthropic_workspace_id_invalid_format' }
   // cache_hit ALSO carries humanReview (same reasoning as completed below):
   // a cache-hit run is just as much a "completed extraction that now
   // exists" as a freshly-produced one -- if the hook were skipped here, a
@@ -218,6 +227,18 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   const totalInputBytes = totalInputByteLength(system, user)
   if (totalInputBytes > AI_QUOTA_MAX_INPUT_BYTES) {
     return { outcome: 'input_too_large', totalInputBytes }
+  }
+
+  // 2b. PFM Identity-Linked Workspace Header Support v0: fail-closed BEFORE
+  // any reservation or provider call, same position/reasoning as the
+  // input_too_large check just above -- a misconfigured workspace ID would
+  // fail identically for every remaining item, so it must never be allowed
+  // to spend a reservation or attempt a call first. Deliberately placed
+  // AFTER the cache-hit check (step 1, above): a cache_hit needs no
+  // provider call at all, so it must not be blocked by this config alone.
+  const workspaceConfig = getConfiguredAnthropicWorkspaceId()
+  if (!workspaceConfig.ok) {
+    return { outcome: 'configuration_error', reasonCode: workspaceConfig.reasonCode }
   }
   const estimatedInputTokens = estimateInputTokens(system, user)
 

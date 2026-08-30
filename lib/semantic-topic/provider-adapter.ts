@@ -18,17 +18,38 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { assertAICompletion, extractJson } from '@/lib/services/ai-provider-service'
 import { SEMANTIC_TOPIC_EXTRACTION_MODEL } from './extraction-config'
+import { ANTHROPIC_WORKSPACE_ID_HEADER, getConfiguredAnthropicWorkspaceId } from './anthropic-workspace-config'
 
 let semanticTopicAnthropicClient: Anthropic | null = null
 
+// PFM Identity-Linked Workspace Header Support v0: the production Anthropic
+// key is confirmed identity-linked (Personal / "All workspaces"), so every
+// call must carry the anthropic-workspace-id header -- see
+// anthropic-workspace-config.ts's own header for the full official contract
+// and the design decision to make this REQUIRED rather than conditional.
+// This check is defense-in-depth, not the primary gate: extraction-
+// service.ts's runShadowExtraction() already fails closed on a missing/
+// invalid workspace config BEFORE ever reaching a reservation or this
+// function, exactly like it already does for ANTHROPIC_API_KEY above --
+// this mirrors that exact existing pattern for the new config value, so
+// this function is never the FIRST place either misconfiguration is caught
+// in practice, only the last line of defense if it somehow were.
 function getSemanticTopicAnthropicClient(): Anthropic {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('Anthropic is not configured')
+  const workspaceConfig = getConfiguredAnthropicWorkspaceId()
+  if (!workspaceConfig.ok) throw new Error('Anthropic workspace is not configured')
   if (!semanticTopicAnthropicClient) {
     semanticTopicAnthropicClient = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
       timeout: 60_000,
       // maxRetries: 0 is deliberate -- see module header comment.
       maxRetries: 0,
+      // Added once, at client-construction time, for the ONE workspace this
+      // deployment ever acts in -- never per-call, never derived from
+      // caller-supplied input. Supplements (never overrides or duplicates)
+      // the SDK's own required headers (x-api-key, anthropic-version,
+      // content-type), which defaultHeaders leaves untouched.
+      defaultHeaders: { [ANTHROPIC_WORKSPACE_ID_HEADER]: workspaceConfig.workspaceId },
     })
   }
   return semanticTopicAnthropicClient

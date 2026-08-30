@@ -51,12 +51,26 @@ $pw = Read-Host -AsSecureString 'ANTHROPIC_API_KEY'
 $plainKey = ConvertFrom-SecureStringPlain $pw
 $pw = $null
 
+# PFM Identity-Linked Workspace Header Support v0: a SEPARATE secure prompt,
+# never reused from the API key one above -- the production key is a
+# confirmed identity-linked (multi-workspace) key, so every call must carry
+# the anthropic-workspace-id header. Not a true secret (see
+# anthropic-workspace-config.ts's own header), but still entered via
+# Read-Host -AsSecureString and cleared in `finally` alongside the API key,
+# same protections, never printed, never a command-line argument.
+Write-Host "`n=== Anthropic workspace ID (anthropic-workspace-id fejlechez, csak ennek az egy hivasnak a idejere elerheto) ===" -ForegroundColor Yellow
+$wsPw = Read-Host -AsSecureString 'ANTHROPIC_WORKSPACE_ID'
+$plainWorkspaceId = ConvertFrom-SecureStringPlain $wsPw
+$wsPw = $null
+
 $repoRoot = 'C:\Projektek\WillViralFinal'
 $exitCode = 4
 
 try {
     $env:ANTHROPIC_API_KEY = $plainKey
     $plainKey = $null
+    $env:ANTHROPIC_WORKSPACE_ID = $plainWorkspaceId
+    $plainWorkspaceId = $null
 
     Push-Location $repoRoot
     try {
@@ -71,9 +85,11 @@ try {
     }
 }
 finally {
-    # Runs even on Ctrl+C or an unhandled error above -- the key is never
-    # left set in this shell's environment beyond the one child-process call.
+    # Runs even on Ctrl+C or an unhandled error above -- neither value is
+    # ever left set in this shell's environment beyond the one child-process
+    # call.
     Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_WORKSPACE_ID -ErrorAction SilentlyContinue
 }
 
 Write-Host "`nExit code: $exitCode" -ForegroundColor Cyan

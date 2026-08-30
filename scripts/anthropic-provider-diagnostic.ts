@@ -84,15 +84,26 @@ Two request modes:
                           difference from the real extraction call.
 
 Required environment (must already be exported in the shell -- this CLI
-never reads .env/.env.local itself, and never accepts the key as a
+never reads .env/.env.local itself, and never accepts either value as a
 command-line argument):
   ANTHROPIC_API_KEY
+  ANTHROPIC_WORKSPACE_ID   Required for every call (default AND
+                            --production-parity): the production key is a
+                            confirmed identity-linked (multi-workspace) key,
+                            so every Messages API call must carry the
+                            anthropic-workspace-id header. See
+                            lib/semantic-topic/anthropic-workspace-config.ts.
 
 Options:
   --confirm-diagnostic   Required. Without it, the CLI prints this help
                           and exits before doing anything else.
   --production-parity    Optional. See above.
   --help                  Show this message.
+
+Output never includes the workspace ID value, a prefix of it, its length,
+or any fingerprint of it -- only whether it was configured at all (see
+provider-error-diagnostic-detail.ts and operator-cli-security.ts's
+redaction contract, which fully masks any field named workspaceId).
 
 Exit codes:
   0  success -- the call completed (key/model/permissions all working)
@@ -124,6 +135,7 @@ async function main(): Promise<number> {
   const { redactForDisplay } = await import('../lib/semantic-topic/operator-cli-security')
   const { classifyProviderFailure } = await import('../lib/semantic-topic/provider-error-taxonomy')
   const { extractSafeProviderErrorDetail } = await import('../lib/semantic-topic/provider-error-diagnostic-detail')
+  const { ANTHROPIC_WORKSPACE_ID_HEADER, getConfiguredAnthropicWorkspaceId } = await import('../lib/semantic-topic/anthropic-workspace-config')
   // AI_QUOTA_MAX_OUTPUT_TOKENS is the SAME constant provider-adapter.ts's
   // real extraction call is invoked with (via extraction-service.ts) --
   // imported here rather than re-typed as a literal so --production-parity
@@ -148,11 +160,36 @@ async function main(): Promise<number> {
     return EXIT_CODE.CONFIG_ERROR
   }
 
+  // PFM Identity-Linked Workspace Header Support v0: required for every
+  // call (default AND --production-parity), same fail-closed-before-any-
+  // call contract as the API key check just above -- see
+  // anthropic-workspace-config.ts for the full official contract. Never
+  // logs the reasonCode's underlying raw value (there isn't one on a
+  // failure branch by construction) and never logs the value on success
+  // either -- only the boolean fact that it was configured, below.
+  const workspaceConfig = getConfiguredAnthropicWorkspaceId()
+  if (!workspaceConfig.ok) {
+    log('error', 'ANTHROPIC_WORKSPACE_ID is not configured -- refusing to proceed before any provider call', {
+      reasonCode: workspaceConfig.reasonCode,
+    })
+    return EXIT_CODE.CONFIG_ERROR
+  }
+
   // No DB, no Supabase, no Vercel, no control table -- this client is
   // constructed with ONLY the key, timeout, and maxRetries:0, identical to
   // provider-adapter.ts's own narrow-adapter contract (see that file's
-  // header for why maxRetries must never be anything but 0 here).
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 15_000, maxRetries: 0 })
+  // header for why maxRetries must never be anything but 0 here). The
+  // workspace header is added via defaultHeaders exactly like provider-
+  // adapter.ts's own production client -- applies to the one call this CLI
+  // ever makes, in both default and --production-parity modes (the header
+  // is an authentication concern, not a request-shape parity concern, so it
+  // does not vary with productionParity).
+  const client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: 15_000,
+    maxRetries: 0,
+    defaultHeaders: { [ANTHROPIC_WORKSPACE_ID_HEADER]: workspaceConfig.workspaceId },
+  })
 
   const maxOutputTokens = productionParity ? AI_QUOTA_MAX_OUTPUT_TOKENS : 1
 
@@ -161,6 +198,12 @@ async function main(): Promise<number> {
     maxOutputTokens,
     timeoutMs: 15_000,
     productionParity,
+    // Boolean fact only -- never the value, prefix, length, or fingerprint
+    // (Section D's own explicit requirement). Always true at this point in
+    // the function (the config-error branch above already returned), kept
+    // here purely so a saved log line self-documents that the header was
+    // sent, without needing to cross-reference source code to know.
+    workspaceHeaderConfigured: true,
   })
 
   try {

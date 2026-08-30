@@ -270,6 +270,29 @@ describe('decideItemOutcome', () => {
     expect(decideItemOutcome(result)).toEqual({ kind: 'fail_item_continue', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: false, diagnosticCode: 'input_too_large' })
   })
 
+  it('configuration_error (missing workspace ID) -> fail_item_and_stop_batch, retryable=false (permanent, unlike disabled_or_rejected)', () => {
+    const result: ShadowExtractionResult = { outcome: 'configuration_error', reasonCode: 'anthropic_workspace_id_missing' }
+    expect(decideItemOutcome(result)).toEqual({
+      kind: 'fail_item_and_stop_batch',
+      reasonCode: 'ANTHROPIC_WORKSPACE_CONFIG_ERROR',
+      retryable: false,
+      diagnosticCode: 'configuration_error_anthropic_workspace_id_missing',
+      stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+    })
+  })
+
+  it('configuration_error (invalid format) -> same fail_item_and_stop_batch shape, distinct diagnosticCode', () => {
+    const result: ShadowExtractionResult = { outcome: 'configuration_error', reasonCode: 'anthropic_workspace_id_invalid_format' }
+    const decision = decideItemOutcome(result)
+    expect(decision).toEqual({
+      kind: 'fail_item_and_stop_batch',
+      reasonCode: 'ANTHROPIC_WORKSPACE_CONFIG_ERROR',
+      retryable: false,
+      diagnosticCode: 'configuration_error_anthropic_workspace_id_invalid_format',
+      stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+    })
+  })
+
   it('failed/malformed_output -> fail_item_continue, NOT retryable (charged attempt, no cost-aware retry gate in 079 v0)', () => {
     const result: ShadowExtractionResult = {
       outcome: 'failed', reservationId: 'res-3', extractionRunId: 'run-3', errorClass: 'malformed_output',

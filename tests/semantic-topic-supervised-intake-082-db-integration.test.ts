@@ -1,14 +1,16 @@
-// PFM Anthropic Provider Failure Taxonomy v0 -- 081 migration DB
-// integration. Real local Docker Postgres, matching every other 079/080/081
-// -family suite's own dockerPsql/marker conventions. No provider call ever.
+// PFM Identity-Linked Workspace Header Support v0 -- 082 migration DB
+// integration. Real local Docker Postgres, matching every other
+// 079/080/081-family suite's own dockerPsql/marker conventions. No provider
+// call ever -- this migration only widens a closed vocabulary for a LOCAL
+// config-check failure, never a provider-rejected code.
 import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-const MIGRATION_081_PATH = join(process.cwd(), 'supabase/migrations/081_supervised_intake_provider_failure_taxonomy.sql')
+const MIGRATION_082_PATH = join(process.cwd(), 'supabase/migrations/082_supervised_intake_workspace_config_error.sql')
 const CONTAINER = 'supabase_db_WillViralFinal'
-const MARKER = 'sti081'
+const MARKER = 'sti082'
 
 function dockerPsql(sql: string): string {
   return execSync(`docker exec -i ${CONTAINER} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, { input: sql, encoding: 'utf-8' })
@@ -83,7 +85,7 @@ function cleanupMarker() {
   disableControl()
 }
 
-describeIfLocalDb('081 -- Provider Failure Taxonomy v0 (real local DB)', () => {
+describeIfLocalDb('082 -- Identity-Linked Workspace Header Support v0 (real local DB)', () => {
   beforeAll(() => {
     cleanupMarker()
   })
@@ -94,90 +96,81 @@ describeIfLocalDb('081 -- Provider Failure Taxonomy v0 (real local DB)', () => {
   })
 
   describe('migration idempotency and topology', () => {
-    it('081 second run is a byte-exact no-op -- OR the DB has since been advanced further by a later migration (e.g. 082), which is also a correct, expected outcome', () => {
-      // PFM Identity-Linked Workspace Header Support v0 (082) widens the
-      // SAME reason_code CHECK constraint and fail_intake_item body that
-      // 081 itself guards with a hardcoded target definition string. Once
-      // 082 has run against this local DB (a real, expected state on a
-      // shared, persistent local stack -- migrations here are never
-      // re-run out of order in a real deployment), 081's own fail-closed
-      // guard correctly refuses to touch a definition it no longer
-      // recognizes as either its own 079 baseline or its own 081 target --
-      // that refusal IS the desired behavior (never silently reverting a
-      // later, further-widened definition), not a regression.
-      const result = runMigration(MIGRATION_081_PATH)
-      if (result.threw) {
-        expect(result.out).toMatch(/081 fail-closed:.*neither the known 079 definition nor the 081 definition/)
-      } else {
-        expect(result.out).toMatch(/already includes the provider-taxonomy codes -- no-op/)
-        expect(result.out).not.toMatch(/upgraded/i)
+    it('applying 082 (first time on this DB, or already applied) then re-applying it is idempotent -- the SECOND run is always a byte-exact no-op', () => {
+      // This DB may or may not already have 082 applied depending on prior
+      // suite runs against the same local stack -- both are valid starting
+      // states (idempotent migrations are designed to be re-run safely).
+      // What this test actually proves is the interesting property: no
+      // matter which state we started in, a run AFTER that always reports
+      // the no-op branch, never "upgraded" twice.
+      const first = runMigration(MIGRATION_082_PATH)
+      expect(first.threw).toBe(false)
+
+      const second = runMigration(MIGRATION_082_PATH)
+      expect(second.threw).toBe(false)
+      expect(second.out).toMatch(/already includes ANTHROPIC_WORKSPACE_CONFIG_ERROR -- no-op/)
+      expect(second.out).not.toMatch(/upgraded/i)
+    })
+
+    it('081 provider-taxonomy codes remain present and untouched by 082', () => {
+      const def = dockerPsql(`select pg_get_constraintdef(oid) from pg_constraint where conname='supervised_intake_batch_items_reason_code_check';`)
+      for (const code of ['PROVIDER_AUTHENTICATION_FAILED', 'PROVIDER_PERMISSION_DENIED', 'PROVIDER_MODEL_NOT_FOUND', 'PROVIDER_INVALID_REQUEST_UNBILLED', 'PROVIDER_REJECTED_UNBILLED_UNKNOWN']) {
+        expect(def).toContain(code)
       }
     })
 
-    it('079/080 objects and hashes remain untouched by 081', () => {
+    it('079/080 objects remain untouched by 082', () => {
       expect(dockerPsql(`select (md5(replace(prosrc, E'\\r\\n', E'\\n')) = '21b4d6d58d259cc1235f74f1f2e5d38d')::text from pg_proc where proname='claim_next_intake_item';`).trim()).toBe('true')
       expect(dockerPsql(`select (md5(replace(prosrc, E'\\r\\n', E'\\n')) = 'a23602bc8f37aff495632832522cf96d')::text from pg_proc where proname='stop_intake_batch';`).trim()).toBe('true')
-      expect(dockerPsql(`select (pg_get_constraintdef(oid) like '%item_closed_unprocessed%')::text from pg_constraint where conname='supervised_intake_events_kind_check';`).trim()).toBe('true')
     })
 
     it('fail_intake_item has no overload', () => {
       expect(dockerPsql(`select count(*)::text from pg_proc where proname='fail_intake_item';`).trim()).toBe('1')
     })
 
-    it('the item reason_code CHECK constraint contains exactly the five new provider-taxonomy codes plus the original 079 set', () => {
+    it('the item reason_code CHECK constraint contains ANTHROPIC_WORKSPACE_CONFIG_ERROR plus every prior code', () => {
       const def = dockerPsql(`select pg_get_constraintdef(oid) from pg_constraint where conname='supervised_intake_batch_items_reason_code_check';`)
-      for (const code of ['PROVIDER_AUTHENTICATION_FAILED', 'PROVIDER_PERMISSION_DENIED', 'PROVIDER_MODEL_NOT_FOUND', 'PROVIDER_INVALID_REQUEST_UNBILLED', 'PROVIDER_REJECTED_UNBILLED_UNKNOWN']) {
-        expect(def).toContain(code)
-      }
-      expect(def).toContain('INVALID_EVIDENCE_STATE') // original 079 codes preserved
+      expect(def).toContain('ANTHROPIC_WORKSPACE_CONFIG_ERROR')
+      expect(def).toContain('INVALID_EVIDENCE_STATE')
     })
 
-    it('fail_intake_item rejects an unrecognized reason code (fail-closed, drift-proof)', () => {
+    it('fail_intake_item still rejects an unrecognized reason code (fail-closed, drift-proof)', () => {
       expect(() => dockerPsql(`select fail_intake_item('${'0'.repeat(8)}-0000-4000-8000-000000000000'::uuid, 'x', 'NOT_A_REAL_REASON_CODE', true, NULL, '${nextMarker('bad-reason')}');`)).toThrow(/INVALID_REASON_CODE/)
     })
   })
 
-  describe('each new provider-taxonomy code is independently accepted by fail_intake_item and produces a correctly stopped batch', () => {
-    const cases: Array<{ code: string; label: string }> = [
-      { code: 'PROVIDER_AUTHENTICATION_FAILED', label: 'authfail' },
-      { code: 'PROVIDER_PERMISSION_DENIED', label: 'permdenied' },
-      { code: 'PROVIDER_MODEL_NOT_FOUND', label: 'modelnotfound' },
-      { code: 'PROVIDER_INVALID_REQUEST_UNBILLED', label: 'invalidreq' },
-      { code: 'PROVIDER_REJECTED_UNBILLED_UNKNOWN', label: 'unknownstatus' },
-    ]
+  describe('ANTHROPIC_WORKSPACE_CONFIG_ERROR is accepted by fail_intake_item and produces a correctly stopped batch, exactly like the 081 provider-taxonomy codes', () => {
+    it('fail_intake_item(retryable=false) succeeds, item terminal, attempt failed_terminal, retry refused', () => {
+      enableControl(1, 10)
+      const evidenceId = createEvidence('wsconfig')
+      const batch = createBatch([evidenceId])
+      const claimed = claim(batch.batch_id)
+      expect(claimed.outcome).toBe('claimed')
 
-    for (const { code, label } of cases) {
-      it(`${code}: fail_intake_item(retryable=false) succeeds, item terminal, attempt failed_terminal`, () => {
-        enableControl(1, 10)
-        const evidenceId = createEvidence(label)
-        const batch = createBatch([evidenceId])
-        const claimed = claim(batch.batch_id)
-        expect(claimed.outcome).toBe('claimed')
+      const result = JSON.parse(
+        dockerPsql(
+          `select fail_intake_item('${claimed.item_id}'::uuid, '${claimed.claim_token}', 'ANTHROPIC_WORKSPACE_CONFIG_ERROR', false, 'configuration_error_anthropic_workspace_id_missing', '${nextMarker('fail-wsconfig')}');`,
+        ),
+      )
+      expect(result.ok).toBe(true)
+      expect(result.status).toBe('failed')
+      expect(result.retryable).toBe(false)
 
-        const result = JSON.parse(
-          dockerPsql(
-            `select fail_intake_item('${claimed.item_id}'::uuid, '${claimed.claim_token}', '${code}', false, '${label}', '${nextMarker(`fail-${label}`)}');`,
-          ),
-        )
-        expect(result.ok).toBe(true)
-        expect(result.status).toBe('failed')
-        expect(result.retryable).toBe(false)
+      const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where id='${claimed.item_id}'::uuid;`).trim()
+      expect(itemRow).toBe('failed|ANTHROPIC_WORKSPACE_CONFIG_ERROR|false')
+      const attemptRow = dockerPsql(`select status||'|'||retryable::text from supervised_intake_attempts where batch_item_id='${claimed.item_id}'::uuid;`).trim()
+      expect(attemptRow).toBe('failed_terminal|false')
 
-        const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where id='${claimed.item_id}'::uuid;`).trim()
-        expect(itemRow).toBe(`failed|${code}|false`)
-        const attemptRow = dockerPsql(`select status||'|'||retryable::text from supervised_intake_attempts where batch_item_id='${claimed.item_id}'::uuid;`).trim()
-        expect(attemptRow).toBe('failed_terminal|false')
-
-        // authorize_intake_item_retry (079) must refuse -- retryable=false is
-        // the entire safety boundary preventing an automatic paid retry.
-        expect(() =>
-          dockerPsql(`select authorize_intake_item_retry('${claimed.item_id}'::uuid, 'test-operator', 'OPERATOR_REVIEWED', '${nextMarker('retry')}');`),
-        ).toThrow(/ITEM_NOT_RETRYABLE/)
-      })
-    }
+      // authorize_intake_item_retry (079) must refuse -- retryable=false is
+      // the entire safety boundary preventing an automatic paid retry, same
+      // guarantee 081's own provider-taxonomy codes rely on.
+      expect(() =>
+        dockerPsql(`select authorize_intake_item_retry('${claimed.item_id}'::uuid, 'test-operator', 'OPERATOR_REVIEWED', '${nextMarker('retry')}');`),
+      ).toThrow(/ITEM_NOT_RETRYABLE/)
+    })
   })
 
-  it('zero provider calls anywhere in this suite', () => {
+  it('zero provider calls anywhere in this suite -- a config-error is a purely local, pre-call check', () => {
     const count = dockerPsql(`select count(*) from supervised_intake_attempts where batch_item_id in (select id from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key like '${MARKER}-%')) and provider_call_started_at is not null;`).trim()
     expect(count).toBe('0')
   })

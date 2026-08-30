@@ -37,7 +37,14 @@ const ANY_UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 // matched case-insensitively, underscores/hyphens ignored, so
 // 'SUPABASE_SERVICE_ROLE_KEY', 'serviceRoleKey', and 'service-role-key' are
 // all treated identically.
-const SECRET_FIELD_NAME_FRAGMENTS = ['servicerolekey', 'apikey', 'authorization', 'password', 'secret', 'token', 'bearer', 'jwt', 'credential']
+// 'workspaceid' added by the Identity-Linked Workspace Header Support gate:
+// an Anthropic workspace ID is not an API secret (see anthropic-workspace-
+// config.ts's own header for why), but is still fully masked here rather
+// than merely UUID-shortened -- that gate's own Section D/H requires the
+// diagnostic CLI's output to show neither the value NOR a prefix/length/
+// fingerprint of it, which only full masking (not shortenUuids' 8-char
+// prefix) satisfies.
+const SECRET_FIELD_NAME_FRAGMENTS = ['servicerolekey', 'apikey', 'authorization', 'password', 'secret', 'token', 'bearer', 'jwt', 'credential', 'workspaceid']
 
 function isSecretFieldName(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[_-]/g, '')

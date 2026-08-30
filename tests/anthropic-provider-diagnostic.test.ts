@@ -34,6 +34,13 @@ interface CliResult {
 async function runCli(args: string[], envOverrides: Record<string, string | undefined> = {}): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.ANTHROPIC_BASE_URL
+  // PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID
+  // is now a required precondition, same as ANTHROPIC_API_KEY -- default to
+  // a valid synthetic value here so every EXISTING test in this file (which
+  // was written before this requirement existed) keeps reaching the mock
+  // server unchanged; the dedicated describe block below overrides this to
+  // undefined/invalid via envOverrides to exercise the new config-error path.
+  env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
   for (const [k, v] of Object.entries(envOverrides)) {
     if (v === undefined) delete env[k]
     else env[k] = v
@@ -60,6 +67,15 @@ describe('anthropic-provider-diagnostic.ts -- source policy', () => {
   it('never accepts the API key as a command-line argument -- only reads process.env.ANTHROPIC_API_KEY', () => {
     expect(cliSource).not.toMatch(/--api-key/)
     expect(cliSource).toMatch(/process\.env\.ANTHROPIC_API_KEY/)
+  })
+
+  it('PFM workspace header: never accepts the workspace ID as a command-line argument -- only reads it via getConfiguredAnthropicWorkspaceId()', () => {
+    expect(cliSource).not.toMatch(/--workspace-id/)
+    expect(cliSource).toMatch(/getConfiguredAnthropicWorkspaceId/)
+  })
+
+  it('PFM workspace header: sends the header via defaultHeaders on the client, applied identically regardless of --production-parity', () => {
+    expect(cliSource).toMatch(/defaultHeaders:\s*\{\s*\[ANTHROPIC_WORKSPACE_ID_HEADER\]/)
   })
 
   it('never imports any DB/Supabase/Vercel client or the supervised-intake runner', () => {
@@ -159,6 +175,29 @@ describe('provider-error-diagnostic-detail.ts -- boundary from production code',
   })
 })
 
+describe('anthropic-workspace-config.ts -- never reaches the client bundle', () => {
+  it('is never imported anywhere under app/ or components/ (server-only: provider-adapter.ts, extraction-service.ts, and the diagnostic CLI)', () => {
+    const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+    const matches: string[] = []
+    function walk(dir: string) {
+      for (const entry of readdirSync(dir)) {
+        if (entry === 'node_modules' || entry === '.next') continue
+        const full = join(dir, entry)
+        const stat = statSync(full)
+        if (stat.isDirectory()) {
+          walk(full)
+        } else if (/\.tsx?$/.test(entry)) {
+          const text = readFileSync(full, 'utf8')
+          if (text.includes('anthropic-workspace-config')) matches.push(full.slice(REPO_ROOT.length + 1).replace(/\\/g, '/'))
+        }
+      }
+    }
+    walk(join(REPO_ROOT, 'app'))
+    walk(join(REPO_ROOT, 'components'))
+    expect(matches).toEqual([])
+  })
+})
+
 describe('anthropic-provider-diagnostic.ps1 -- source policy', () => {
   const psSource = readFileSync(join(REPO_ROOT, 'scripts', 'anthropic-provider-diagnostic.ps1'), 'utf8')
 
@@ -174,6 +213,17 @@ describe('anthropic-provider-diagnostic.ps1 -- source policy', () => {
   it('does not run the diagnostic call without an explicit typed confirmation', () => {
     expect(psSource).toMatch(/Type YES/)
     expect(psSource).toMatch(/-cne 'YES'/)
+  })
+  it('PFM workspace header: prompts for ANTHROPIC_WORKSPACE_ID via its OWN separate Read-Host -AsSecureString call, not reused from the API key prompt', () => {
+    const secureStringPrompts = psSource.match(/Read-Host -AsSecureString/g) ?? []
+    expect(secureStringPrompts.length).toBeGreaterThanOrEqual(2)
+    expect(psSource).toMatch(/Read-Host -AsSecureString 'ANTHROPIC_WORKSPACE_ID'/)
+  })
+  it('PFM workspace header: clears ANTHROPIC_WORKSPACE_ID in the same finally block as the API key', () => {
+    expect(psSource).toMatch(/finally\s*\{[\s\S]*?Remove-Item Env:\\ANTHROPIC_WORKSPACE_ID/)
+  })
+  it('PFM workspace header: never writes the workspace ID to a file either', () => {
+    expect(psSource).not.toMatch(/Set-Content|Out-File|Add-Content/)
   })
 })
 
@@ -203,6 +253,30 @@ describe('anthropic-provider-diagnostic.ts -- config-error preconditions (real s
     const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: '' })
     expect(result.exitCode).toBe(1)
   })
+
+  it('--confirm-diagnostic with NO ANTHROPIC_WORKSPACE_ID set: exits 1 before any network attempt', async () => {
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_WORKSPACE_ID: undefined })
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout + result.stderr).toMatch(/ANTHROPIC_WORKSPACE_ID is not configured/)
+    expect(result.stdout + result.stderr).toMatch(/anthropic_workspace_id_missing/)
+  })
+
+  it('--confirm-diagnostic with a WHITESPACE-ONLY ANTHROPIC_WORKSPACE_ID: exits 1 before any network attempt', async () => {
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_WORKSPACE_ID: '   ' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout + result.stderr).toMatch(/anthropic_workspace_id_missing/)
+  })
+
+  it('--confirm-diagnostic with a MALFORMED ANTHROPIC_WORKSPACE_ID (no wrkspc_ prefix): exits 1 before any network attempt', async () => {
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_WORKSPACE_ID: 'not-a-workspace-id' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout + result.stderr).toMatch(/anthropic_workspace_id_invalid_format/)
+  })
+
+  it('a config-error exit for a missing/invalid workspace ID never echoes the raw configured value', async () => {
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_WORKSPACE_ID: 'totally-bogus-value-should-never-appear' })
+    expect(result.stdout + result.stderr).not.toContain('totally-bogus-value-should-never-appear')
+  })
 })
 
 // ===========================================================================
@@ -215,6 +289,7 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
   let baseUrl = ''
   let requestCount = 0
   let lastRequestBody: unknown = null
+  let lastRequestHeaders: import('node:http').IncomingHttpHeaders | null = null
 
   afterEach(async () => {
     if (server) {
@@ -223,12 +298,14 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     }
     requestCount = 0
     lastRequestBody = null
+    lastRequestHeaders = null
   })
 
   function startMockServer(respond: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void): Promise<void> {
     return new Promise((resolve) => {
       server = createServer((req, res) => {
         requestCount += 1
+        lastRequestHeaders = req.headers
         let body = ''
         req.on('data', (chunk) => (body += chunk))
         req.on('end', () => {
@@ -264,6 +341,81 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     expect(result.stdout).not.toContain('this exact secret response text must never be printed')
     expect(requestCount).toBe(1)
     expect((lastRequestBody as { max_tokens: number }).max_tokens).toBe(1)
+  })
+
+  it('PFM workspace header: the exact configured ANTHROPIC_WORKSPACE_ID is sent as the anthropic-workspace-id header, in BOTH default and --production-parity modes', async () => {
+    const respond = (_req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 5, output_tokens: 1 },
+      }))
+    }
+    const workspaceId = 'wrkspc_testFixedValueForHeaderAssertion'
+
+    await startMockServer(respond)
+    const defaultResult = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_WORKSPACE_ID: workspaceId,
+    })
+    expect(defaultResult.exitCode).toBe(0)
+    expect(lastRequestHeaders?.['anthropic-workspace-id']).toBe(workspaceId)
+
+    await startMockServer(respond)
+    const parityResult = await runCli(['--confirm-diagnostic', '--production-parity'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_WORKSPACE_ID: workspaceId,
+    })
+    expect(parityResult.exitCode).toBe(0)
+    expect(lastRequestHeaders?.['anthropic-workspace-id']).toBe(workspaceId)
+  })
+
+  it('PFM workspace header: the configured workspace ID never appears in stdout/stderr, not even a prefix or its length', async () => {
+    const workspaceId = 'wrkspc_shouldNeverBePrintedAnywhereInOutput'
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 5, output_tokens: 1 },
+      }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_WORKSPACE_ID: workspaceId,
+    })
+
+    const combined = result.stdout + result.stderr
+    expect(combined).not.toContain(workspaceId)
+    expect(combined).not.toContain('shouldNeverBePrintedAnywhereInOutput')
+    expect(combined).not.toContain(workspaceId.slice(0, 8)) // not even a shortened prefix
+  })
+
+  it('PFM workspace header: a missing ANTHROPIC_WORKSPACE_ID makes ZERO HTTP requests to the provider (mock server confirms 0, not just exit code)', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_WORKSPACE_ID: undefined,
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(requestCount).toBe(0)
+  })
+
+  it('PFM workspace header: an INVALID-FORMAT ANTHROPIC_WORKSPACE_ID makes ZERO HTTP requests to the provider', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_WORKSPACE_ID: 'nope',
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(requestCount).toBe(0)
   })
 
   it('mocked 401: exits 2, classified authentication_failed, httpStatus 401, no retry (exactly one request), sanitized providerErrorType/message visible', async () => {

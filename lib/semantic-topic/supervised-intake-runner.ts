@@ -383,6 +383,24 @@ export function decideItemOutcome(result: ShadowExtractionResult): ItemOutcomeDe
       // same rejection, so never retryable. Item-local, batch continues.
       return { kind: 'fail_item_continue', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: false, diagnosticCode: 'input_too_large' }
 
+    case 'configuration_error':
+      // PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID
+      // missing or malformed, caught BEFORE any reservation (extraction-
+      // service.ts). Unlike disabled_or_rejected below, this is a genuinely
+      // PERMANENT deployment misconfiguration -- no reservation was ever
+      // spent, but a retry would fail identically for this item AND every
+      // remaining item in the batch until an operator fixes the env var, so
+      // retryable=false (mirrors the 'failed' provider-taxonomy branches'
+      // own reasoning, not disabled_or_rejected's retryable=true) and the
+      // batch stops rather than burning through the rest of the queue.
+      return {
+        kind: 'fail_item_and_stop_batch',
+        reasonCode: 'ANTHROPIC_WORKSPACE_CONFIG_ERROR',
+        retryable: false,
+        diagnosticCode: sanitizeDiagnosticCode(`configuration_error_${result.reasonCode}`),
+        stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+      }
+
     case 'failed':
       // failed's errorClass is, in practice, always exactly one of these
       // two values (see extraction-service.ts: the ONLY two paths that

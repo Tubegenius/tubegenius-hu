@@ -5,7 +5,7 @@
 // separately in tests/semantic-topic-s3a-ai-quota-db-integration.test.ts.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/semantic-topic/ai-quota', () => ({
   reserveAiProviderUnits: vi.fn(),
@@ -85,8 +85,24 @@ function mockedFn<T extends (...args: any[]) => any>(fn: T) {
   return fn as unknown as ReturnType<typeof vi.fn>
 }
 
+// PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID is
+// now a required, fail-closed precondition inside runShadowExtraction
+// itself (checked via the REAL anthropic-workspace-config.ts module, not
+// mocked -- it is a pure env-reading function, so exercising it for real
+// here is cheap and more faithful than mocking it). Every existing test in
+// this file assumes it reaches the reservation step, so a valid value is
+// set here by default; the dedicated describe block below explicitly
+// overrides/removes it to exercise the new configuration_error outcome.
+const ORIGINAL_ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID
+
 beforeEach(() => {
   vi.clearAllMocks()
+  process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
+})
+
+afterEach(() => {
+  if (ORIGINAL_ANTHROPIC_WORKSPACE_ID === undefined) delete process.env.ANTHROPIC_WORKSPACE_ID
+  else process.env.ANTHROPIC_WORKSPACE_ID = ORIGINAL_ANTHROPIC_WORKSPACE_ID
 })
 
 describe('extraction-config -- pinned model', () => {
@@ -437,6 +453,39 @@ describe('runShadowExtraction', () => {
     })
 
     expect(result.outcome).toBe('input_too_large')
+    expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('PFM workspace header gate: a missing ANTHROPIC_WORKSPACE_ID is rejected fail-closed BEFORE any reservation or provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    delete process.env.ANTHROPIC_WORKSPACE_ID
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-ws-missing' })
+
+    expect(result).toEqual({ outcome: 'configuration_error', reasonCode: 'anthropic_workspace_id_missing' })
+    expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('PFM workspace header gate: a malformed ANTHROPIC_WORKSPACE_ID is rejected fail-closed BEFORE any reservation or provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    process.env.ANTHROPIC_WORKSPACE_ID = 'not-a-workspace-id'
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-ws-invalid' })
+
+    expect(result).toEqual({ outcome: 'configuration_error', reasonCode: 'anthropic_workspace_id_invalid_format' })
+    expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('PFM workspace header gate: a cache hit needs no provider call, so it succeeds even with a missing ANTHROPIC_WORKSPACE_ID', async () => {
+    delete process.env.ANTHROPIC_WORKSPACE_ID
+    mockedFn(findCompletedExtractionRun).mockResolvedValue({ extractionRunId: 'run-cached' })
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-ws-cache-hit' })
+
+    expect(result.outcome).toBe('cache_hit')
     expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
   })
