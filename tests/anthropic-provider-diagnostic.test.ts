@@ -97,6 +97,12 @@ describe('anthropic-provider-diagnostic.ts -- source policy', () => {
     expect(cliSource).not.toMatch(/max_tokens:\s*1024\b/) // never hardcoded -- always the imported constant
   })
 
+  it('PFM production-parity: --production-parity mode also matches provider-adapter.ts\'s 60_000ms client timeout (default mode keeps the cheaper 15_000ms)', () => {
+    expect(cliSource).toMatch(/const timeoutMs = productionParity \? 60_000 : 15_000\b/)
+    const providerAdapterSource = readFileSync(join(REPO_ROOT, 'lib', 'semantic-topic', 'provider-adapter.ts'), 'utf8')
+    expect(providerAdapterSource).toMatch(/timeout:\s*60_000\b/)
+  })
+
   it('never logs the response text/content, request body, or any raw provider object -- only the structured classification fields', () => {
     // The success branch must never reference message.content/text at all.
     const successBranch = cliSource.match(/await client\.messages\.create\(\{[\s\S]*?return EXIT_CODE\.SUCCESS/)
@@ -499,6 +505,10 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     expect(body.max_tokens).toBe(1024)
     expect(typeof body.system).toBe('string')
     expect(body.system!.length).toBeGreaterThan(0)
+    // PFM Workspace-Scoped Production-Parity Diagnostic gate: the logged
+    // timeoutMs must also reflect the parity-mode value (60000), not the
+    // cheaper default-mode value (15000).
+    expect(result.stdout + result.stderr).toMatch(/"timeoutMs":60000/)
   })
 
   it('default mode (no --production-parity): max_tokens=1, no system parameter at all', async () => {
@@ -517,6 +527,7 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     const body = lastRequestBody as { max_tokens: number; system?: string }
     expect(body.max_tokens).toBe(1)
     expect(body.system).toBeUndefined()
+    expect(result.stdout + result.stderr).toMatch(/"timeoutMs":15000/)
   })
 
   it('mocked timeout (server never responds): exits 3, timeout/uncertain, fail-closed, no crash', async () => {

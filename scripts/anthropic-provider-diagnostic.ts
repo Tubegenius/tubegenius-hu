@@ -175,6 +175,18 @@ async function main(): Promise<number> {
     return EXIT_CODE.CONFIG_ERROR
   }
 
+  // PFM Workspace-Scoped Production-Parity Diagnostic gate: timeoutMs is now
+  // ALSO parity-aware -- provider-adapter.ts's real client uses 60_000ms;
+  // the default (non-parity) diagnostic mode keeps the original, cheaper
+  // 15_000ms (this mode never claimed production parity in the first
+  // place). A client-side timeout only bounds how long THIS process waits
+  // before aborting; it never changes what is sent over the wire, but
+  // --production-parity's whole purpose is to rule out every request-shape
+  // difference as a confound, and an artificially short timeout could abort
+  // (and misclassify as network_or_transport_uncertain) a slow call that
+  // production's own longer timeout would have let complete.
+  const timeoutMs = productionParity ? 60_000 : 15_000
+
   // No DB, no Supabase, no Vercel, no control table -- this client is
   // constructed with ONLY the key, timeout, and maxRetries:0, identical to
   // provider-adapter.ts's own narrow-adapter contract (see that file's
@@ -186,7 +198,7 @@ async function main(): Promise<number> {
   // does not vary with productionParity).
   const client = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
-    timeout: 15_000,
+    timeout: timeoutMs,
     maxRetries: 0,
     defaultHeaders: { [ANTHROPIC_WORKSPACE_ID_HEADER]: workspaceConfig.workspaceId },
   })
@@ -196,7 +208,7 @@ async function main(): Promise<number> {
   log('info', 'starting single diagnostic call', {
     model: SEMANTIC_TOPIC_EXTRACTION_MODEL,
     maxOutputTokens,
-    timeoutMs: 15_000,
+    timeoutMs,
     productionParity,
     // Boolean fact only -- never the value, prefix, length, or fingerprint
     // (Section D's own explicit requirement). Always true at this point in

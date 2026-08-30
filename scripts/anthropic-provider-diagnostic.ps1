@@ -94,4 +94,5 @@ finally {
 
 Write-Host "`nExit code: $exitCode" -ForegroundColor Cyan
 Write-Host "Masold be nekem a teljes (mar redaktalt) kimenetet." -ForegroundColor Cyan
+Write-Host "Zard be ezt a PowerShell-ablakot most -- ne hasznald ujra mas celra." -ForegroundColor Yellow
 exit $exitCode
