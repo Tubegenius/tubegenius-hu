@@ -124,3 +124,51 @@ For any real (non-local) canary run, before considering it closed, preserve:
 - Confirmation that `ai_extraction_control` and `supervised_intake_control` are in the intended post-run state.
 
 Never preserve, log, or paste anywhere: a plaintext claim token, the service-role key, or raw provider request/response content.
+
+## 13. Provider Failure Taxonomy v0
+
+`lib/semantic-topic/provider-error-taxonomy.ts` classifies every way a real Anthropic provider call can fail, based **exclusively on the SDK's own structured `status` field** (never on error message text). This replaced an earlier design where every definitely-unbilled 4xx rejection (400/401/403/404) collapsed into one indistinguishable `provider_rejected_unbilled` string — the confirmed root cause of a real production incident where the actual HTTP status was permanently unrecoverable from stored logs.
+
+| Category | HTTP | Billed | Retry policy |
+|---|---|---|---|
+| `authentication_failed` | 401 | unbilled | **never automatic** — account/config-level, batch stops |
+| `permission_denied` | 403 | unbilled | **never automatic** — account/config-level, batch stops |
+| `model_or_endpoint_not_found` | 404 | unbilled | **never automatic** — account/config-level, batch stops |
+| `invalid_request_unbilled` | 400 | unbilled | **never automatic** — treated as config-level by default (no structured provider signal currently exists to prove a 400 was evidence-specific) |
+| `provider_rejected_unbilled_unknown` | any other 4xx | unbilled | **never automatic** — defensive fallback, batch stops |
+| `rate_limited` | 429 | uncertain | conservative — existing reconciliation path, unchanged |
+| `provider_server_error` | 5xx | uncertain | conservative — existing reconciliation path, unchanged |
+| `network_or_transport_uncertain` | none (timeout/network) | uncertain | conservative — existing reconciliation path, unchanged |
+| `malformed_output_charged` | n/a (billed call, bad output) | billed | **never automatic** — unchanged from before this taxonomy |
+
+**What actually happens at the item/batch level** (`decideItemOutcome`, `lib/semantic-topic/supervised-intake-runner.ts`): every one of the five never-automatic-unbilled categories stops the **whole batch** (`fail_item_and_stop_batch`, `stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR'`) rather than continuing to the next item — a bad key or missing model affects every remaining item identically, so burning through the rest of the batch one at a time would just repeat the identical failure. The failed item itself is stored with one of five new, specific `reason_code` values (migration `081`) — `PROVIDER_AUTHENTICATION_FAILED`, `PROVIDER_PERMISSION_DENIED`, `PROVIDER_MODEL_NOT_FOUND`, `PROVIDER_INVALID_REQUEST_UNBILLED`, `PROVIDER_REJECTED_UNBILLED_UNKNOWN` — always with `retryable = false`.
+
+**A successful diagnosis never authorizes an automatic retry.** `authorize_intake_item_retry` (079) refuses any item whose `retryable` flag is not exactly `true`; none of the five categories above ever set it to `true`. Recovering an item stuck this way is a separate, explicit operator decision in its own gate — never something the diagnostic CLI below, or a passing diagnostic result, grants on its own.
+
+## 14. Anthropic provider diagnostic CLI (`scripts/anthropic-provider-diagnostic.ts`)
+
+A separate, minimal CLI for the one situation the redacted runner logs cannot resolve on their own: confirming *which* HTTP status a provider rejection actually was, after the fact, without touching the DB, without evidence data, and without more than one real (cheap) API call.
+
+**Credential entry — never paste a key into chat, never pass it as a CLI argument:**
+
+```powershell
+scripts/anthropic-provider-diagnostic.ps1
+```
+
+The wrapper prompts for a typed `YES` confirmation, then the key via `Read-Host -AsSecureString` (never echoed), sets it as an environment variable **only for the lifetime of the one child `node` process it spawns**, and clears it again in a `finally` block that runs even on Ctrl+C or an error. The key is never written to a file, never appears in shell history, and is never passed as `--api-key` or any other argument.
+
+**What it does:** exactly one `client.messages.create` call, `max_tokens: 1`, a fixed harmless prompt (`"Reply with the single word: ok"`), the exact same model identifier (`SEMANTIC_TOPIC_EXTRACTION_MODEL`) production extraction uses. No DB, no Supabase, no Vercel, no control-table read or write, no evidence data, no retry (`maxRetries: 0`).
+
+**Maximum expected cost:** a handful of fixed-prompt input tokens plus at most 1 output token — a small fraction of a single cent, several orders of magnitude below any real extraction call.
+
+**Interpreting the result** — the ONLY output is the structured, redacted classification (never the response text, never a raw provider error body):
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Success — the call completed. Key, model, and permissions are all working. |
+| `1` | Config error — missing `--confirm-diagnostic`, or `ANTHROPIC_API_KEY` missing/empty. No call was attempted. |
+| `2` | Provider failure, classified — see the printed `category`/`httpStatus`. This is the actual diagnosis. |
+| `3` | Timeout or uncertain — no structured HTTP status available. Inconclusive; do not treat as confirming any specific cause. |
+| `4` | Unexpected internal error. |
+
+A `2` result tells you *which* category the real production failure most likely was (assuming the same key/model/network path) — it does **not** retry, resolve, or authorize retrying the original stuck evidence item. That remains a separate, explicitly authorized gate.

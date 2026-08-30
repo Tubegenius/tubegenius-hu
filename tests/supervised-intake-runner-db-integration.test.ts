@@ -219,22 +219,30 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     expect(deps.claimStateStore.current).toBeNull()
   })
 
-  it('failed/provider_rejected_unbilled: item-local via fail_intake_item, batch still finalizes completed_with_failures (never stopped), retryable=true (confirmed zero-cost attempt)', async () => {
+  it('failed/authentication_failed (Provider Failure Taxonomy v0): item AND batch stop -- fail_item_and_stop_batch, retryable=false, PROVIDER_AUTHENTICATION_FAILED, batch stopped/AUTHORIZATION_OR_CONFIG_ERROR', async () => {
     enableControlForFixture()
-    const evidenceId = createEvidence('unbilled')
+    const evidenceId = createEvidence('authfail')
     const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
     const { deps } = await buildDeps({
-      runShadowExtraction: async () => ({ outcome: 'failed', reservationId: 'res-unbilled', extractionRunId: 'run-unbilled', errorClass: 'provider_rejected_unbilled', capBreach: false } satisfies ShadowExtractionResult),
+      runShadowExtraction: async () =>
+        ({
+          outcome: 'failed',
+          reservationId: 'res-authfail',
+          extractionRunId: 'run-authfail',
+          errorClass: 'authentication_failed',
+          classification: { category: 'authentication_failed', httpStatus: 401, billed: 'unbilled', retryPolicy: 'batch_stop_required' },
+          capBreach: false,
+        }) satisfies ShadowExtractionResult,
     })
 
-    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-unbilled'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
+    const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-authfail'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
     const result = await runSupervisedIntake(deps, input)
 
-    expect(result.exitCode).toBe(EXIT_CODE.COMPLETED)
-    const batchStatus = dockerPsql(`select status from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
-    expect(batchStatus).toBe('completed_with_failures')
+    expect(result.exitCode).toBe(EXIT_CODE.BATCH_STOPPED)
+    const batchRow = dockerPsql(`select status||'|'||reason_code from supervised_intake_batches where idempotency_key='${input.idempotencyKey}';`).trim()
+    expect(batchRow).toBe('stopped|AUTHORIZATION_OR_CONFIG_ERROR')
     const itemRow = dockerPsql(`select status||'|'||reason_code||'|'||retryable::text from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${input.idempotencyKey}');`).trim()
-    expect(itemRow).toBe('failed|INVALID_EVIDENCE_STATE|true')
+    expect(itemRow).toBe('failed|PROVIDER_AUTHENTICATION_FAILED|false')
     expect(deps.claimStateStore.current).toBeNull()
   })
 
@@ -243,7 +251,15 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     const evidenceId = createEvidence('malformed')
     const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
     const { deps } = await buildDeps({
-      runShadowExtraction: async () => ({ outcome: 'failed', reservationId: 'res-malformed', extractionRunId: 'run-malformed', errorClass: 'malformed_output', capBreach: false } satisfies ShadowExtractionResult),
+      runShadowExtraction: async () =>
+        ({
+          outcome: 'failed',
+          reservationId: 'res-malformed',
+          extractionRunId: 'run-malformed',
+          errorClass: 'malformed_output',
+          classification: { category: 'malformed_output_charged', httpStatus: null, billed: 'billed', retryPolicy: 'never_automatic' },
+          capBreach: false,
+        }) satisfies ShadowExtractionResult,
     })
 
     const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-malformed'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
@@ -264,7 +280,13 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     const evidenceId = createEvidence('uncertain')
     const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
     const { deps } = await buildDeps({
-      runShadowExtraction: async () => ({ outcome: 'uncertain', reservationId: 'res-uncertain', errorClass: 'timeout' } satisfies ShadowExtractionResult),
+      runShadowExtraction: async () =>
+        ({
+          outcome: 'uncertain',
+          reservationId: 'res-uncertain',
+          errorClass: 'timeout',
+          classification: { category: 'network_or_transport_uncertain', httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' },
+        }) satisfies ShadowExtractionResult,
     })
 
     const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-uncertain'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }
@@ -285,7 +307,19 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     const evidenceId = createEvidence('unknown-errorclass')
     const { runSupervisedIntake } = await import('@/lib/semantic-topic/supervised-intake-runner')
     const { deps } = await buildDeps({
-      runShadowExtraction: async () => ({ outcome: 'failed', reservationId: 'res-x', extractionRunId: 'run-x', errorClass: 'brand_new_never_seen_before', capBreach: false } as ShadowExtractionResult),
+      runShadowExtraction: async () =>
+        ({
+          outcome: 'failed',
+          reservationId: 'res-x',
+          extractionRunId: 'run-x',
+          errorClass: 'brand_new_never_seen_before',
+          // A genuinely unrecognized future taxonomy category -- proves
+          // decideItemOutcome's own default branch (Provider Failure
+          // Taxonomy v0) fails closed rather than crashing or silently
+          // treating it as item-local.
+          classification: { category: 'brand_new_never_seen_before', httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' },
+          capBreach: false,
+        }) as unknown as ShadowExtractionResult,
     })
 
     const input: SupervisedIntakeBatchInput = { idempotencyKey: nextMarker('batch-unknown-err'), operatorReference: 'db-integration-test', signalEvidenceIds: [evidenceId], ...VALID_CONFIG }

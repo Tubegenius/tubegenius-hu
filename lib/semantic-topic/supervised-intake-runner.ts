@@ -406,21 +406,78 @@ export function decideItemOutcome(result: ShadowExtractionResult): ItemOutcomeDe
         // exact code for the identical underlying condition.
         return { kind: 'fail_item_continue', reasonCode: 'INVALID_STRUCTURED_OUTPUT', retryable: false, diagnosticCode: 'malformed_output' }
       }
-      if (result.errorClass === 'provider_rejected_unbilled') {
-        // A confirmed pre-generation provider rejection (4xx) -- real,
-        // charged (zero-cost) attempt, item-local, batch continues; a
-        // fresh attempt later may succeed once whatever the provider
-        // objected to is addressed.
-        return { kind: 'fail_item_continue', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: true, diagnosticCode: 'provider_rejected_unbilled' }
-      }
-      // Unknown future errorClass: fail closed, treat as batch-fatal rather
-      // than risk silently continuing under an unrecognized failure mode.
-      return {
-        kind: 'fail_item_and_stop_batch',
-        reasonCode: 'INVALID_EVIDENCE_STATE',
-        retryable: false,
-        diagnosticCode: sanitizeDiagnosticCode(`unrecognized_error_class_${result.errorClass}`),
-        stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+      // Provider Failure Taxonomy v0 (provider-error-taxonomy.ts): every
+      // OTHER unbilled pre-generation provider rejection (400/401/403/404)
+      // is account-/config-level by default, never evidence-specific --
+      // Section C of the taxonomy gate requires these to (a) never be
+      // automatically retryable and (b) stop the whole batch rather than
+      // burn through every remaining item hitting the identical failure.
+      // Each category maps to its own DB reason_code (081 migration) so a
+      // future operator reading the item's stored reason can tell a bad API
+      // key apart from a missing model apart from a permission problem,
+      // instead of one indistinguishable INVALID_EVIDENCE_STATE bucket --
+      // that old bucket is exactly what discarded the real HTTP status
+      // during the production incident this taxonomy exists to fix.
+      switch (result.classification.category) {
+        case 'authentication_failed':
+          return {
+            kind: 'fail_item_and_stop_batch',
+            reasonCode: 'PROVIDER_AUTHENTICATION_FAILED',
+            retryable: false,
+            diagnosticCode: 'authentication_failed',
+            stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+          }
+        case 'permission_denied':
+          return {
+            kind: 'fail_item_and_stop_batch',
+            reasonCode: 'PROVIDER_PERMISSION_DENIED',
+            retryable: false,
+            diagnosticCode: 'permission_denied',
+            stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+          }
+        case 'model_or_endpoint_not_found':
+          return {
+            kind: 'fail_item_and_stop_batch',
+            reasonCode: 'PROVIDER_MODEL_NOT_FOUND',
+            retryable: false,
+            diagnosticCode: 'model_or_endpoint_not_found',
+            stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+          }
+        case 'invalid_request_unbilled':
+          // Section C: 400 stays in this SAME fail-closed, batch-stop
+          // bucket by default -- no structured provider signal currently
+          // exists to prove a 400 was evidence-specific rather than a
+          // request/config problem, so this deliberately does NOT invent an
+          // evidence-specific carve-out that isn't backed by real data.
+          return {
+            kind: 'fail_item_and_stop_batch',
+            reasonCode: 'PROVIDER_INVALID_REQUEST_UNBILLED',
+            retryable: false,
+            diagnosticCode: 'invalid_request_unbilled',
+            stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+          }
+        case 'provider_rejected_unbilled_unknown':
+          return {
+            kind: 'fail_item_and_stop_batch',
+            reasonCode: 'PROVIDER_REJECTED_UNBILLED_UNKNOWN',
+            retryable: false,
+            diagnosticCode: 'provider_rejected_unbilled_unknown',
+            stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+          }
+        default:
+          // Unknown/future taxonomy category reaching a 'failed' outcome
+          // (e.g. rate_limited/provider_server_error/network_or_transport_
+          // uncertain/malformed_output_charged should never actually get
+          // here -- extraction-service.ts only ever returns 'failed' for an
+          // unbilled classification or the malformed_output string handled
+          // above): fail closed, batch-fatal, never silently item-local.
+          return {
+            kind: 'fail_item_and_stop_batch',
+            reasonCode: 'INVALID_EVIDENCE_STATE',
+            retryable: false,
+            diagnosticCode: sanitizeDiagnosticCode(`unrecognized_error_class_${result.errorClass}`),
+            stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+          }
       }
 
     case 'disabled_or_rejected':

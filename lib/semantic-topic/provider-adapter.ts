@@ -76,25 +76,21 @@ export async function callAnthropicForExtraction(
 // bucket (committed_unknown) even though some of those are ALSO very likely
 // zero-cost -- when in doubt, this layer always assumes cost may have been
 // incurred rather than assuming it wasn't (see migration 075 header (2)).
+//
+// PROVIDER FAILURE TAXONOMY v0: this used to be the only classification
+// available, and it discarded the real HTTP status the moment it confirmed
+// membership in DEFINITELY_UNBILLED_STATUS_CODES -- every 4xx in that set
+// collapsed into the single indistinguishable string 'provider_rejected_
+// unbilled', which is the confirmed root cause of why a real production
+// failure could never be diagnosed past "some 4xx happened". The real
+// classification now lives in provider-error-taxonomy.ts's
+// classifyProviderFailure(), which preserves the exact status. This
+// function and DEFINITELY_UNBILLED_STATUS_CODES stay here, unchanged, only
+// because provider-error-taxonomy.ts deliberately re-declares its own copy
+// of the status set (see that module's header) to stay independently
+// unit-testable with zero dependency on this file.
 const DEFINITELY_UNBILLED_STATUS_CODES = new Set([400, 401, 403, 404])
 
 export function isDefinitelyUnbilledProviderError(err: unknown): boolean {
   return err instanceof Anthropic.APIError && typeof err.status === 'number' && DEFINITELY_UNBILLED_STATUS_CODES.has(err.status)
-}
-
-// Never log raw provider text or the prompt -- only a short, bounded,
-// secret-free classifier, per the S3A gate's audit-field contract.
-export function classifyProviderError(err: unknown): string {
-  if (isDefinitelyUnbilledProviderError(err)) return 'provider_rejected_unbilled'
-  if (err instanceof Error) {
-    const message = err.message || ''
-    const name = err.name || ''
-    if (name === 'AbortError' || /timeout/i.test(message)) return 'timeout'
-    if (/ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network/i.test(message)) return 'network_error'
-    if (/rate.?limit/i.test(message) || /429/.test(message)) return 'rate_limited'
-    if (/JSON|extractJson|no JSON object or array|is empty/i.test(message)) return 'malformed_output'
-    if (/truncated at max token limit/i.test(message)) return 'max_tokens_truncated'
-    return 'provider_error'
-  }
-  return 'unknown_error'
 }

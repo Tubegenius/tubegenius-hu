@@ -30,6 +30,7 @@ import {
   type SupervisedIntakeRunnerDeps,
 } from '@/lib/semantic-topic/supervised-intake-runner'
 import type { ShadowExtractionResult } from '@/lib/semantic-topic/extraction-service'
+import type { ProviderFailureCategory } from '@/lib/semantic-topic/provider-error-taxonomy'
 import type { SemanticTopicAdminClient } from '@/lib/semantic-topic/quota-types'
 
 const VALID_INPUT: SupervisedIntakeBatchInput = {
@@ -270,17 +271,56 @@ describe('decideItemOutcome', () => {
   })
 
   it('failed/malformed_output -> fail_item_continue, NOT retryable (charged attempt, no cost-aware retry gate in 079 v0)', () => {
-    const result: ShadowExtractionResult = { outcome: 'failed', reservationId: 'res-3', extractionRunId: 'run-3', errorClass: 'malformed_output', capBreach: false }
+    const result: ShadowExtractionResult = {
+      outcome: 'failed', reservationId: 'res-3', extractionRunId: 'run-3', errorClass: 'malformed_output',
+      classification: { category: 'malformed_output_charged', httpStatus: null, billed: 'billed', retryPolicy: 'never_automatic' },
+      capBreach: false,
+    }
     expect(decideItemOutcome(result)).toEqual({ kind: 'fail_item_continue', reasonCode: 'INVALID_STRUCTURED_OUTPUT', retryable: false, diagnosticCode: 'malformed_output' })
   })
 
-  it('failed/provider_rejected_unbilled -> fail_item_continue, retryable, INVALID_EVIDENCE_STATE', () => {
-    const result: ShadowExtractionResult = { outcome: 'failed', reservationId: 'res-4', extractionRunId: 'run-4', errorClass: 'provider_rejected_unbilled', capBreach: false }
-    expect(decideItemOutcome(result)).toEqual({ kind: 'fail_item_continue', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: true, diagnosticCode: 'provider_rejected_unbilled' })
+  // Provider Failure Taxonomy v0: each of the four definitely-unbilled 4xx
+  // categories now stops the WHOLE batch (never item-local) and is never
+  // automatically retryable -- see decideItemOutcome's own header and
+  // provider-error-taxonomy.ts for why (account-/config-level, not
+  // evidence-specific by default).
+  const unbilledTaxonomyCases: Array<{ category: ProviderFailureCategory; httpStatus: number; reasonCode: string; diagnosticCode: string }> = [
+    { category: 'authentication_failed', httpStatus: 401, reasonCode: 'PROVIDER_AUTHENTICATION_FAILED', diagnosticCode: 'authentication_failed' },
+    { category: 'permission_denied', httpStatus: 403, reasonCode: 'PROVIDER_PERMISSION_DENIED', diagnosticCode: 'permission_denied' },
+    { category: 'model_or_endpoint_not_found', httpStatus: 404, reasonCode: 'PROVIDER_MODEL_NOT_FOUND', diagnosticCode: 'model_or_endpoint_not_found' },
+    { category: 'invalid_request_unbilled', httpStatus: 400, reasonCode: 'PROVIDER_INVALID_REQUEST_UNBILLED', diagnosticCode: 'invalid_request_unbilled' },
+  ]
+  for (const { category, httpStatus, reasonCode, diagnosticCode } of unbilledTaxonomyCases) {
+    it(`failed/${category} (HTTP ${httpStatus}) -> fail_item_and_stop_batch, retryable=false, ${reasonCode}`, () => {
+      const result: ShadowExtractionResult = {
+        outcome: 'failed', reservationId: 'res-4', extractionRunId: 'run-4', errorClass: category,
+        classification: { category, httpStatus, billed: 'unbilled', retryPolicy: 'batch_stop_required' },
+        capBreach: false,
+      }
+      expect(decideItemOutcome(result)).toEqual({
+        kind: 'fail_item_and_stop_batch', reasonCode, retryable: false, diagnosticCode, stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+      })
+    })
+  }
+
+  it('failed/provider_rejected_unbilled_unknown (defensive fallback status) -> fail_item_and_stop_batch, retryable=false, PROVIDER_REJECTED_UNBILLED_UNKNOWN', () => {
+    const result: ShadowExtractionResult = {
+      outcome: 'failed', reservationId: 'res-4b', extractionRunId: 'run-4b', errorClass: 'provider_rejected_unbilled_unknown',
+      classification: { category: 'provider_rejected_unbilled_unknown', httpStatus: 418, billed: 'unbilled', retryPolicy: 'batch_stop_required' },
+      capBreach: false,
+    }
+    expect(decideItemOutcome(result)).toEqual({
+      kind: 'fail_item_and_stop_batch', reasonCode: 'PROVIDER_REJECTED_UNBILLED_UNKNOWN', retryable: false,
+      diagnosticCode: 'provider_rejected_unbilled_unknown', stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+    })
   })
 
-  it('failed with an unrecognized future errorClass fails closed: batch-fatal, not retryable', () => {
-    const result = { outcome: 'failed', reservationId: 'res-5', extractionRunId: 'run-5', errorClass: 'brand_new_never_seen_before', capBreach: false } as ShadowExtractionResult
+  it('failed with a genuinely unrecognized future classification.category fails closed: batch-fatal, not retryable', () => {
+    const result = {
+      outcome: 'failed', reservationId: 'res-5', extractionRunId: 'run-5', errorClass: 'brand_new_never_seen_before',
+      classification: { category: 'brand_new_never_seen_before' as unknown as ProviderFailureCategory, httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' },
+      capBreach: false,
+    } as ShadowExtractionResult
     const decision = decideItemOutcome(result)
     expect(decision.kind).toBe('fail_item_and_stop_batch')
     if (decision.kind === 'fail_item_and_stop_batch') {
@@ -331,7 +371,10 @@ describe('decideItemOutcome', () => {
   })
 
   it('uncertain -> stop_batch_only, PROVIDER_OUTCOME_UNCERTAIN, no fail_intake_item decision emitted', () => {
-    const result: ShadowExtractionResult = { outcome: 'uncertain', reservationId: 'res-7', errorClass: 'timeout' }
+    const result: ShadowExtractionResult = {
+      outcome: 'uncertain', reservationId: 'res-7', errorClass: 'timeout',
+      classification: { category: 'network_or_transport_uncertain', httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' },
+    }
     expect(decideItemOutcome(result)).toEqual({ kind: 'stop_batch_only', stopReasonCode: 'PROVIDER_OUTCOME_UNCERTAIN' })
   })
 
@@ -474,8 +517,12 @@ describe('runSupervisedIntake -- batch control flow', () => {
 
   it('uncertain: stops the batch, never calls fail_intake_item, leaves local claim state in place', async () => {
     const { client, claimStateStore, runShadowExtraction, deps } = makeDeps()
-    baseRpcMock(client, { outcome: 'uncertain', reservationId: 'res-1', errorClass: 'timeout' })
-    runShadowExtraction.mockResolvedValue({ outcome: 'uncertain', reservationId: 'res-1', errorClass: 'timeout' } satisfies ShadowExtractionResult)
+    const uncertainResult: ShadowExtractionResult = {
+      outcome: 'uncertain', reservationId: 'res-1', errorClass: 'timeout',
+      classification: { category: 'network_or_transport_uncertain', httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' },
+    }
+    baseRpcMock(client, uncertainResult)
+    runShadowExtraction.mockResolvedValue(uncertainResult)
 
     const result = await runSupervisedIntake(deps, VALID_INPUT)
 

@@ -59,7 +59,8 @@ import {
   reserveAiProviderUnits,
   releaseAiProviderUnits,
 } from './ai-quota'
-import { callAnthropicForExtraction, classifyProviderError, isDefinitelyUnbilledProviderError } from './provider-adapter'
+import { callAnthropicForExtraction } from './provider-adapter'
+import { classifyProviderFailure, COMMIT_FAILED_CLASSIFICATION, MALFORMED_OUTPUT_CHARGED_CLASSIFICATION, type ProviderFailureClassification } from './provider-error-taxonomy'
 import { findCompletedExtractionRun, recordCompletedExtractionRun, recordFailedExtractionRun } from './extraction-writer'
 import { maybeRequestHumanReview, type HumanReviewOrchestrationResult } from './human-review-extraction-hook'
 import { assertPromptTemplateRegistered } from '@/lib/prompts/template-registry'
@@ -158,8 +159,14 @@ export type ShadowExtractionResult =
   | { outcome: 'disabled_or_rejected'; reasonCode: ExtractionRejectionReasonCode; message: string }
   | { outcome: 'budget_exhausted' }
   | { outcome: 'attempt_not_started'; reservationId: string; reasonCode: ExtractionRejectionReasonCode; message: string }
-  | { outcome: 'uncertain'; reservationId: string; errorClass: string }
-  | { outcome: 'failed'; reservationId: string; extractionRunId: string; errorClass: string; capBreach: boolean }
+  // classification: Provider Failure Taxonomy v0 (provider-error-taxonomy.ts)
+  // -- the structured replacement for the old bare errorClass string, which
+  // used to collapse every 4xx pre-generation rejection into a single
+  // indistinguishable 'provider_rejected_unbilled' bucket, discarding the
+  // real HTTP status. errorClass is kept (now always classification.category)
+  // for every existing caller that branches on it as a plain string.
+  | { outcome: 'uncertain'; reservationId: string; errorClass: string; classification: ProviderFailureClassification }
+  | { outcome: 'failed'; reservationId: string; extractionRunId: string; errorClass: string; classification: ProviderFailureClassification; capBreach: boolean }
   // humanReview: added by the Application Integration Closure gate -- see
   // human-review-extraction-hook.ts. Always present (never optional), so
   // every caller must explicitly handle it. Flag=false (the default)
@@ -250,9 +257,10 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   try {
     providerResult = await callAnthropicForExtraction(system, user, AI_QUOTA_MAX_OUTPUT_TOKENS)
   } catch (err) {
-    const errorClass = classifyProviderError(err)
+    const classification = classifyProviderFailure(err)
+    const errorClass = classification.category
 
-    if (isDefinitelyUnbilledProviderError(err)) {
+    if (classification.billed === 'unbilled') {
       // Correction-gate item 5: a pure pre-generation rejection (400/401/
       // 403/404) -- we are highly confident zero tokens were generated, so
       // this commits a REAL, known actual cost of exactly 0, then records a
@@ -261,7 +269,7 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
       const zeroCommit = await commitAiProviderUnits(reservationId, 0, 0, input.client)
       if (zeroCommit.outcome !== 'success') {
         await markAiProviderOutcomeUnknown(reservationId, 'commit_failed', input.client)
-        return { outcome: 'uncertain', reservationId, errorClass: 'commit_failed' }
+        return { outcome: 'uncertain', reservationId, errorClass: 'commit_failed', classification }
       }
       const nowIso = new Date().toISOString()
       const recorded = await recordFailedExtractionRun({
@@ -274,7 +282,7 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
         completedAt: nowIso,
       }, input.client)
       await finalizeAiProviderReservationOutcome(reservationId, recorded.extractionRunId, 'failed', input.client)
-      return { outcome: 'failed', reservationId, extractionRunId: recorded.extractionRunId, errorClass, capBreach: false }
+      return { outcome: 'failed', reservationId, extractionRunId: recorded.extractionRunId, errorClass, classification, capBreach: false }
     }
 
     // Every other failure mode (timeout/network/5xx/429/unknown) stays
@@ -282,7 +290,7 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
     // a release. The full reservation stays counted against the daily cap
     // AND against the global attempt-limit (application_outcome stays NULL).
     await markAiProviderOutcomeUnknown(reservationId, errorClass, input.client)
-    return { outcome: 'uncertain', reservationId, errorClass }
+    return { outcome: 'uncertain', reservationId, errorClass, classification }
   }
 
   // 6. Settle the real usage. Correction-gate item 2: this NEVER fails
@@ -294,7 +302,7 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
   const settlement = await commitAiProviderUnits(reservationId, providerResult.inputTokens, providerResult.outputTokens, input.client)
   if (settlement.outcome !== 'success') {
     await markAiProviderOutcomeUnknown(reservationId, 'commit_failed', input.client)
-    return { outcome: 'uncertain', reservationId, errorClass: 'commit_failed' }
+    return { outcome: 'uncertain', reservationId, errorClass: 'commit_failed', classification: COMMIT_FAILED_CLASSIFICATION }
   }
   const capBreach = settlement.settlement.capBreach === true
 
@@ -321,7 +329,14 @@ export async function runShadowExtraction(input: ShadowExtractionInput): Promise
       completedAt: nowIso,
     }, input.client)
     await finalizeAiProviderReservationOutcome(reservationId, recorded.extractionRunId, 'failed', input.client)
-    return { outcome: 'failed', reservationId, extractionRunId: recorded.extractionRunId, errorClass: 'malformed_output', capBreach }
+    return {
+      outcome: 'failed',
+      reservationId,
+      extractionRunId: recorded.extractionRunId,
+      errorClass: 'malformed_output',
+      classification: MALFORMED_OUTPUT_CHARGED_CLASSIFICATION,
+      capBreach,
+    }
   }
 
   const recorded = await recordCompletedExtractionRun({

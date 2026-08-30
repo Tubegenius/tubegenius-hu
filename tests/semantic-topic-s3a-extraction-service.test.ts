@@ -18,8 +18,17 @@ vi.mock('@/lib/semantic-topic/ai-quota', () => ({
 }))
 vi.mock('@/lib/semantic-topic/provider-adapter', () => ({
   callAnthropicForExtraction: vi.fn(),
-  classifyProviderError: vi.fn(() => 'mocked_error_class'),
-  isDefinitelyUnbilledProviderError: vi.fn(() => false),
+}))
+// Provider Failure Taxonomy v0: classifyProviderFailure() is the ONE
+// function extraction-service.ts now calls in its catch block (replacing
+// the old classifyProviderError/isDefinitelyUnbilledProviderError pair) --
+// mocked here the same way every other classifier in this file is, so
+// individual tests can control the exact classification returned without
+// needing to construct a real Anthropic.APIError instance.
+vi.mock('@/lib/semantic-topic/provider-error-taxonomy', () => ({
+  classifyProviderFailure: vi.fn(() => ({ category: 'network_or_transport_uncertain', httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' })),
+  MALFORMED_OUTPUT_CHARGED_CLASSIFICATION: { category: 'malformed_output_charged', httpStatus: null, billed: 'billed', retryPolicy: 'never_automatic' },
+  COMMIT_FAILED_CLASSIFICATION: { category: 'network_or_transport_uncertain', httpStatus: null, billed: 'uncertain', retryPolicy: 'conservative_uncertain' },
 }))
 vi.mock('@/lib/semantic-topic/extraction-writer', () => ({
   findCompletedExtractionRun: vi.fn(),
@@ -36,7 +45,8 @@ import {
   releaseAiProviderUnits,
   reserveAiProviderUnits,
 } from '@/lib/semantic-topic/ai-quota'
-import { callAnthropicForExtraction, isDefinitelyUnbilledProviderError } from '@/lib/semantic-topic/provider-adapter'
+import { callAnthropicForExtraction } from '@/lib/semantic-topic/provider-adapter'
+import { classifyProviderFailure } from '@/lib/semantic-topic/provider-error-taxonomy'
 import {
   findCompletedExtractionRun,
   recordCompletedExtractionRun,
@@ -259,7 +269,7 @@ describe('runShadowExtraction', () => {
     const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-4' })
 
     expect(result.outcome).toBe('uncertain')
-    expect(mockedFn(markAiProviderOutcomeUnknown)).toHaveBeenCalledWith('res-2', 'mocked_error_class', undefined)
+    expect(mockedFn(markAiProviderOutcomeUnknown)).toHaveBeenCalledWith('res-2', 'network_or_transport_uncertain', undefined)
     expect(mockedFn(releaseAiProviderUnits)).not.toHaveBeenCalled()
     expect(mockedFn(recordCompletedExtractionRun)).not.toHaveBeenCalled()
     expect(mockedFn(recordFailedExtractionRun)).not.toHaveBeenCalled()
@@ -349,7 +359,7 @@ describe('runShadowExtraction', () => {
     mockedFn(markAiProviderAttemptStarted).mockResolvedValue({ outcome: 'success', duplicateSafe: true })
     const rejectionError = new Error('400 invalid_request_error')
     mockedFn(callAnthropicForExtraction).mockRejectedValue(rejectionError)
-    mockedFn(isDefinitelyUnbilledProviderError).mockReturnValue(true)
+    mockedFn(classifyProviderFailure).mockReturnValue({ category: 'invalid_request_unbilled', httpStatus: 400, billed: 'unbilled', retryPolicy: 'batch_stop_required' })
     mockedFn(commitAiProviderUnits).mockResolvedValue({ outcome: 'success', settlement: { reservationId: 'res-unbilled', status: 'committed', duplicate: false, actualMicroUsd: 0, capBreach: false } })
     mockedFn(recordFailedExtractionRun).mockResolvedValue({ extractionRunId: 'unbilled-run-id', outcome: 'created', status: 'failed' })
     mockedFn(finalizeAiProviderReservationOutcome).mockResolvedValue({ outcome: 'success', finalized: { reservationId: 'res-unbilled', applicationOutcome: 'failed', extractionRunId: 'unbilled-run-id', duplicate: false } })
@@ -362,6 +372,58 @@ describe('runShadowExtraction', () => {
     expect(mockedFn(finalizeAiProviderReservationOutcome)).toHaveBeenCalledWith('res-unbilled', 'unbilled-run-id', 'failed', undefined)
     expect(mockedFn(releaseAiProviderUnits)).not.toHaveBeenCalled()
     expect(mockedFn(markAiProviderOutcomeUnknown)).not.toHaveBeenCalled()
+    if (result.outcome === 'failed') {
+      expect(result.errorClass).toBe('invalid_request_unbilled')
+      expect(result.classification).toEqual({ category: 'invalid_request_unbilled', httpStatus: 400, billed: 'unbilled', retryPolicy: 'batch_stop_required' })
+    }
+  })
+
+  // Provider Failure Taxonomy v0: every distinct definitely-unbilled HTTP
+  // status commits actual cost 0 and reaches 'failed' -- exercised here at
+  // the extraction-service level (not just decideItemOutcome's own unit
+  // tests) so the classification.httpStatus/category the runner later
+  // branches on is proven to survive the full commit+record+finalize path.
+  const unbilledStatusCases: Array<{ category: string; httpStatus: number }> = [
+    { category: 'authentication_failed', httpStatus: 401 },
+    { category: 'permission_denied', httpStatus: 403 },
+    { category: 'model_or_endpoint_not_found', httpStatus: 404 },
+  ]
+  for (const { category, httpStatus } of unbilledStatusCases) {
+    it(`provider failure taxonomy: HTTP ${httpStatus} (${category}) also commits actual cost 0 and reaches 'failed' with the right classification`, async () => {
+      mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+      mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'reserved', reservationId: `res-${httpStatus}` })
+      mockedFn(markAiProviderAttemptStarted).mockResolvedValue({ outcome: 'success', duplicateSafe: true })
+      mockedFn(callAnthropicForExtraction).mockRejectedValue(new Error(`${httpStatus} provider error`))
+      mockedFn(classifyProviderFailure).mockReturnValue({ category, httpStatus, billed: 'unbilled', retryPolicy: 'batch_stop_required' } as ReturnType<typeof classifyProviderFailure>)
+      mockedFn(commitAiProviderUnits).mockResolvedValue({ outcome: 'success', settlement: { reservationId: `res-${httpStatus}`, status: 'committed', duplicate: false, actualMicroUsd: 0, capBreach: false } })
+      mockedFn(recordFailedExtractionRun).mockResolvedValue({ extractionRunId: `run-${httpStatus}`, outcome: 'created', status: 'failed' })
+      mockedFn(finalizeAiProviderReservationOutcome).mockResolvedValue({ outcome: 'success', finalized: { reservationId: `res-${httpStatus}`, applicationOutcome: 'failed', extractionRunId: `run-${httpStatus}`, duplicate: false } })
+
+      const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: `key-${httpStatus}` })
+
+      expect(result.outcome).toBe('failed')
+      expect(mockedFn(commitAiProviderUnits)).toHaveBeenCalledWith(`res-${httpStatus}`, 0, 0, undefined)
+      if (result.outcome === 'failed') {
+        expect(result.classification.httpStatus).toBe(httpStatus)
+        expect(result.classification.category).toBe(category)
+      }
+    })
+  }
+
+  it('provider failure taxonomy: rate_limited (429) stays in the conservative uncertain bucket, never a zero-commit', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'reserved', reservationId: 'res-429' })
+    mockedFn(markAiProviderAttemptStarted).mockResolvedValue({ outcome: 'success', duplicateSafe: true })
+    mockedFn(callAnthropicForExtraction).mockRejectedValue(new Error('429 rate limited'))
+    mockedFn(classifyProviderFailure).mockReturnValue({ category: 'rate_limited', httpStatus: 429, billed: 'uncertain', retryPolicy: 'conservative_uncertain' })
+    mockedFn(markAiProviderOutcomeUnknown).mockResolvedValue({ outcome: 'success', settlement: { reservationId: 'res-429', status: 'committed_unknown', duplicate: false } })
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-429' })
+
+    expect(result.outcome).toBe('uncertain')
+    expect(mockedFn(commitAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(markAiProviderOutcomeUnknown)).toHaveBeenCalledWith('res-429', 'rate_limited', undefined)
+    if (result.outcome === 'uncertain') expect(result.classification.category).toBe('rate_limited')
   })
 
   it('correction-gate item 3: an oversized prompt is rejected fail-closed BEFORE any reservation or provider call', async () => {
