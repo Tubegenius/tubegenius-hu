@@ -293,6 +293,28 @@ describe('decideItemOutcome', () => {
     })
   })
 
+  it('configuration_error (missing auth scope mode) -> same fail_item_and_stop_batch shape, reuses the SAME 082 DB code (no new migration needed)', () => {
+    const result: ShadowExtractionResult = { outcome: 'configuration_error', reasonCode: 'auth_scope_mode_missing' }
+    expect(decideItemOutcome(result)).toEqual({
+      kind: 'fail_item_and_stop_batch',
+      reasonCode: 'ANTHROPIC_WORKSPACE_CONFIG_ERROR',
+      retryable: false,
+      diagnosticCode: 'configuration_error_auth_scope_mode_missing',
+      stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+    })
+  })
+
+  it('configuration_error (unknown auth scope mode) -> same fail_item_and_stop_batch shape, distinct diagnosticCode', () => {
+    const result: ShadowExtractionResult = { outcome: 'configuration_error', reasonCode: 'auth_scope_mode_unknown' }
+    expect(decideItemOutcome(result)).toEqual({
+      kind: 'fail_item_and_stop_batch',
+      reasonCode: 'ANTHROPIC_WORKSPACE_CONFIG_ERROR',
+      retryable: false,
+      diagnosticCode: 'configuration_error_auth_scope_mode_unknown',
+      stopReasonCode: 'AUTHORIZATION_OR_CONFIG_ERROR',
+    })
+  })
+
   it('failed/malformed_output -> fail_item_continue, NOT retryable (charged attempt, no cost-aware retry gate in 079 v0)', () => {
     const result: ShadowExtractionResult = {
       outcome: 'failed', reservationId: 'res-3', extractionRunId: 'run-3', errorClass: 'malformed_output',

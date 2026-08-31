@@ -2,7 +2,7 @@
 // tests. Pure unit tests, no network, no real process.env mutation (a
 // synthetic env object is passed explicitly to every call).
 import { describe, expect, it } from 'vitest'
-import { ANTHROPIC_WORKSPACE_ID_HEADER, getConfiguredAnthropicWorkspaceId } from '@/lib/semantic-topic/anthropic-workspace-config'
+import { ANTHROPIC_WORKSPACE_ID_HEADER, getConfiguredAnthropicWorkspaceId, resolveAnthropicAuthConfig } from '@/lib/semantic-topic/anthropic-workspace-config'
 import { redactForDisplay } from '@/lib/semantic-topic/operator-cli-security'
 
 const VALID_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
@@ -79,5 +79,61 @@ describe('getConfiguredAnthropicWorkspaceId -- valid', () => {
       if (original === undefined) delete process.env.ANTHROPIC_WORKSPACE_ID
       else process.env.ANTHROPIC_WORKSPACE_ID = original
     }
+  })
+})
+
+// PFM Anthropic Explicit Workspace-Scoped Authentication Mode gate.
+describe('resolveAnthropicAuthConfig -- missing/unknown mode', () => {
+  it('returns auth_scope_mode_missing when ANTHROPIC_AUTH_SCOPE_MODE is undefined', () => {
+    expect(resolveAnthropicAuthConfig({})).toEqual({ ok: false, reasonCode: 'auth_scope_mode_missing' })
+  })
+
+  it('returns auth_scope_mode_missing for an empty or whitespace-only value', () => {
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: '' })).toEqual({ ok: false, reasonCode: 'auth_scope_mode_missing' })
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: '   ' })).toEqual({ ok: false, reasonCode: 'auth_scope_mode_missing' })
+  })
+
+  it('returns auth_scope_mode_unknown for any value outside the closed vocabulary -- never inferred from the key', () => {
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'multi_workspace' })).toEqual({ ok: false, reasonCode: 'auth_scope_mode_unknown' })
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'Workspace_Scoped' })).toEqual({ ok: false, reasonCode: 'auth_scope_mode_unknown' }) // case-sensitive, no fuzzy matching
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'identity-linked' })).toEqual({ ok: false, reasonCode: 'auth_scope_mode_unknown' }) // hyphen instead of underscore
+  })
+})
+
+describe('resolveAnthropicAuthConfig -- workspace_scoped', () => {
+  it('succeeds with just the mode -- no workspaceId field on the result at all', () => {
+    const result = resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'workspace_scoped' })
+    expect(result).toEqual({ ok: true, mode: 'workspace_scoped' })
+    expect(result).not.toHaveProperty('workspaceId')
+  })
+
+  it('ignores a leftover ANTHROPIC_WORKSPACE_ID entirely -- never reads it, never validates it, never fails because of it', () => {
+    const result = resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'workspace_scoped', ANTHROPIC_WORKSPACE_ID: 'not-even-a-valid-shape' })
+    expect(result).toEqual({ ok: true, mode: 'workspace_scoped' })
+  })
+})
+
+describe('resolveAnthropicAuthConfig -- identity_linked', () => {
+  it('succeeds with a valid ANTHROPIC_WORKSPACE_ID, returned on the result', () => {
+    const result = resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'identity_linked', ANTHROPIC_WORKSPACE_ID: VALID_ID })
+    expect(result).toEqual({ ok: true, mode: 'identity_linked', workspaceId: VALID_ID })
+  })
+
+  it('fails with anthropic_workspace_id_missing when ANTHROPIC_WORKSPACE_ID is absent', () => {
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'identity_linked' })).toEqual({ ok: false, reasonCode: 'anthropic_workspace_id_missing' })
+  })
+
+  it('fails with anthropic_workspace_id_invalid_format for a malformed value', () => {
+    expect(resolveAnthropicAuthConfig({ ANTHROPIC_AUTH_SCOPE_MODE: 'identity_linked', ANTHROPIC_WORKSPACE_ID: 'nope' })).toEqual({ ok: false, reasonCode: 'anthropic_workspace_id_invalid_format' })
+  })
+
+  it('never derives the mode or the workspace ID from anything about the API key itself -- this function never even reads ANTHROPIC_API_KEY', () => {
+    // Structural guarantee: resolveAnthropicAuthConfig's signature takes
+    // only an env map and never references an API key field anywhere in
+    // its own logic (verified functionally: a call with an API key present
+    // alongside an invalid mode still correctly fails on the mode, proving
+    // the key's presence/shape has no influence on the outcome).
+    const result = resolveAnthropicAuthConfig({ ANTHROPIC_API_KEY: 'sk-ant-totally-real-looking-key-shape-12345', ANTHROPIC_AUTH_SCOPE_MODE: 'bogus' })
+    expect(result).toEqual({ ok: false, reasonCode: 'auth_scope_mode_unknown' })
   })
 })

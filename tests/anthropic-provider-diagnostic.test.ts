@@ -34,12 +34,15 @@ interface CliResult {
 async function runCli(args: string[], envOverrides: Record<string, string | undefined> = {}): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.ANTHROPIC_BASE_URL
-  // PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID
+  // PFM Anthropic Explicit Workspace-Scoped Authentication Mode gate:
+  // ANTHROPIC_AUTH_SCOPE_MODE (+ ANTHROPIC_WORKSPACE_ID when identity_linked)
   // is now a required precondition, same as ANTHROPIC_API_KEY -- default to
-  // a valid synthetic value here so every EXISTING test in this file (which
-  // was written before this requirement existed) keeps reaching the mock
-  // server unchanged; the dedicated describe block below overrides this to
-  // undefined/invalid via envOverrides to exercise the new config-error path.
+  // identity_linked + a valid synthetic workspace ID here so every EXISTING
+  // test in this file (written before this mode existed) keeps reaching the
+  // mock server unchanged; dedicated describe blocks below override these
+  // via envOverrides to exercise every config-error path AND workspace_scoped
+  // mode.
+  env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
   env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
   for (const [k, v] of Object.entries(envOverrides)) {
     if (v === undefined) delete env[k]
@@ -69,13 +72,15 @@ describe('anthropic-provider-diagnostic.ts -- source policy', () => {
     expect(cliSource).toMatch(/process\.env\.ANTHROPIC_API_KEY/)
   })
 
-  it('PFM workspace header: never accepts the workspace ID as a command-line argument -- only reads it via getConfiguredAnthropicWorkspaceId()', () => {
+  it('PFM auth-scope-mode: never accepts the workspace ID or the auth scope mode as command-line arguments -- only reads them via resolveAnthropicAuthConfig()', () => {
     expect(cliSource).not.toMatch(/--workspace-id/)
-    expect(cliSource).toMatch(/getConfiguredAnthropicWorkspaceId/)
+    expect(cliSource).not.toMatch(/--auth-scope-mode/)
+    expect(cliSource).toMatch(/resolveAnthropicAuthConfig/)
   })
 
-  it('PFM workspace header: sends the header via defaultHeaders on the client, applied identically regardless of --production-parity', () => {
+  it('PFM auth-scope-mode: sends the header via defaultHeaders ONLY in identity_linked mode, applied identically regardless of --production-parity', () => {
     expect(cliSource).toMatch(/defaultHeaders:\s*\{\s*\[ANTHROPIC_WORKSPACE_ID_HEADER\]/)
+    expect(cliSource).toMatch(/authConfig\.mode === 'identity_linked'\s*\?\s*\{\s*defaultHeaders/)
   })
 
   it('never imports any DB/Supabase/Vercel client or the supervised-intake runner', () => {
@@ -231,6 +236,31 @@ describe('anthropic-provider-diagnostic.ps1 -- source policy', () => {
   it('PFM workspace header: never writes the workspace ID to a file either', () => {
     expect(psSource).not.toMatch(/Set-Content|Out-File|Add-Content/)
   })
+
+  it('PFM auth-scope-mode: offers a closed, validated choice (1/2) -- never a free-text mode prompt', () => {
+    expect(psSource).toMatch(/\[1\] workspace_scoped/)
+    expect(psSource).toMatch(/\[2\] identity_linked/)
+    expect(psSource).toMatch(/while\s*\(\$true\)/) // validation loop -- only 1 or 2 accepted
+    expect(psSource).toMatch(/authScopeMode = 'workspace_scoped'/)
+    expect(psSource).toMatch(/authScopeMode = 'identity_linked'/)
+  })
+
+  it('PFM auth-scope-mode: the workspace ID prompt is conditionally guarded on identity_linked mode, not unconditional', () => {
+    expect(psSource).toMatch(/if \(\$authScopeMode -eq 'identity_linked'\)\s*\{[\s\S]*?Read-Host -AsSecureString 'ANTHROPIC_WORKSPACE_ID'/)
+  })
+
+  it('PFM auth-scope-mode: workspace_scoped mode unconditionally clears any leftover ANTHROPIC_WORKSPACE_ID before the child process starts', () => {
+    expect(psSource).toMatch(/else\s*\{[\s\S]*?Remove-Item Env:\\ANTHROPIC_WORKSPACE_ID -ErrorAction SilentlyContinue/)
+  })
+
+  it('PFM auth-scope-mode: sets ANTHROPIC_AUTH_SCOPE_MODE for the child process and clears it in the finally block too', () => {
+    expect(psSource).toMatch(/\$env:ANTHROPIC_AUTH_SCOPE_MODE = \$authScopeMode/)
+    expect(psSource).toMatch(/finally\s*\{[\s\S]*?Remove-Item Env:\\ANTHROPIC_AUTH_SCOPE_MODE/)
+  })
+
+  it('PFM auth-scope-mode: reminds the operator to close the PowerShell window after use', () => {
+    expect(psSource).toMatch(/Zard be ezt a PowerShell-ablakot/)
+  })
 })
 
 // ===========================================================================
@@ -260,12 +290,25 @@ describe('anthropic-provider-diagnostic.ts -- config-error preconditions (real s
     expect(result.exitCode).toBe(1)
   })
 
-  it('--confirm-diagnostic with NO ANTHROPIC_WORKSPACE_ID set: exits 1 before any network attempt', async () => {
+  it('--confirm-diagnostic in identity_linked mode with NO ANTHROPIC_WORKSPACE_ID set: exits 1 before any network attempt', async () => {
     const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_WORKSPACE_ID: undefined })
     expect(result.exitCode).toBe(1)
-    expect(result.stdout + result.stderr).toMatch(/ANTHROPIC_WORKSPACE_ID is not configured/)
+    expect(result.stdout + result.stderr).toMatch(/auth scope mode\/workspace is not configured/)
     expect(result.stdout + result.stderr).toMatch(/anthropic_workspace_id_missing/)
   })
+
+  it('--confirm-diagnostic with NO ANTHROPIC_AUTH_SCOPE_MODE set at all: exits 1 before any network attempt', async () => {
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_AUTH_SCOPE_MODE: undefined })
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout + result.stderr).toMatch(/auth_scope_mode_missing/)
+  })
+
+  it('--confirm-diagnostic with an UNKNOWN ANTHROPIC_AUTH_SCOPE_MODE: exits 1 before any network attempt', async () => {
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_AUTH_SCOPE_MODE: 'multi_workspace' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout + result.stderr).toMatch(/auth_scope_mode_unknown/)
+  })
+
 
   it('--confirm-diagnostic with a WHITESPACE-ONLY ANTHROPIC_WORKSPACE_ID: exits 1 before any network attempt', async () => {
     const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_WORKSPACE_ID: '   ' })
@@ -418,6 +461,74 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
 
     const result = await runCli(['--confirm-diagnostic'], {
       ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_WORKSPACE_ID: 'nope',
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(requestCount).toBe(0)
+  })
+
+  it('PFM auth-scope-mode: workspace_scoped mode succeeds with exactly one call and NO anthropic-workspace-id header at all -- not even an empty one', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 },
+      }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_AUTH_SCOPE_MODE: 'workspace_scoped', ANTHROPIC_WORKSPACE_ID: undefined,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(requestCount).toBe(1)
+    expect(lastRequestHeaders).not.toHaveProperty('anthropic-workspace-id')
+  })
+
+  it('PFM auth-scope-mode: workspace_scoped mode never sends the header even if a leftover ANTHROPIC_WORKSPACE_ID is present in the environment', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 5, output_tokens: 1 },
+      }))
+    })
+    const leftoverId = 'wrkspc_shouldNeverBeSentInWorkspaceScopedMode'
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_AUTH_SCOPE_MODE: 'workspace_scoped', ANTHROPIC_WORKSPACE_ID: leftoverId,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(requestCount).toBe(1)
+    expect(lastRequestHeaders).not.toHaveProperty('anthropic-workspace-id')
+    expect(result.stdout + result.stderr).not.toContain(leftoverId)
+  })
+
+  it('PFM auth-scope-mode: missing ANTHROPIC_AUTH_SCOPE_MODE makes ZERO HTTP requests to the provider', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_AUTH_SCOPE_MODE: undefined,
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(requestCount).toBe(0)
+  })
+
+  it('PFM auth-scope-mode: an unknown ANTHROPIC_AUTH_SCOPE_MODE makes ZERO HTTP requests to the provider', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], {
+      ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_AUTH_SCOPE_MODE: 'multi_workspace',
     })
 
     expect(result.exitCode).toBe(1)

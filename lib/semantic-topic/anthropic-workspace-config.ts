@@ -25,19 +25,27 @@
 // be a valid workspace ID." An unknown/inaccessible workspace returns 404
 // `Workspace <id> not found.`.
 //
-// Design decision (this gate, Section B): WillViral's Anthropic usage is a
-// single deployment, one account, one confirmed identity-linked key. There
-// is no reliable code-level way to detect a key's scope without a separate
-// Admin API call this layer has no reason to make, and guessing key TYPE
-// from the key's own prefix/length is explicitly out of scope (see this
-// gate's own instruction) -- a key's opaque string never reveals its scope.
-// ANTHROPIC_WORKSPACE_ID is therefore made REQUIRED for every WillViral
-// Anthropic Messages API call (production extraction AND the diagnostic
-// CLI), rather than conditional on a separate "identity-linked mode" flag
-// that would add an untested, unused code path for a deployment shape this
-// app does not have today. If WillViral ever moves to a workspace-scoped
-// key, revisit this decision then -- it is not designed around that
-// hypothetical now.
+// Design decision, SUPERSEDED (PFM Anthropic Explicit Workspace-Scoped
+// Authentication Mode -- Local Contract Remediation Gate): the original
+// design here made ANTHROPIC_WORKSPACE_ID unconditionally required for
+// every call, reasoning that there was "no reliable way to detect a key's
+// scope" so an identity-linked key should just be assumed. That reasoning
+// is now moot for a different reason: the Console's own UI cannot surface
+// the Default Workspace's ID at all (confirmed by hands-on operator
+// investigation -- neither the Workspaces list, nor a workspace-scoped
+// key's own detail view, ever shows a `wrkspc_` value for the Default
+// Workspace; only a real API response header or the Admin API's raw JSON
+// would, and making either was out of scope for that investigation). The
+// operational decision is therefore to STOP using an identity-linked
+// ("All workspaces") key at all for the next production key, and instead
+// create one explicitly scoped to a single workspace (Default) -- a
+// workspace-scoped key never needs or sends this header in the first
+// place (see the module header above: "A single-workspace-scoped key must
+// OMIT the header"). ANTHROPIC_AUTH_SCOPE_MODE (below) makes this an
+// EXPLICIT, closed, fail-closed server-side choice rather than an assumed
+// default, so a future key-type change (either direction) is caught by a
+// deliberate config decision, never silently inferred from the key's own
+// opaque string (still explicitly out of scope, unchanged from before).
 //
 // Sensitivity: a workspace ID is NOT an API secret (it grants no access on
 // its own -- the API key is still what authenticates), but per this gate's
@@ -89,4 +97,72 @@ export function getConfiguredAnthropicWorkspaceId(env: Record<string, string | u
     return { ok: false, reasonCode: 'anthropic_workspace_id_invalid_format' }
   }
   return { ok: true, workspaceId: trimmed }
+}
+
+// ===========================================================================
+// Explicit auth-scope-mode contract (PFM Anthropic Explicit Workspace-Scoped
+// Authentication Mode -- Local Contract Remediation Gate).
+//
+// ANTHROPIC_AUTH_SCOPE_MODE is a new, REQUIRED, closed-vocabulary server
+// config value with exactly two valid values:
+//
+//   'workspace_scoped' -- the configured API key is scoped to exactly one
+//     workspace (chosen when the key was created in the Console). The
+//     workspace is then implied by the key itself: ANTHROPIC_WORKSPACE_ID
+//     is NOT read, NOT required, and the anthropic-workspace-id header is
+//     NEVER sent -- sending it anyway would be at best redundant and, per
+//     the official docs' own phrasing ("Omit the header for a single-
+//     workspace key"), is not a documented-safe thing to do regardless.
+//
+//   'identity_linked' -- the configured API key is a personal or service-
+//     account key NOT scoped to a single workspace (e.g. "All workspaces").
+//     ANTHROPIC_WORKSPACE_ID becomes required again, validated exactly as
+//     getConfiguredAnthropicWorkspaceId() above already does, and the
+//     header is sent on every call. This is the ORIGINAL (pre-this-gate)
+//     unconditional behavior, now reachable only via an explicit opt-in.
+//
+// Any other value (missing, empty/whitespace, or an unrecognized string)
+// is a configuration_error -- fail-closed, zero provider calls, exactly
+// like a missing/invalid workspace ID already was. The mode string itself
+// is never derived from the API key's own shape (prefix/length/error
+// message) -- it is always an explicit, separately-configured value.
+export type AnthropicAuthScopeMode = 'workspace_scoped' | 'identity_linked'
+
+const KNOWN_AUTH_SCOPE_MODES = new Set<string>(['workspace_scoped', 'identity_linked'] satisfies AnthropicAuthScopeMode[])
+
+export type AnthropicAuthConfigReasonCode =
+  | 'auth_scope_mode_missing'
+  | 'auth_scope_mode_unknown'
+  | 'anthropic_workspace_id_missing'
+  | 'anthropic_workspace_id_invalid_format'
+
+export type AnthropicAuthConfigResult =
+  | { ok: true; mode: 'workspace_scoped' }
+  | { ok: true; mode: 'identity_linked'; workspaceId: string }
+  | { ok: false; reasonCode: AnthropicAuthConfigReasonCode }
+
+// The ONE function both provider-adapter.ts and the diagnostic CLI call to
+// decide (a) whether a call may proceed at all and (b) whether the
+// anthropic-workspace-id header belongs on it. Pure function of its input
+// (env override for tests, same pattern as getConfiguredAnthropicWorkspaceId
+// above); never logs, never returns a raw invalid value on any failure
+// branch.
+export function resolveAnthropicAuthConfig(env: Record<string, string | undefined> = process.env): AnthropicAuthConfigResult {
+  const rawMode = env.ANTHROPIC_AUTH_SCOPE_MODE
+  const mode = typeof rawMode === 'string' ? rawMode.trim() : ''
+  if (mode.length === 0) {
+    return { ok: false, reasonCode: 'auth_scope_mode_missing' }
+  }
+  if (!KNOWN_AUTH_SCOPE_MODES.has(mode)) {
+    return { ok: false, reasonCode: 'auth_scope_mode_unknown' }
+  }
+  if (mode === 'workspace_scoped') {
+    return { ok: true, mode: 'workspace_scoped' }
+  }
+  // mode === 'identity_linked'
+  const workspaceResult = getConfiguredAnthropicWorkspaceId(env)
+  if (!workspaceResult.ok) {
+    return { ok: false, reasonCode: workspaceResult.reasonCode }
+  }
+  return { ok: true, mode: 'identity_linked', workspaceId: workspaceResult.workspaceId }
 }

@@ -384,15 +384,23 @@ export function decideItemOutcome(result: ShadowExtractionResult): ItemOutcomeDe
       return { kind: 'fail_item_continue', reasonCode: 'INVALID_EVIDENCE_STATE', retryable: false, diagnosticCode: 'input_too_large' }
 
     case 'configuration_error':
-      // PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID
-      // missing or malformed, caught BEFORE any reservation (extraction-
-      // service.ts). Unlike disabled_or_rejected below, this is a genuinely
-      // PERMANENT deployment misconfiguration -- no reservation was ever
-      // spent, but a retry would fail identically for this item AND every
-      // remaining item in the batch until an operator fixes the env var, so
-      // retryable=false (mirrors the 'failed' provider-taxonomy branches'
-      // own reasoning, not disabled_or_rejected's retryable=true) and the
-      // batch stops rather than burning through the rest of the queue.
+      // PFM Anthropic Explicit Workspace-Scoped Authentication Mode gate:
+      // ANTHROPIC_AUTH_SCOPE_MODE missing/unknown, or (in identity_linked
+      // mode) ANTHROPIC_WORKSPACE_ID missing/malformed -- caught BEFORE any
+      // reservation (extraction-service.ts). Every one of these reasonCode
+      // values is the SAME kind of local, pre-call auth/workspace
+      // configuration problem, so all of them still map to the ONE existing
+      // 082 DB code below (ANTHROPIC_WORKSPACE_CONFIG_ERROR) -- widening
+      // this union did not require a new migration; the diagnosticCode
+      // (below) is what distinguishes the exact sub-reason for an operator
+      // reading the stored item. Unlike disabled_or_rejected below, this is
+      // a genuinely PERMANENT deployment misconfiguration -- no reservation
+      // was ever spent, but a retry would fail identically for this item
+      // AND every remaining item in the batch until an operator fixes the
+      // env var, so retryable=false (mirrors the 'failed' provider-taxonomy
+      // branches' own reasoning, not disabled_or_rejected's retryable=true)
+      // and the batch stops rather than burning through the rest of the
+      // queue.
       return {
         kind: 'fail_item_and_stop_batch',
         reasonCode: 'ANTHROPIC_WORKSPACE_CONFIG_ERROR',

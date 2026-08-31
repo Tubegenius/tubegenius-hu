@@ -140,6 +140,7 @@ describeIfLocalDb('Supervised Intake Runner -- real local DB integration (079 RP
     // runShadowExtraction calls need a valid one to reach the real 079 RPCs
     // they're actually testing, same as ANTHROPIC_API_KEY is never needed
     // here because the provider adapter itself stays mocked.
+    process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
     process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
     cleanupMarker()
   })

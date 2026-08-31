@@ -18,39 +18,52 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { assertAICompletion, extractJson } from '@/lib/services/ai-provider-service'
 import { SEMANTIC_TOPIC_EXTRACTION_MODEL } from './extraction-config'
-import { ANTHROPIC_WORKSPACE_ID_HEADER, getConfiguredAnthropicWorkspaceId } from './anthropic-workspace-config'
+import { ANTHROPIC_WORKSPACE_ID_HEADER, resolveAnthropicAuthConfig, type AnthropicAuthConfigResult } from './anthropic-workspace-config'
 
 let semanticTopicAnthropicClient: Anthropic | null = null
 
-// PFM Identity-Linked Workspace Header Support v0: the production Anthropic
-// key is confirmed identity-linked (Personal / "All workspaces"), so every
-// call must carry the anthropic-workspace-id header -- see
-// anthropic-workspace-config.ts's own header for the full official contract
-// and the design decision to make this REQUIRED rather than conditional.
+// PFM Anthropic Explicit Workspace-Scoped Authentication Mode gate: the
+// SHARED request-builder both auth-scope branches route through (Section B
+// of that gate) -- the ONLY place that decides whether the
+// anthropic-workspace-id header is present on the constructed client.
+// 'workspace_scoped': the header key is entirely OMITTED from the returned
+// options object (not sent as empty/undefined -- omitted), matching the
+// official docs' own "Omit the header for a single-workspace key".
+// 'identity_linked': the header is added via defaultHeaders, applied once
+// at client-construction time for the one workspace this deployment acts
+// in -- never per-call, never derived from caller-supplied input.
+// Never logs its input or output -- the caller (getSemanticTopicAnthropicClient
+// below) is the only consumer, and it only ever uses the return value to
+// construct a real Anthropic client, never to print anything.
+export function buildAnthropicClientOptions(authConfig: Extract<AnthropicAuthConfigResult, { ok: true }>): NonNullable<ConstructorParameters<typeof Anthropic>[0]> {
+  const base: NonNullable<ConstructorParameters<typeof Anthropic>[0]> = {
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: 60_000,
+    // maxRetries: 0 is deliberate -- see module header comment.
+    maxRetries: 0,
+  }
+  if (authConfig.mode === 'identity_linked') {
+    // Supplements (never overrides or duplicates) the SDK's own required
+    // headers (x-api-key, anthropic-version, content-type), which
+    // defaultHeaders leaves untouched.
+    return { ...base, defaultHeaders: { [ANTHROPIC_WORKSPACE_ID_HEADER]: authConfig.workspaceId } }
+  }
+  return base
+}
+
 // This check is defense-in-depth, not the primary gate: extraction-
 // service.ts's runShadowExtraction() already fails closed on a missing/
-// invalid workspace config BEFORE ever reaching a reservation or this
-// function, exactly like it already does for ANTHROPIC_API_KEY above --
-// this mirrors that exact existing pattern for the new config value, so
-// this function is never the FIRST place either misconfiguration is caught
+// unknown auth-scope-mode or missing/invalid workspace config BEFORE ever
+// reaching a reservation or this function, exactly like it already does
+// for ANTHROPIC_API_KEY above -- this mirrors that exact existing pattern,
+// so this function is never the FIRST place a misconfiguration is caught
 // in practice, only the last line of defense if it somehow were.
 function getSemanticTopicAnthropicClient(): Anthropic {
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('Anthropic is not configured')
-  const workspaceConfig = getConfiguredAnthropicWorkspaceId()
-  if (!workspaceConfig.ok) throw new Error('Anthropic workspace is not configured')
+  const authConfig = resolveAnthropicAuthConfig()
+  if (!authConfig.ok) throw new Error('Anthropic auth scope mode is not configured')
   if (!semanticTopicAnthropicClient) {
-    semanticTopicAnthropicClient = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      timeout: 60_000,
-      // maxRetries: 0 is deliberate -- see module header comment.
-      maxRetries: 0,
-      // Added once, at client-construction time, for the ONE workspace this
-      // deployment ever acts in -- never per-call, never derived from
-      // caller-supplied input. Supplements (never overrides or duplicates)
-      // the SDK's own required headers (x-api-key, anthropic-version,
-      // content-type), which defaultHeaders leaves untouched.
-      defaultHeaders: { [ANTHROPIC_WORKSPACE_ID_HEADER]: workspaceConfig.workspaceId },
-    })
+    semanticTopicAnthropicClient = new Anthropic(buildAnthropicClientOptions(authConfig))
   }
   return semanticTopicAnthropicClient
 }

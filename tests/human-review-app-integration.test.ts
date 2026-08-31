@@ -343,6 +343,7 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- real application-laye
       // callAnthropicForExtraction is mocked, per runOrchestration below)
       // now fails closed on a missing ANTHROPIC_WORKSPACE_ID before this
       // suite's own reservation/provider-mock flow is ever reached.
+      process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
       process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
 
       const row = dockerPsql(
@@ -358,6 +359,7 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- real application-laye
     })
     afterAll(() => {
       dockerPsql(`update ai_extraction_control set enabled=${originalControlEnabled}, updated_at=now() where id=1;`)
+      delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
       delete process.env.ANTHROPIC_WORKSPACE_ID
       // This inner afterAll runs BEFORE the outer describe's own afterAll
       // (which calls cleanupFixtures()) -- vitest/jest run nested afterAll

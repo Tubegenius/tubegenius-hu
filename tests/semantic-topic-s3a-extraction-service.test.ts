@@ -85,22 +85,29 @@ function mockedFn<T extends (...args: any[]) => any>(fn: T) {
   return fn as unknown as ReturnType<typeof vi.fn>
 }
 
-// PFM Identity-Linked Workspace Header Support v0: ANTHROPIC_WORKSPACE_ID is
-// now a required, fail-closed precondition inside runShadowExtraction
+// PFM Anthropic Explicit Workspace-Scoped Authentication Mode gate:
+// ANTHROPIC_AUTH_SCOPE_MODE (+ ANTHROPIC_WORKSPACE_ID when identity_linked)
+// is now a required, fail-closed precondition inside runShadowExtraction
 // itself (checked via the REAL anthropic-workspace-config.ts module, not
 // mocked -- it is a pure env-reading function, so exercising it for real
 // here is cheap and more faithful than mocking it). Every existing test in
-// this file assumes it reaches the reservation step, so a valid value is
-// set here by default; the dedicated describe block below explicitly
-// overrides/removes it to exercise the new configuration_error outcome.
+// this file assumes it reaches the reservation step, so identity_linked +
+// a valid workspace ID is set here by default (preserves this file's
+// pre-existing behavior exactly); the dedicated describe block below
+// explicitly overrides/removes these to exercise every configuration_error
+// sub-case, including the new workspace_scoped mode.
+const ORIGINAL_ANTHROPIC_AUTH_SCOPE_MODE = process.env.ANTHROPIC_AUTH_SCOPE_MODE
 const ORIGINAL_ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID
 
 beforeEach(() => {
   vi.clearAllMocks()
+  process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
   process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
 })
 
 afterEach(() => {
+  if (ORIGINAL_ANTHROPIC_AUTH_SCOPE_MODE === undefined) delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
+  else process.env.ANTHROPIC_AUTH_SCOPE_MODE = ORIGINAL_ANTHROPIC_AUTH_SCOPE_MODE
   if (ORIGINAL_ANTHROPIC_WORKSPACE_ID === undefined) delete process.env.ANTHROPIC_WORKSPACE_ID
   else process.env.ANTHROPIC_WORKSPACE_ID = ORIGINAL_ANTHROPIC_WORKSPACE_ID
 })
@@ -488,6 +495,52 @@ describe('runShadowExtraction', () => {
     expect(result.outcome).toBe('cache_hit')
     expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
     expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('PFM auth-scope-mode gate: workspace_scoped mode proceeds to reservation with NO ANTHROPIC_WORKSPACE_ID needed at all', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'workspace_scoped'
+    delete process.env.ANTHROPIC_WORKSPACE_ID
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'budget_exhausted' }) // stop right after reserve is called -- proves the config check itself passed
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-auth-mode-scoped' })
+
+    expect(result.outcome).toBe('budget_exhausted')
+    expect(mockedFn(reserveAiProviderUnits)).toHaveBeenCalledTimes(1)
+  })
+
+  it('PFM auth-scope-mode gate: a missing ANTHROPIC_AUTH_SCOPE_MODE is rejected fail-closed BEFORE any reservation or provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-mode-missing' })
+
+    expect(result).toEqual({ outcome: 'configuration_error', reasonCode: 'auth_scope_mode_missing' })
+    expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('PFM auth-scope-mode gate: an UNKNOWN ANTHROPIC_AUTH_SCOPE_MODE is rejected fail-closed BEFORE any reservation or provider call', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'some_other_mode'
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-mode-unknown' })
+
+    expect(result).toEqual({ outcome: 'configuration_error', reasonCode: 'auth_scope_mode_unknown' })
+    expect(mockedFn(reserveAiProviderUnits)).not.toHaveBeenCalled()
+    expect(mockedFn(callAnthropicForExtraction)).not.toHaveBeenCalled()
+  })
+
+  it('PFM auth-scope-mode gate: workspace_scoped mode ignores a leftover ANTHROPIC_WORKSPACE_ID -- never rejects, never needs it', async () => {
+    mockedFn(findCompletedExtractionRun).mockResolvedValue(null)
+    process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'workspace_scoped'
+    process.env.ANTHROPIC_WORKSPACE_ID = 'not-a-workspace-id-at-all' // deliberately invalid-shaped -- must not matter in this mode
+    mockedFn(reserveAiProviderUnits).mockResolvedValue({ outcome: 'budget_exhausted' })
+
+    const result = await runShadowExtraction({ ...EVIDENCE, idempotencyKey: 'key-auth-mode-scoped-leftover-id' })
+
+    expect(result.outcome).toBe('budget_exhausted')
+    expect(mockedFn(reserveAiProviderUnits)).toHaveBeenCalledTimes(1)
   })
 
   it('correction-gate item 3: the pre-call reservation estimate grows with the FULL request (system prompt + evidence-derived user content), not just the user text alone', async () => {

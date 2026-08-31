@@ -19,6 +19,19 @@
 # file's own --production-parity flag and PARITY_SYSTEM_PROMPT comment).
 # Requires its OWN separate authorization -- do not pass this switch
 # without that.
+#
+# PFM Anthropic Explicit Workspace-Scoped Authentication Mode gate: the
+# wrapper now ALSO asks the operator to pick an auth scope mode via a
+# closed, validated choice (never free text) before prompting for any
+# credential:
+#   [1] workspace_scoped -- the key is scoped to exactly one workspace.
+#       No workspace ID prompt at all; ANTHROPIC_WORKSPACE_ID is
+#       unconditionally cleared before the child process starts, even if
+#       something happened to be set in the parent shell already, so a
+#       stale value can never leak into the header decision.
+#   [2] identity_linked -- the key is NOT scoped to one workspace (e.g.
+#       "All workspaces"). A SEPARATE secure prompt asks for the
+#       workspace ID, same protections as the API key.
 param(
     [switch]$ProductionParity
 )
@@ -46,22 +59,35 @@ if ($confirm -cne 'YES') {
     exit 1
 }
 
+Write-Host "`n=== Auth scope mode (zart valasztas -- nem szabad kulcs kitalalni) ===" -ForegroundColor Cyan
+Write-Host "[1] workspace_scoped -- a kulcs EGYETLEN workspace-re van skalazva. Nincs szukseg workspace ID-ra."
+Write-Host "[2] identity_linked  -- a kulcs TOBB workspace-hez fer hozza (pl. 'All workspaces'). Workspace ID is kell."
+$authScopeMode = $null
+while ($true) {
+    $choice = Read-Host "Valassz (1 vagy 2)"
+    if ($choice -eq '1') { $authScopeMode = 'workspace_scoped'; break }
+    elseif ($choice -eq '2') { $authScopeMode = 'identity_linked'; break }
+    else { Write-Host "Ervenytelen valasztas -- csak 1 vagy 2 lehet." -ForegroundColor Yellow }
+}
+Write-Host "Kivalasztott mod: $authScopeMode" -ForegroundColor Cyan
+
 Write-Host "`n=== Anthropic API key (csak ennek az egy hivasnak a idejere elerheto) ===" -ForegroundColor Yellow
 $pw = Read-Host -AsSecureString 'ANTHROPIC_API_KEY'
 $plainKey = ConvertFrom-SecureStringPlain $pw
 $pw = $null
 
-# PFM Identity-Linked Workspace Header Support v0: a SEPARATE secure prompt,
-# never reused from the API key one above -- the production key is a
-# confirmed identity-linked (multi-workspace) key, so every call must carry
-# the anthropic-workspace-id header. Not a true secret (see
-# anthropic-workspace-config.ts's own header), but still entered via
-# Read-Host -AsSecureString and cleared in `finally` alongside the API key,
-# same protections, never printed, never a command-line argument.
-Write-Host "`n=== Anthropic workspace ID (anthropic-workspace-id fejlechez, csak ennek az egy hivasnak a idejere elerheto) ===" -ForegroundColor Yellow
-$wsPw = Read-Host -AsSecureString 'ANTHROPIC_WORKSPACE_ID'
-$plainWorkspaceId = ConvertFrom-SecureStringPlain $wsPw
-$wsPw = $null
+$plainWorkspaceId = $null
+if ($authScopeMode -eq 'identity_linked') {
+    # A SEPARATE secure prompt, never reused from the API key one above --
+    # not a true secret (see anthropic-workspace-config.ts's own header),
+    # but still entered via Read-Host -AsSecureString and cleared in
+    # `finally` alongside the API key, same protections, never printed,
+    # never a command-line argument.
+    Write-Host "`n=== Anthropic workspace ID (anthropic-workspace-id fejlechez, csak ennek az egy hivasnak a idejere elerheto) ===" -ForegroundColor Yellow
+    $wsPw = Read-Host -AsSecureString 'ANTHROPIC_WORKSPACE_ID'
+    $plainWorkspaceId = ConvertFrom-SecureStringPlain $wsPw
+    $wsPw = $null
+}
 
 $repoRoot = 'C:\Projektek\WillViralFinal'
 $exitCode = 4
@@ -69,8 +95,20 @@ $exitCode = 4
 try {
     $env:ANTHROPIC_API_KEY = $plainKey
     $plainKey = $null
-    $env:ANTHROPIC_WORKSPACE_ID = $plainWorkspaceId
-    $plainWorkspaceId = $null
+    $env:ANTHROPIC_AUTH_SCOPE_MODE = $authScopeMode
+
+    if ($authScopeMode -eq 'identity_linked') {
+        $env:ANTHROPIC_WORKSPACE_ID = $plainWorkspaceId
+        $plainWorkspaceId = $null
+    } else {
+        # workspace_scoped: unconditionally clear ANTHROPIC_WORKSPACE_ID
+        # before the child process starts, even if the parent shell
+        # happened to have one set from an earlier identity_linked run in
+        # the same terminal session -- a stale value must never leak into
+        # this run's header decision (the CLI itself also never reads it
+        # in this mode, but the wrapper does not rely on that alone).
+        Remove-Item Env:\ANTHROPIC_WORKSPACE_ID -ErrorAction SilentlyContinue
+    }
 
     Push-Location $repoRoot
     try {
@@ -85,11 +123,13 @@ try {
     }
 }
 finally {
-    # Runs even on Ctrl+C or an unhandled error above -- neither value is
-    # ever left set in this shell's environment beyond the one child-process
-    # call.
+    # Runs even on Ctrl+C or an unhandled error above -- none of these
+    # values are ever left set in this shell's environment beyond the one
+    # child-process call. ANTHROPIC_AUTH_SCOPE_MODE is not sensitive, but
+    # is cleared too for hygiene/consistency.
     Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
     Remove-Item Env:\ANTHROPIC_WORKSPACE_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_AUTH_SCOPE_MODE -ErrorAction SilentlyContinue
 }
 
 Write-Host "`nExit code: $exitCode" -ForegroundColor Cyan

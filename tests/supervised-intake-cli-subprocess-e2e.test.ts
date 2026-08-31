@@ -125,6 +125,7 @@ async function runCli(args: string[], envOverrides: Record<string, string | unde
   // suite's own contract is "zero provider calls" (assertNeverCalledProvider
   // below), which is about ANTHROPIC_API_KEY/provider-adapter.ts, not this
   // local config check.
+  env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
   env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
   for (const [k, v] of Object.entries(envOverrides)) {
     if (v === undefined) delete env[k]
@@ -162,6 +163,7 @@ function runCliUntilLineThenSignal(
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.ANTHROPIC_API_KEY
+  env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
   env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ'
   for (const [k, v] of Object.entries(envOverrides)) {
     if (v === undefined) delete env[k]
