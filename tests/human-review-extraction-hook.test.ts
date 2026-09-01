@@ -82,12 +82,16 @@ describe('maybeRequestHumanReview state machine', () => {
     ['CONFIDENCE_NOT_REVIEW_ELIGIBLE'],
     ['NO_SUPPORTING_SPANS'],
     ['INVALID_STRUCTURED_OUTPUT'],
-  ] as const)('every ineligible reasonCode (%s) maps to not_eligible', async (reasonCode) => {
+  ] as const)('every ineligible reasonCode (%s) maps to not_eligible, WITH the reasonCode threaded through', async (reasonCode) => {
     process.env[ENV_KEY] = 'true'
     createReviewRequest.mockResolvedValue({ outcome: 'ineligible', reasonCode, message: `some diagnostic text for ${reasonCode}` })
     const { maybeRequestHumanReview } = await import('@/lib/semantic-topic/human-review-extraction-hook')
     const result = await maybeRequestHumanReview({ extractionRunId: 'x' })
     expect(result.outcome).toBe('not_eligible')
+    // PFM Supervised Intake Human-Review Observability Closure gate: the
+    // closed reasonCode must now survive the mapping (previously only
+    // `message` did) so the runner's safe log summary can report WHY.
+    if (result.outcome === 'not_eligible') expect(result.reasonCode).toBe(reasonCode)
   })
 
   it('not_eligible mapping is identical regardless of message content (message is diagnostic-only, never branched on)', async () => {
@@ -173,5 +177,91 @@ describe('maybeRequestHumanReview state machine', () => {
     expect(fnBody).not.toMatch(/mapReviewRpcError\(/)
     expect(fnBody).not.toMatch(/\.test\(/)
     expect(fnBody).not.toMatch(/message\.includes\(/)
+  })
+})
+
+// ===========================================================================
+// PFM Supervised Intake Human-Review Observability Closure gate --
+// summarizeHumanReviewForLog(). Pure function, no mocks needed -- every
+// current HumanReviewOrchestrationResult outcome gets its own case, plus a
+// fail-closed case for a value outside the current closed union.
+// ===========================================================================
+describe('summarizeHumanReviewForLog', () => {
+  it('disabled -> { outcome: "disabled" }, no other fields', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const summary = summarizeHumanReviewForLog({ outcome: 'disabled' })
+    expect(summary).toEqual({ outcome: 'disabled' })
+    expect(Object.keys(summary)).toEqual(['outcome'])
+  })
+
+  it('created -> only { outcome: "created" }, reviewRequestId/generation/expiresAt NEVER survive the summary', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const summary = summarizeHumanReviewForLog({ outcome: 'created', reviewRequestId: 'real-review-request-id', generation: 3, expiresAt: '2026-01-01T00:00:00Z' })
+    expect(summary).toEqual({ outcome: 'created' })
+    expect(JSON.stringify(summary)).not.toContain('real-review-request-id')
+  })
+
+  it('replayed -> only { outcome: "replayed" }, same field-stripping guarantee', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const summary = summarizeHumanReviewForLog({ outcome: 'replayed', reviewRequestId: 'another-real-id', generation: 1, expiresAt: '2026-01-01T00:00:00Z' })
+    expect(summary).toEqual({ outcome: 'replayed' })
+  })
+
+  it('pending -> { outcome: "pending" }', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    expect(summarizeHumanReviewForLog({ outcome: 'pending' })).toEqual({ outcome: 'pending' })
+  })
+
+  it('already_assigned -> { outcome: "already_assigned" }', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    expect(summarizeHumanReviewForLog({ outcome: 'already_assigned' })).toEqual({ outcome: 'already_assigned' })
+  })
+
+  it.each([
+    ['EXTRACTION_NOT_COMPLETED'],
+    ['NOT_SPECIFIC'],
+    ['CONFIDENCE_NOT_REVIEW_ELIGIBLE'],
+    ['NO_SUPPORTING_SPANS'],
+    ['INVALID_STRUCTURED_OUTPUT'],
+  ] as const)('not_eligible (%s) -> { outcome: "not_eligible", reasonCode }, the free-text message is NEVER included', async (reasonCode) => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const summary = summarizeHumanReviewForLog({ outcome: 'not_eligible', reasonCode, message: 'this diagnostic sentence must never reach a log line' })
+    expect(summary).toEqual({ outcome: 'not_eligible', reasonCode })
+    expect(JSON.stringify(summary)).not.toContain('diagnostic sentence')
+  })
+
+  it('retryable_failure -> only { outcome: "retryable_failure" }, the free-text message is NEVER included', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const summary = summarizeHumanReviewForLog({ outcome: 'retryable_failure', message: 'raw db error text that could contain anything' })
+    expect(summary).toEqual({ outcome: 'retryable_failure' })
+    expect(JSON.stringify(summary)).not.toContain('raw db error text')
+  })
+
+  it('an unrecognized future outcome value fails closed to a safe, generic category -- never throws, never passes the unknown shape through', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const bogus = { outcome: 'some_future_outcome_nobody_added_a_case_for', secretPayload: 'should never appear anywhere' } as never
+    const summary = summarizeHumanReviewForLog(bogus)
+    expect(summary).toEqual({ outcome: 'unrecognized_outcome' })
+    expect(JSON.stringify(summary)).not.toContain('secretPayload')
+    expect(JSON.stringify(summary)).not.toContain('should never appear')
+  })
+
+  it('every summary is JSON-serializable and contains only the closed outcome/reasonCode keys -- no extra fields for any branch', async () => {
+    const { summarizeHumanReviewForLog } = await import('@/lib/semantic-topic/human-review-extraction-hook')
+    const cases: unknown[] = [
+      { outcome: 'disabled' },
+      { outcome: 'created', reviewRequestId: 'x', generation: 1, expiresAt: 'x' },
+      { outcome: 'replayed', reviewRequestId: 'x', generation: 1, expiresAt: 'x' },
+      { outcome: 'pending' },
+      { outcome: 'already_assigned' },
+      { outcome: 'not_eligible', reasonCode: 'NOT_SPECIFIC', message: 'x' },
+      { outcome: 'retryable_failure', message: 'x' },
+    ]
+    for (const c of cases) {
+      const summary = summarizeHumanReviewForLog(c as never)
+      for (const key of Object.keys(summary)) {
+        expect(['outcome', 'reasonCode']).toContain(key)
+      }
+    }
   })
 })

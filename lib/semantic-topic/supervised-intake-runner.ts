@@ -24,6 +24,9 @@ import { randomUUID, createHash } from 'node:crypto'
 import type { EvidenceForExtraction } from './normalize'
 import type { ShadowExtractionInput, ShadowExtractionResult } from './extraction-service'
 import type { HumanReviewOrchestrationResult } from './human-review-extraction-hook'
+import { summarizeHumanReviewForLog } from './human-review-extraction-hook'
+import { isHumanReviewEnabled } from './human-review-flag'
+import { resolveAnthropicAuthConfig } from './anthropic-workspace-config'
 import { computeExtractionConfigDigest } from './digest'
 import type { SemanticTopicAdminClient } from './quota-types'
 import { redactForDisplay } from './operator-cli-security'
@@ -600,6 +603,22 @@ export interface DryRunReport {
   dbReachable: boolean
   policy: { enabled: boolean; maxBatchItems: number; maxDailyClaimedItems: number } | null
   aiExtractionControlEnabled: boolean | null
+  // PFM Supervised Intake Human-Review Observability Closure gate: the
+  // dry-run report used to stop at "is SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED
+  // present" (envVarsPresent never even covered this variable) -- it now
+  // reports the ACTUAL resolved boolean, via the SAME isHumanReviewEnabled()
+  // the real run calls, so a dry-run can never silently disagree with what
+  // a real run would do.
+  humanReviewEnabled: boolean
+  // Same principle for the Anthropic auth-scope-mode contract: resolved via
+  // the SAME resolveAnthropicAuthConfig() the real provider call path uses
+  // (see anthropic-workspace-config.ts). anthropicAuthMode is the closed,
+  // resolved mode value ONLY when config is valid -- never the workspace ID,
+  // never the API key. When invalid, the closed reasonCode (never a raw
+  // env value) is surfaced only via `errors` below, matching how every
+  // other precondition problem in this report is already presented.
+  anthropicAuthConfigValid: boolean
+  anthropicAuthMode: 'workspace_scoped' | 'identity_linked' | null
   errors: string[]
 }
 
@@ -674,6 +693,20 @@ export async function runDryRun(
   if (policy && !policy.enabled) errors.push('supervised_intake_control.enabled is false -- a real run would be stopped immediately by claim_next_intake_item.')
   if (aiExtractionControlEnabled === false) errors.push('ai_extraction_control.enabled is false -- a real run would reject every reservation.')
 
+  // PFM Supervised Intake Human-Review Observability Closure gate: the SAME
+  // resolvers the real run path uses, called here directly -- never a
+  // second, hand-duplicated readiness check that could silently drift from
+  // runtime behavior.
+  const humanReviewEnabled = isHumanReviewEnabled()
+  const authConfig = resolveAnthropicAuthConfig()
+  const anthropicAuthConfigValid = authConfig.ok
+  const anthropicAuthMode = authConfig.ok ? authConfig.mode : null
+  if (!authConfig.ok) {
+    // The closed reasonCode only -- never a raw env value, never which
+    // specific variable/value was wrong beyond this fixed, safe string.
+    errors.push(`Anthropic auth scope mode is not configured -- a real run would fail closed before any reservation (reasonCode: ${authConfig.reasonCode}).`)
+  }
+
   const report: DryRunReport = {
     ok: errors.length === 0,
     evidenceCount: input.signalEvidenceIds.length,
@@ -684,6 +717,9 @@ export async function runDryRun(
     dbReachable,
     policy,
     aiExtractionControlEnabled,
+    humanReviewEnabled,
+    anthropicAuthConfigValid,
+    anthropicAuthMode,
     errors,
   }
 
@@ -699,6 +735,9 @@ export async function runDryRun(
       dbReachable: report.dbReachable,
       policy: report.policy,
       aiExtractionControlEnabled: report.aiExtractionControlEnabled,
+      humanReviewEnabled: report.humanReviewEnabled,
+      anthropicAuthConfigValid: report.anthropicAuthConfigValid,
+      anthropicAuthMode: report.anthropicAuthMode,
       errors: report.errors,
     },
   })
@@ -760,10 +799,23 @@ async function processClaimedItem(
   })
 
   const decision = decideItemOutcome(extraction)
+  // PFM Supervised Intake Human-Review Observability Closure gate: only
+  // 'completed' and 'cache_hit' ShadowExtractionResult variants carry a
+  // humanReview field at all (see extraction-service.ts) -- every other
+  // outcome never reached maybeRequestHumanReview(), so there is nothing
+  // safe or meaningful to summarize for them. summarizeHumanReviewForLog()
+  // is the ONLY function this log call ever passes extraction.humanReview
+  // through -- it structurally cannot leak reviewRequestId, the free-text
+  // ineligibility `message`, or any other field beyond the closed
+  // outcome/reasonCode pair.
+  const humanReviewLogField =
+    extraction.outcome === 'completed' || extraction.outcome === 'cache_hit'
+      ? { humanReview: summarizeHumanReviewForLog(extraction.humanReview) }
+      : {}
   log.log({
     level: 'info',
     message: 'extraction outcome decided',
-    fields: { itemId: state.itemId, extractionOutcome: extraction.outcome, decisionKind: decision.kind, correlationId },
+    fields: { itemId: state.itemId, extractionOutcome: extraction.outcome, decisionKind: decision.kind, correlationId, ...humanReviewLogField },
   })
 
   if (decision.kind === 'stop_batch_only') {

@@ -486,4 +486,63 @@ describeIfLocalDb('Supervised Intake CLI -- REAL subprocess E2E (section 4)', ()
       assertNeverCalledProvider(result)
     })
   })
+
+  // -------------------------------------------------------------------
+  // E) PFM Supervised Intake Human-Review Observability Closure gate --
+  // REAL subprocess proof of the dry-run report's new fields
+  // (humanReviewEnabled/anthropicAuthConfigValid/anthropicAuthMode), which
+  // resolve via the same resolvers a real run uses.
+  //
+  // Scope note (investigated and documented, not silently omitted): an
+  // earlier version of this block attempted to also prove the
+  // "extraction outcome decided" log's humanReview summary
+  // ('not_eligible'/'disabled') end-to-end through a real, unmocked
+  // subprocess, by pre-inserting a completed topic_extraction_runs row for
+  // the evidence before running the batch (intending to hit
+  // runShadowExtraction's own cache_hit path without needing
+  // ANTHROPIC_API_KEY). That approach cannot work: claim_next_intake_item
+  // (079, the "cache-hit preflight" immediately after the
+  // ALREADY_ASSIGNED check) treats ANY existing completed
+  // topic_extraction_runs row for the evidence as a reason to mark the
+  // batch item 'skipped_already_extracted'/ALREADY_EXTRACTED at claim
+  // time -- the item is never claimed, runShadowExtraction is never
+  // called, and maybeRequestHumanReview() never runs. Confirmed by
+  // running the real CLI against such a fixture: its log only ever shows
+  // "batch created" -> "batch finalized: completed" with zero
+  // "extraction outcome decided" lines. Since the 'completed' (non-cache-
+  // hit) outcome requires an actual provider call, which this file
+  // deliberately never makes, NEITHER extraction outcome that would carry
+  // a humanReview summary is reachable through a genuinely-running
+  // subprocess in this file. All outcome branches ('disabled',
+  // 'not_eligible' with every reasonCode, 'created', 'replayed',
+  // 'pending', 'already_assigned', 'retryable_failure', and an
+  // unrecognized-future-outcome fail-closed case) are exhaustively unit-
+  // tested against a mocked RPC layer instead
+  // (tests/human-review-extraction-hook.test.ts,
+  // tests/supervised-intake-runner.test.ts), including source-policy
+  // tests proving the runner's log call site never passes anything but
+  // the safe summarizer's output.
+  // -------------------------------------------------------------------
+  describe('E) human-review observability (real subprocess)', () => {
+    it('dry-run report resolves humanReviewEnabled/anthropicAuthConfigValid/anthropicAuthMode via the SAME resolvers the real run uses -- never just env-presence booleans', async () => {
+      const inputPath = path.join(workDir, 'humanreview-dryrun-batch.json')
+      writeFileSync(inputPath, JSON.stringify({
+        idempotencyKey: nextMarker('batch-humanreview-dryrun'), operatorReference: 'cli-e2e-op',
+        signalEvidenceIds: ['11111111-1111-4111-8111-111111111111'], ...VALID_CONFIG,
+      }))
+
+      const result = await runCli(
+        ['--input', inputPath, '--dry-run'],
+        {
+          NEXT_PUBLIC_SUPABASE_URL: LOCAL_URL, SUPABASE_SERVICE_ROLE_KEY: LOCAL_SERVICE_ROLE_KEY,
+          SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED: 'true', ANTHROPIC_AUTH_SCOPE_MODE: 'workspace_scoped', ANTHROPIC_WORKSPACE_ID: undefined,
+        },
+      )
+
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('"humanReviewEnabled":true')
+      expect(combined).toContain('"anthropicAuthConfigValid":true')
+      expect(combined).toContain('"anthropicAuthMode":"workspace_scoped"')
+    })
+  })
 })

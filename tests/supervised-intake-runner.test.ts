@@ -6,7 +6,7 @@
 // No Docker, no network, no real provider call anywhere in this file.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 5000 })
 
@@ -48,6 +48,27 @@ const VALID_INPUT: SupervisedIntakeBatchInput = {
 function rawInput(overrides: Record<string, unknown> = {}) {
   return { ...VALID_INPUT, ...overrides }
 }
+
+// PFM Supervised Intake Human-Review Observability Closure gate:
+// runDryRun() now resolves ANTHROPIC_AUTH_SCOPE_MODE via the real
+// resolveAnthropicAuthConfig() (see runDryRun -- human-review flag and
+// Anthropic auth-scope-mode resolution below), which every EXISTING
+// dry-run test in this file predates -- default to a valid value here so
+// those tests keep observing report.ok===true/EXIT_CODE.COMPLETED
+// unchanged; the dedicated describe block below overrides this per-test to
+// exercise every config-error/mode path.
+const ORIGINAL_FILE_ANTHROPIC_AUTH_SCOPE_MODE = process.env.ANTHROPIC_AUTH_SCOPE_MODE
+const ORIGINAL_FILE_ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID
+beforeEach(() => {
+  process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'workspace_scoped'
+  delete process.env.ANTHROPIC_WORKSPACE_ID
+})
+afterAll(() => {
+  if (ORIGINAL_FILE_ANTHROPIC_AUTH_SCOPE_MODE === undefined) delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
+  else process.env.ANTHROPIC_AUTH_SCOPE_MODE = ORIGINAL_FILE_ANTHROPIC_AUTH_SCOPE_MODE
+  if (ORIGINAL_FILE_ANTHROPIC_WORKSPACE_ID === undefined) delete process.env.ANTHROPIC_WORKSPACE_ID
+  else process.env.ANTHROPIC_WORKSPACE_ID = ORIGINAL_FILE_ANTHROPIC_WORKSPACE_ID
+})
 
 // ===========================================================================
 // 1. Input schema and unknown-field rejection
@@ -483,6 +504,192 @@ describe('runDryRun', () => {
     expect(result.exitCode).toBe(EXIT_CODE.VALIDATION_OR_CONFIG_ERROR)
     expect(report.errors.some((e) => e.includes('supervised_intake_control.enabled is false'))).toBe(true)
   })
+
+  // PFM Supervised Intake Human-Review Observability Closure gate: the
+  // dry-run report now resolves humanReviewEnabled/anthropicAuthConfigValid/
+  // anthropicAuthMode via the SAME resolvers the real run path calls
+  // (isHumanReviewEnabled, resolveAnthropicAuthConfig) -- these tests set
+  // the real env vars and save/restore them, exactly like the equivalent
+  // tests in semantic-topic-s3a-extraction-service.test.ts.
+  describe('runDryRun -- human-review flag and Anthropic auth-scope-mode resolution', () => {
+    const ORIGINAL_HUMAN_REVIEW = process.env.SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED
+    const ORIGINAL_AUTH_MODE = process.env.ANTHROPIC_AUTH_SCOPE_MODE
+    const ORIGINAL_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID
+
+    afterEach(() => {
+      if (ORIGINAL_HUMAN_REVIEW === undefined) delete process.env.SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED
+      else process.env.SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED = ORIGINAL_HUMAN_REVIEW
+      if (ORIGINAL_AUTH_MODE === undefined) delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
+      else process.env.ANTHROPIC_AUTH_SCOPE_MODE = ORIGINAL_AUTH_MODE
+      if (ORIGINAL_WORKSPACE_ID === undefined) delete process.env.ANTHROPIC_WORKSPACE_ID
+      else process.env.ANTHROPIC_WORKSPACE_ID = ORIGINAL_WORKSPACE_ID
+    })
+
+    it('humanReviewEnabled=true and anthropicAuthMode=workspace_scoped resolve correctly and do not affect report.ok', async () => {
+      process.env.SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED = 'true'
+      process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'workspace_scoped'
+      delete process.env.ANTHROPIC_WORKSPACE_ID
+      const client = createMockClient()
+      mockFromChain(client, 'supervised_intake_control', { data: { enabled: true, max_batch_items: 5, max_daily_claimed_items: 5 }, error: null })
+
+      const { report } = await runDryRun({ client, logger: createRecordingLogger() }, VALID_INPUT)
+
+      expect(report.humanReviewEnabled).toBe(true)
+      expect(report.anthropicAuthConfigValid).toBe(true)
+      expect(report.anthropicAuthMode).toBe('workspace_scoped')
+      expect(report.errors).toEqual([])
+    })
+
+    it('humanReviewEnabled=false (default) is reported plainly, never treated as an error', async () => {
+      delete process.env.SEMANTIC_TOPIC_HUMAN_REVIEW_ENABLED
+      process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'workspace_scoped'
+      const client = createMockClient()
+      mockFromChain(client, 'supervised_intake_control', { data: { enabled: true, max_batch_items: 5, max_daily_claimed_items: 5 }, error: null })
+
+      const { report } = await runDryRun({ client, logger: createRecordingLogger() }, VALID_INPUT)
+
+      expect(report.humanReviewEnabled).toBe(false)
+      expect(report.errors.some((e) => e.toLowerCase().includes('human'))).toBe(false)
+    })
+
+    it('identity_linked mode with a valid workspace ID resolves anthropicAuthMode=identity_linked, workspace ID never appears in the report or logs', async () => {
+      process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
+      process.env.ANTHROPIC_WORKSPACE_ID = 'wrkspc_testFixedValueForDryRunAssertion'
+      const client = createMockClient()
+      mockFromChain(client, 'supervised_intake_control', { data: { enabled: true, max_batch_items: 5, max_daily_claimed_items: 5 }, error: null })
+      const logger = createRecordingLogger()
+
+      const { report } = await runDryRun({ client, logger }, VALID_INPUT)
+
+      expect(report.anthropicAuthConfigValid).toBe(true)
+      expect(report.anthropicAuthMode).toBe('identity_linked')
+      expect(JSON.stringify(report)).not.toContain('wrkspc_testFixedValueForDryRunAssertion')
+      expect(JSON.stringify(logger.events)).not.toContain('wrkspc_testFixedValueForDryRunAssertion')
+    })
+
+    it('missing ANTHROPIC_AUTH_SCOPE_MODE is reported as invalid AND added to errors (report.ok=false) -- a real run would fail closed here', async () => {
+      delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
+      delete process.env.ANTHROPIC_WORKSPACE_ID
+      const client = createMockClient()
+      mockFromChain(client, 'supervised_intake_control', { data: { enabled: true, max_batch_items: 5, max_daily_claimed_items: 5 }, error: null })
+
+      const { report } = await runDryRun({ client, logger: createRecordingLogger() }, VALID_INPUT)
+
+      expect(report.anthropicAuthConfigValid).toBe(false)
+      expect(report.anthropicAuthMode).toBeNull()
+      expect(report.ok).toBe(false)
+      expect(report.errors.some((e) => e.includes('auth_scope_mode_missing'))).toBe(true)
+    })
+
+    it('an invalid identity_linked workspace ID is reported as invalid via reasonCode only -- the malformed value itself never appears in errors or logs', async () => {
+      process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
+      process.env.ANTHROPIC_WORKSPACE_ID = 'not-a-valid-workspace-id-shape'
+      const client = createMockClient()
+      mockFromChain(client, 'supervised_intake_control', { data: { enabled: true, max_batch_items: 5, max_daily_claimed_items: 5 }, error: null })
+      const logger = createRecordingLogger()
+
+      const { report } = await runDryRun({ client, logger }, VALID_INPUT)
+
+      expect(report.anthropicAuthConfigValid).toBe(false)
+      expect(report.errors.some((e) => e.includes('anthropic_workspace_id_invalid_format'))).toBe(true)
+      expect(JSON.stringify(report)).not.toContain('not-a-valid-workspace-id-shape')
+      expect(JSON.stringify(logger.events)).not.toContain('not-a-valid-workspace-id-shape')
+    })
+  })
+})
+
+// ===========================================================================
+// PFM Supervised Intake Human-Review Observability Closure gate: the
+// 'extraction outcome decided' log line now carries a safe humanReview
+// summary whenever the extraction outcome is 'completed' or 'cache_hit' --
+// full orchestration tests (real create/claim/begin/complete/finalize RPC
+// sequence, mocked runShadowExtraction), one per currently-reachable
+// HumanReviewOrchestrationResult outcome, asserting on the actual logged
+// event shape.
+// ===========================================================================
+describe('runSupervisedIntake -- human-review log summary on the "extraction outcome decided" line', () => {
+  function rpcHandlerFor(client: ReturnType<typeof createMockClient>) {
+    return (op: string) => {
+      if (op === 'create_supervised_intake_batch') return Promise.resolve({ data: { ok: true, batch_id: 'batch-1', status: 'batch_created', extraction_config_digest: 'x'.repeat(64) }, error: null })
+      if (op === 'claim_next_intake_item') {
+        if ((client.rpc as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === 'claim_next_intake_item').length === 1) {
+          return Promise.resolve({ data: claimedResponse(), error: null })
+        }
+        return Promise.resolve({ data: { ok: true, outcome: 'no_more_items' }, error: null })
+      }
+      if (op === 'begin_intake_attempt_call') return Promise.resolve({ data: { ok: true, attempt_id: 'attempt-1', base_idempotency_key: 'supervised-intake:item-1:1', status: 'calling' }, error: null })
+      if (op === 'complete_intake_item_success') return Promise.resolve({ data: { ok: true, item_id: 'item-1', status: 'succeeded' }, error: null })
+      if (op === 'fail_intake_item') return Promise.resolve({ data: { ok: true, item_id: 'item-1', status: 'failed', retryable: false }, error: null })
+      if (op === 'finalize_intake_batch') return Promise.resolve({ data: { ok: true, batch_id: 'batch-1', status: 'completed' }, error: null })
+      return Promise.resolve({ data: null, error: { message: `unexpected rpc ${op}` } })
+    }
+  }
+
+  function findLogEvent(logger: ReturnType<typeof createRecordingLogger>) {
+    return logger.events.find((e) => (e as { message?: string }).message === 'extraction outcome decided') as
+      | { fields?: { humanReview?: unknown } }
+      | undefined
+  }
+
+  it('not_eligible (matches the real post-rollout canary finding): logs { outcome: "not_eligible", reasonCode: "NOT_SPECIFIC" }, message never present', async () => {
+    const { client, logger, runShadowExtraction, deps } = makeDeps()
+    ;(client.rpc as ReturnType<typeof vi.fn>).mockImplementation(rpcHandlerFor(client))
+    mockFromChain(client, 'signal_evidence', { data: EVIDENCE_ROW, error: null })
+    runShadowExtraction.mockResolvedValue({
+      outcome: 'cache_hit', extractionRunId: 'run-1',
+      humanReview: { outcome: 'not_eligible', reasonCode: 'NOT_SPECIFIC', message: 'requires structured_output.specificity=specific (got generic) -- must never reach the log' },
+    } satisfies ShadowExtractionResult)
+
+    await runSupervisedIntake(deps, VALID_INPUT)
+
+    const event = findLogEvent(logger)
+    expect(event?.fields?.humanReview).toEqual({ outcome: 'not_eligible', reasonCode: 'NOT_SPECIFIC' })
+    expect(JSON.stringify(logger.events)).not.toContain('must never reach the log')
+  })
+
+  it('disabled: logs { outcome: "disabled" }', async () => {
+    const { client, logger, runShadowExtraction, deps } = makeDeps()
+    ;(client.rpc as ReturnType<typeof vi.fn>).mockImplementation(rpcHandlerFor(client))
+    mockFromChain(client, 'signal_evidence', { data: EVIDENCE_ROW, error: null })
+    runShadowExtraction.mockResolvedValue({ outcome: 'cache_hit', extractionRunId: 'run-1', humanReview: { outcome: 'disabled' } } satisfies ShadowExtractionResult)
+
+    await runSupervisedIntake(deps, VALID_INPUT)
+
+    expect(findLogEvent(logger)?.fields?.humanReview).toEqual({ outcome: 'disabled' })
+  })
+
+  it('created: logs only { outcome: "created" } -- the real reviewRequestId never appears anywhere in the logger events', async () => {
+    const { client, logger, runShadowExtraction, deps } = makeDeps()
+    ;(client.rpc as ReturnType<typeof vi.fn>).mockImplementation(rpcHandlerFor(client))
+    mockFromChain(client, 'signal_evidence', { data: EVIDENCE_ROW, error: null })
+    runShadowExtraction.mockResolvedValue({
+      outcome: 'cache_hit', extractionRunId: 'run-1',
+      humanReview: { outcome: 'created', reviewRequestId: 'a-real-review-request-uuid', generation: 1, expiresAt: '2099-01-01T00:00:00Z' },
+    } satisfies ShadowExtractionResult)
+
+    await runSupervisedIntake(deps, VALID_INPUT)
+
+    expect(findLogEvent(logger)?.fields?.humanReview).toEqual({ outcome: 'created' })
+    expect(JSON.stringify(logger.events)).not.toContain('a-real-review-request-uuid')
+  })
+
+  it('an outcome that never reaches maybeRequestHumanReview (input_too_large) never gets a humanReview log field at all', async () => {
+    const { client, logger, runShadowExtraction, deps } = makeDeps()
+    ;(client.rpc as ReturnType<typeof vi.fn>).mockImplementation(rpcHandlerFor(client))
+    // A snippet larger than AI_QUOTA_MAX_INPUT_BYTES would normally trigger
+    // this from the real extraction-service.ts -- here it's injected
+    // directly via the mocked adapter to isolate the runner's own logging
+    // behavior from extraction-service.ts's own sizing logic.
+    mockFromChain(client, 'signal_evidence', { data: EVIDENCE_ROW, error: null })
+    runShadowExtraction.mockResolvedValue({ outcome: 'input_too_large', totalInputBytes: 999_999 } satisfies ShadowExtractionResult)
+
+    await runSupervisedIntake(deps, VALID_INPUT)
+
+    const event = findLogEvent(logger)
+    expect(event).toBeDefined()
+    expect(event?.fields?.humanReview).toBeUndefined()
+    expect('humanReview' in (event?.fields ?? {})).toBe(false)
+  })
 })
 
 // ===========================================================================
@@ -853,6 +1060,46 @@ describe('static source guarantees', () => {
   it('createConsoleLogger is the ONE place in the runner that calls console.log/console.error -- every other log line goes through the injected RunnerLogger', () => {
     const outsideLogger = runnerSource.replace(/export function createConsoleLogger[\s\S]*?\n}\n/, '')
     expect(outsideLogger).not.toMatch(/console\.(log|error)\(/)
+  })
+
+  // PFM Supervised Intake Human-Review Observability Closure gate: static
+  // proof (not just runtime unit tests) that the human-review logging path
+  // structurally cannot leak a request ID, an extraction/evidence UUID, a
+  // payload/label/span, a free-text message, or a raw RPC response.
+  describe('human-review observability -- no raw env dump, UUID, secret, payload, or error message in the logging path', () => {
+    const hookSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/human-review-extraction-hook.ts'), 'utf8')
+
+    it('the "extraction outcome decided" log call never passes extraction.humanReview directly -- only through summarizeHumanReviewForLog(...)', () => {
+      const callSite = runnerSource.match(/const humanReviewLogField[\s\S]*?log\.log\(\{[\s\S]*?\}\)/)
+      expect(callSite).not.toBeNull()
+      // The raw humanReview object must never appear on its own (only as
+      // the argument to summarizeHumanReviewForLog).
+      expect(callSite![0]).not.toMatch(/humanReview:\s*extraction\.humanReview\b/)
+      expect(callSite![0]).toMatch(/summarizeHumanReviewForLog\(extraction\.humanReview\)/)
+    })
+
+    it('summarizeHumanReviewForLog()\'s own body never references .message, .reviewRequestId, .generation, or .expiresAt -- structurally cannot leak them', () => {
+      const fnMatch = hookSource.match(/export function summarizeHumanReviewForLog[\s\S]*?\n}\n/)
+      expect(fnMatch).not.toBeNull()
+      const body = fnMatch![0]
+      expect(body).not.toMatch(/\.message\b/)
+      expect(body).not.toMatch(/\.reviewRequestId\b/)
+      expect(body).not.toMatch(/\.generation\b/)
+      expect(body).not.toMatch(/\.expiresAt\b/)
+      // JSON.stringify of the whole input is exactly the kind of "raw dump"
+      // this gate forbids -- confirm the function never does that either.
+      expect(body).not.toMatch(/JSON\.stringify\(result\)/)
+    })
+
+    it('runDryRun never logs the raw resolveAnthropicAuthConfig() result object, workspace ID, or process.env directly -- only the closed anthropicAuthConfigValid/anthropicAuthMode fields plus the fixed, safe error strings already covered by unit tests', () => {
+      const fnMatch = runnerSource.match(/export async function runDryRun[\s\S]*?\n}\n/)
+      expect(fnMatch).not.toBeNull()
+      const body = fnMatch![0]
+      expect(body).not.toMatch(/authConfig\.workspaceId/)
+      expect(body).not.toMatch(/JSON\.stringify\(authConfig\)/)
+      expect(body).not.toMatch(/\.\.\.process\.env/)
+      expect(body).not.toMatch(/process\.env\s*\}/) // a raw env-object spread/dump
+    })
   })
 })
 

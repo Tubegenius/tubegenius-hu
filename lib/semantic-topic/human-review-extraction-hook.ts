@@ -43,7 +43,7 @@
 // database-error-text pattern matching anywhere in this file. See
 // docs/architecture/semantic-topic-identity-v0-contract.md SS35 for the
 // full DB reason-code table and the exact SQL branch each one comes from.
-import { createReviewRequest } from './human-review-service'
+import { createReviewRequest, type CreateReviewRequestIneligibleReasonCode } from './human-review-service'
 import { isHumanReviewEnabled } from './human-review-flag'
 import type { SemanticTopicAdminClient } from './human-review-types'
 
@@ -64,8 +64,13 @@ export type HumanReviewOrchestrationResult =
   // This extraction is not eligible for human review at all (confidence >=
   // 0.85, non-specific, or no supporting spans) -- the caller may continue
   // whatever it would otherwise do for an ineligible extraction; nothing
-  // else needs to happen here.
-  | { outcome: 'not_eligible'; message: string }
+  // else needs to happen here. reasonCode is the 078 RPC's own closed,
+  // machine-readable ineligibility code (added during the Human-Review
+  // Observability Closure gate -- previously only the free-text `message`
+  // was carried through, which meant WHY an extraction was ineligible could
+  // never be logged safely; reasonCode is a closed enum, safe to log
+  // as-is, `message` is not and must never reach a log call).
+  | { outcome: 'not_eligible'; reasonCode: CreateReviewRequestIneligibleReasonCode; message: string }
   // This run already has a terminal topic_assignment_decisions row (from
   // any source -- an executed review, or a direct 074 QUARANTINE call) --
   // idempotent no-op, never attempt a second request or decision.
@@ -126,9 +131,12 @@ export async function maybeRequestHumanReview(
     case 'ineligible':
       // Every value of CreateReviewRequestIneligibleReasonCode is a
       // genuine, explicit policy-ineligibility signal from the RPC's own
-      // eligibility gate (never duplicated or second-guessed here) -- any
-      // one of them maps to the same orchestration outcome.
-      return { outcome: 'not_eligible', message: result.message }
+      // eligibility gate (never duplicated or second-guessed here) -- the
+      // orchestration outcome stays the same regardless of which one fired,
+      // but reasonCode is now threaded through so a caller (the runner's
+      // own safe log summary, see summarizeHumanReviewForLog below) can
+      // report WHICH one without needing the free-text message.
+      return { outcome: 'not_eligible', reasonCode: result.reasonCode, message: result.message }
 
     case 'database_error':
       // A transient RPC/transport failure -- fail-closed. The completed
@@ -147,4 +155,52 @@ export async function maybeRequestHumanReview(
   // future outcome/reasonCode value is added to that type without this
   // switch being updated to handle it.
   return { outcome: 'retryable_failure', message: `unrecognized createReviewRequest result: ${JSON.stringify(result)}` }
+}
+
+// ===========================================================================
+// PFM Supervised Intake Human-Review Observability Closure gate.
+//
+// The Missing Human-Review Request Root-Cause Gate that preceded this one
+// found that the runner never logged the human-review outcome at all --
+// leaving no way to retroactively tell "the flag was off" apart from "the
+// flag was on and the extraction was genuinely ineligible" without a fresh
+// canary run. This is the fix: a SEPARATE, deliberately narrow presenter
+// (never mixed into the orchestration logic above) that reduces a full
+// HumanReviewOrchestrationResult down to the ONLY two things ever safe to
+// put in a log line -- the closed `outcome` string, and (for `not_eligible`
+// only) the closed `reasonCode` enum. Everything else on the real result
+// (reviewRequestId, generation, expiresAt, and especially the free-text
+// `message` field, which the 078 RPC deliberately does not sanitize -- it
+// is meant for a human reading a direct RPC response, not for a shared
+// runner log) is structurally unreachable through this function's return
+// type, not just conventionally avoided.
+export type SafeHumanReviewLogOutcome = HumanReviewOrchestrationResult['outcome'] | 'unrecognized_outcome'
+
+export interface SafeHumanReviewLogSummary {
+  outcome: SafeHumanReviewLogOutcome
+  reasonCode?: CreateReviewRequestIneligibleReasonCode
+}
+
+// Deliberately a plain if/else chain ending in a real runtime fallback, NOT
+// a switch with a `_exhaustive: never` throw (the pattern decideItemOutcome
+// uses elsewhere in this codebase) -- this function's entire purpose is to
+// sit safely right before a console.log call. A future outcome value this
+// function doesn't yet recognize must degrade to one safe, generic label
+// and keep the runner running, never throw and never pass an unknown shape
+// through untouched.
+export function summarizeHumanReviewForLog(result: HumanReviewOrchestrationResult): SafeHumanReviewLogSummary {
+  if (result.outcome === 'not_eligible') {
+    return { outcome: 'not_eligible', reasonCode: result.reasonCode }
+  }
+  if (
+    result.outcome === 'disabled' ||
+    result.outcome === 'created' ||
+    result.outcome === 'replayed' ||
+    result.outcome === 'pending' ||
+    result.outcome === 'already_assigned' ||
+    result.outcome === 'retryable_failure'
+  ) {
+    return { outcome: result.outcome }
+  }
+  return { outcome: 'unrecognized_outcome' }
 }
