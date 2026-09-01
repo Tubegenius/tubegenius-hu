@@ -13,6 +13,15 @@
 #
 # This script itself does NOT run the diagnostic call automatically when
 # sourced/loaded -- it only runs when explicitly invoked by the operator.
+#
+# -ProductionParity: opt-in switch. Matches max_tokens and the presence of
+# a system parameter to the real production request shape (see the .ts
+# file's own --production-parity flag and PARITY_SYSTEM_PROMPT comment).
+# Requires its OWN separate authorization -- do not pass this switch
+# without that.
+param(
+    [switch]$ProductionParity
+)
 $ErrorActionPreference = 'Stop'
 
 function ConvertFrom-SecureStringPlain($secureString) {
@@ -22,7 +31,12 @@ function ConvertFrom-SecureStringPlain($secureString) {
 }
 
 Write-Host "=== Anthropic Provider Diagnostic v0 ===" -ForegroundColor Cyan
-Write-Host "Ez PONTOSAN EGY, artalmatlan Anthropic API-hivast fog inditani (max_tokens=1)," -ForegroundColor Cyan
+if ($ProductionParity) {
+    Write-Host "Ez PONTOSAN EGY, artalmatlan Anthropic API-hivast fog inditani PRODUCTION-PARITY modban" -ForegroundColor Cyan
+    Write-Host "(max_tokens es system parameter is a valodi production request alakjat koveti)," -ForegroundColor Cyan
+} else {
+    Write-Host "Ez PONTOSAN EGY, artalmatlan Anthropic API-hivast fog inditani (max_tokens=1)," -ForegroundColor Cyan
+}
 Write-Host "a production extractionben hasznalt pontos modell-azonositoval." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Type YES (exact case) to proceed:" -ForegroundColor Red
@@ -46,7 +60,11 @@ try {
 
     Push-Location $repoRoot
     try {
-        & node "scripts/anthropic-provider-diagnostic.ts" --confirm-diagnostic
+        if ($ProductionParity) {
+            & node "scripts/anthropic-provider-diagnostic.ts" --confirm-diagnostic --production-parity
+        } else {
+            & node "scripts/anthropic-provider-diagnostic.ts" --confirm-diagnostic
+        }
         $exitCode = $LASTEXITCODE
     } finally {
         Pop-Location

@@ -63,13 +63,25 @@ register('./ts-alias-loader.mjs', import.meta.url)
 const HELP_TEXT = `Anthropic Provider Failure Taxonomy v0 -- secure single-call diagnostic CLI
 
 Usage:
-  node scripts/anthropic-provider-diagnostic.ts --confirm-diagnostic
+  node scripts/anthropic-provider-diagnostic.ts --confirm-diagnostic [--production-parity]
 
 Makes EXACTLY ONE minimal Anthropic Messages API call (fixed harmless
-prompt, max_tokens=1, the same model identifier production extraction
-uses) and prints only the structured, redacted classification. Never
-prints the response text, never a raw provider error body, never any
-evidence data, never retries.
+prompt, the same model identifier production extraction uses) and prints
+only the structured, redacted classification plus a separately sanitized
+provider error type/message (display-only, never used for branching, never
+written to a DB or runtime log -- see provider-error-diagnostic-detail.ts).
+Never prints the response text, never any evidence data, never retries.
+
+Two request modes:
+  (default)              max_tokens=1, no system parameter -- the smallest
+                          possible request, cheapest and fastest.
+  --production-parity     max_tokens and the presence of a system parameter
+                          match provider-adapter.ts's real production
+                          request shape exactly (imported from the SAME
+                          shared constants, not a hand-duplicated literal) --
+                          use this when a --confirm-diagnostic-only run's
+                          result might be confounded by a request-shape
+                          difference from the real extraction call.
 
 Required environment (must already be exported in the shell -- this CLI
 never reads .env/.env.local itself, and never accepts the key as a
@@ -79,6 +91,7 @@ command-line argument):
 Options:
   --confirm-diagnostic   Required. Without it, the CLI prints this help
                           and exits before doing anything else.
+  --production-parity    Optional. See above.
   --help                  Show this message.
 
 Exit codes:
@@ -89,10 +102,18 @@ Exit codes:
   4  unexpected internal error
 `
 
+// A short, structurally-realistic but entirely harmless system prompt for
+// --production-parity mode -- deliberately NOT the real extraction system
+// prompt text (no reason to expose that, and it isn't needed to test
+// whether the mere PRESENCE of a system parameter matters), just present
+// with comparable rough length.
+const PARITY_SYSTEM_PROMPT = 'You are a diagnostic assistant. Reply with the single word: ok. Ignore everything else in this message; there is no real task here.'
+
 async function main(): Promise<number> {
   const args = process.argv.slice(2)
   const help = args.includes('--help') || args.includes('-h')
   const confirmed = args.includes('--confirm-diagnostic')
+  const productionParity = args.includes('--production-parity')
 
   if (help || !confirmed) {
     console.log(HELP_TEXT)
@@ -102,7 +123,13 @@ async function main(): Promise<number> {
   // Every real-application import happens here, AFTER register() above.
   const { redactForDisplay } = await import('../lib/semantic-topic/operator-cli-security')
   const { classifyProviderFailure } = await import('../lib/semantic-topic/provider-error-taxonomy')
-  const { SEMANTIC_TOPIC_EXTRACTION_MODEL } = await import('../lib/semantic-topic/extraction-config')
+  const { extractSafeProviderErrorDetail } = await import('../lib/semantic-topic/provider-error-diagnostic-detail')
+  // AI_QUOTA_MAX_OUTPUT_TOKENS is the SAME constant provider-adapter.ts's
+  // real extraction call is invoked with (via extraction-service.ts) --
+  // imported here rather than re-typed as a literal so --production-parity
+  // can never silently drift from the real value again. See
+  // tests/anthropic-provider-diagnostic.test.ts's own static parity check.
+  const { SEMANTIC_TOPIC_EXTRACTION_MODEL, AI_QUOTA_MAX_OUTPUT_TOKENS } = await import('../lib/semantic-topic/extraction-config')
   const Anthropic = (await import('@anthropic-ai/sdk')).default
 
   // The ONE presenter this CLI ever uses to print anything -- fields always
@@ -127,19 +154,26 @@ async function main(): Promise<number> {
   // header for why maxRetries must never be anything but 0 here).
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 15_000, maxRetries: 0 })
 
+  const maxOutputTokens = productionParity ? AI_QUOTA_MAX_OUTPUT_TOKENS : 1
+
   log('info', 'starting single diagnostic call', {
     model: SEMANTIC_TOPIC_EXTRACTION_MODEL,
-    maxOutputTokens: 1,
+    maxOutputTokens,
     timeoutMs: 15_000,
+    productionParity,
   })
 
   try {
     // Fixed, harmless prompt -- no evidence data, no caller-supplied
-    // content of any kind. max_tokens=1 bounds the worst-case cost to a
-    // single output token, on top of a handful of fixed input tokens.
+    // content of any kind. Default mode: max_tokens=1, no system parameter
+    // -- the smallest possible request. --production-parity: max_tokens
+    // and system-parameter PRESENCE match the real extraction request
+    // shape (see PARITY_SYSTEM_PROMPT's own comment for why its CONTENT is
+    // still a harmless placeholder, not the real prompt).
     await client.messages.create({
       model: SEMANTIC_TOPIC_EXTRACTION_MODEL,
-      max_tokens: 1,
+      max_tokens: maxOutputTokens,
+      ...(productionParity ? { system: PARITY_SYSTEM_PROMPT } : {}),
       messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
     })
     // Success: the response text/content is NEVER printed, by design --
@@ -147,16 +181,24 @@ async function main(): Promise<number> {
     // any model output.
     log('info', 'diagnostic call completed successfully -- key, model, and permissions are all working', {
       model: SEMANTIC_TOPIC_EXTRACTION_MODEL,
+      productionParity,
     })
     return EXIT_CODE.SUCCESS
   } catch (err) {
     const classification = classifyProviderFailure(err)
+    // Display-only, never used for the branching below -- see provider-
+    // error-diagnostic-detail.ts's own header for the boundary this
+    // enforces. sanitizedMessage is truncated to 300 chars, secret-masked,
+    // UUID-shortened, request-ID-masked, and control-character-stripped.
+    const safeDetail = extractSafeProviderErrorDetail(err)
     if (classification.httpStatus !== null) {
       log('error', 'diagnostic call failed with a classified provider error', {
         category: classification.category,
         httpStatus: classification.httpStatus,
         billed: classification.billed,
         retryPolicy: classification.retryPolicy,
+        providerErrorType: safeDetail.providerErrorType,
+        sanitizedProviderMessage: safeDetail.sanitizedMessage,
       })
       return EXIT_CODE.PROVIDER_FAILURE_CLASSIFIED
     }
@@ -164,6 +206,8 @@ async function main(): Promise<number> {
     // never retried, never treated as a confirmed classification.
     log('error', 'diagnostic call did not complete with a structured provider status -- timeout or uncertain, fail-closed', {
       category: classification.category,
+      providerErrorType: safeDetail.providerErrorType,
+      sanitizedProviderMessage: safeDetail.sanitizedMessage,
     })
     return EXIT_CODE.TIMEOUT_OR_UNCERTAIN
   }

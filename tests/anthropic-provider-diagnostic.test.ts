@@ -70,10 +70,15 @@ describe('anthropic-provider-diagnostic.ts -- source policy', () => {
     expect(cliSource).not.toMatch(/normalize['"]|extraction-writer|human-review/)
   })
 
-  it('sends max_tokens: 1 and never sets maxRetries to anything but 0', () => {
-    expect(cliSource).toMatch(/max_tokens:\s*1\b/)
+  it('defaults maxOutputTokens to the literal 1 (only --production-parity switches it), and never sets maxRetries to anything but 0', () => {
+    expect(cliSource).toMatch(/const maxOutputTokens = productionParity \? AI_QUOTA_MAX_OUTPUT_TOKENS : 1\b/)
     expect(cliSource).toMatch(/maxRetries:\s*0\b/)
     expect(cliSource).not.toMatch(/maxRetries:\s*[1-9]/)
+  })
+
+  it('--production-parity mode reuses the SAME AI_QUOTA_MAX_OUTPUT_TOKENS constant provider-adapter.ts/extraction-service.ts use for the real call -- never a hand-duplicated 1024 literal', () => {
+    expect(cliSource).toMatch(/AI_QUOTA_MAX_OUTPUT_TOKENS\s*}\s*=\s*await\s+import\(\s*['"]\.\.\/lib\/semantic-topic\/extraction-config['"]\s*\)/)
+    expect(cliSource).not.toMatch(/max_tokens:\s*1024\b/) // never hardcoded -- always the imported constant
   })
 
   it('never logs the response text/content, request body, or any raw provider object -- only the structured classification fields', () => {
@@ -102,6 +107,55 @@ describe('anthropic-provider-diagnostic.ts -- source policy', () => {
   it('never retries -- exactly one client.messages.create call site in the whole file', () => {
     const matches = cliSource.match(/client\.messages\.create\(/g) ?? []
     expect(matches.length).toBe(1)
+  })
+
+  it('the safe error-detail import is only ever passed to log() fields, never used inside the branching condition (classification.httpStatus stays the only decision input)', () => {
+    const catchBlock = cliSource.match(/} catch \(err\) \{[\s\S]*?\n  \}\n\}/)
+    expect(catchBlock).not.toBeNull()
+    if (catchBlock) {
+      // The if/else branching must reference only classification.*, never safeDetail.*
+      const ifConditions = [...catchBlock[0].matchAll(/if \(([^)]+)\)/g)].map((m) => m[1])
+      for (const cond of ifConditions) {
+        expect(cond).not.toMatch(/safeDetail/)
+      }
+    }
+  })
+})
+
+describe('provider-error-diagnostic-detail.ts -- boundary from production code', () => {
+  const extractionServiceSource = readFileSync(join(REPO_ROOT, 'lib', 'semantic-topic', 'extraction-service.ts'), 'utf8')
+  const runnerSource = readFileSync(join(REPO_ROOT, 'lib', 'semantic-topic', 'supervised-intake-runner.ts'), 'utf8')
+
+  it('extraction-service.ts never imports provider-error-diagnostic-detail.ts', () => {
+    expect(extractionServiceSource).not.toMatch(/provider-error-diagnostic-detail/)
+  })
+  it('supervised-intake-runner.ts never imports provider-error-diagnostic-detail.ts', () => {
+    expect(runnerSource).not.toMatch(/provider-error-diagnostic-detail/)
+  })
+  it('the diagnostic CLI is the only file under scripts/ or lib/ that imports provider-error-diagnostic-detail.ts (besides its own definition)', () => {
+    // Plain filesystem scan (not git grep -- must hold true even for an
+    // uncommitted, untracked new file, not only once it's staged/committed).
+    const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+    const matches: string[] = []
+    function walk(dir: string) {
+      for (const entry of readdirSync(dir)) {
+        if (entry === 'node_modules' || entry === '.next') continue
+        const full = join(dir, entry)
+        const stat = statSync(full)
+        if (stat.isDirectory()) {
+          walk(full)
+        } else if (/\.tsx?$/.test(entry)) {
+          const text = readFileSync(full, 'utf8')
+          if (text.includes('provider-error-diagnostic-detail')) matches.push(full.slice(REPO_ROOT.length + 1).replace(/\\/g, '/'))
+        }
+      }
+    }
+    walk(join(REPO_ROOT, 'lib'))
+    walk(join(REPO_ROOT, 'scripts'))
+    // The module's own definition file never references its own filename
+    // in its source text -- only files that IMPORT it do. So the only
+    // expected match is the CLI's own import line.
+    expect(matches.sort()).toEqual(['scripts/anthropic-provider-diagnostic.ts'])
   })
 })
 
@@ -212,10 +266,10 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     expect((lastRequestBody as { max_tokens: number }).max_tokens).toBe(1)
   })
 
-  it('mocked 401: exits 2, classified authentication_failed, httpStatus 401, no retry (exactly one request)', async () => {
+  it('mocked 401: exits 2, classified authentication_failed, httpStatus 401, no retry (exactly one request), sanitized providerErrorType/message visible', async () => {
     await startMockServer((_req, res) => {
       res.writeHead(401, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }))
+      res.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' }, request_id: 'req_test123456789' }))
     })
 
     const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl })
@@ -223,8 +277,30 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     expect(result.exitCode).toBe(2)
     expect(result.stdout + result.stderr).toMatch(/"category":"authentication_failed"/)
     expect(result.stdout + result.stderr).toMatch(/"httpStatus":401/)
-    expect(result.stdout + result.stderr).not.toMatch(/invalid x-api-key/)
+    expect(result.stdout + result.stderr).toMatch(/"providerErrorType":"authentication_error"/)
+    expect(result.stdout + result.stderr).toMatch(/"sanitizedProviderMessage":"invalid x-api-key"/)
     expect(requestCount).toBe(1)
+  })
+
+  it('mocked 400 with a spend-limit-shaped message: category invalid_request_unbilled, sanitized message readable, no secrets leaked', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        type: 'error',
+        error: { type: 'invalid_request_error', message: 'Your organization has reached its configured spend limit. Contact your workspace admin. (key sk-ant-api03-fakefakefakefakefake, req_abcdefghijklmnop)' },
+        request_id: 'req_abcdefghijklmnop',
+      }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl })
+    const combined = result.stdout + result.stderr
+
+    expect(result.exitCode).toBe(2)
+    expect(combined).toMatch(/"category":"invalid_request_unbilled"/)
+    expect(combined).toMatch(/"providerErrorType":"invalid_request_error"/)
+    expect(combined).toMatch(/spend limit/)
+    expect(combined).not.toContain('sk-ant-api03-fakefakefakefakefake')
+    expect(combined).not.toContain('req_abcdefghijklmnop')
   })
 
   it('mocked 403: exits 2, classified permission_denied, httpStatus 403', async () => {
@@ -251,6 +327,44 @@ describe('anthropic-provider-diagnostic.ts -- classified outcomes (real subproce
     expect(result.exitCode).toBe(2)
     expect(result.stdout + result.stderr).toMatch(/"category":"model_or_endpoint_not_found"/)
     expect(result.stdout + result.stderr).toMatch(/"httpStatus":404/)
+  })
+
+  it('--production-parity: sends max_tokens matching AI_QUOTA_MAX_OUTPUT_TOKENS (1024) AND a system parameter, unlike the default minimal mode', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 },
+      }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic', '--production-parity'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl })
+
+    expect(result.exitCode).toBe(0)
+    expect(requestCount).toBe(1)
+    const body = lastRequestBody as { max_tokens: number; system?: string }
+    expect(body.max_tokens).toBe(1024)
+    expect(typeof body.system).toBe('string')
+    expect(body.system!.length).toBeGreaterThan(0)
+  })
+
+  it('default mode (no --production-parity): max_tokens=1, no system parameter at all', async () => {
+    await startMockServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 },
+      }))
+    })
+
+    const result = await runCli(['--confirm-diagnostic'], { ANTHROPIC_API_KEY: 'sk-ant-test-fake-key-not-real', ANTHROPIC_BASE_URL: baseUrl })
+
+    expect(result.exitCode).toBe(0)
+    const body = lastRequestBody as { max_tokens: number; system?: string }
+    expect(body.max_tokens).toBe(1)
+    expect(body.system).toBeUndefined()
   })
 
   it('mocked timeout (server never responds): exits 3, timeout/uncertain, fail-closed, no crash', async () => {
