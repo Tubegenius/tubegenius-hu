@@ -17,14 +17,26 @@
 --   register_signal_seed(...)             -- uj seed felvetele
 --   deactivate_signal_seed(...)            -- meglevo seed deaktivalasa
 --
--- Grant-audit (2. pont): signal_seed_queue-n a service_role jelenleg
--- INSERT+SELECT+UPDATE-et kap (055). A mukodo collector kod
--- (lib/emerging-signal/seed-selection.ts) kizarolag SELECT-et es a
--- markDiscoverySeedSuccess/Failure-n keresztul UPDATE-et hasznal --
--- semmilyen alkalmazas-kod nem ir kozvetlen INSERT-et ebbe a tablaba. Az
--- INSERT jog ezert biztonsagosan visszavonhato -- utana az EGYETLEN irasi
--- ut a register_signal_seed SECURITY DEFINER RPC, ami a tabla-szintu
--- grantot mar meg sem latja (postgres tulajdonoskent fut).
+-- Grant-audit (Column-Level Grant Remediation gate): signal_seed_queue-n a
+-- service_role jelenleg INSERT+SELECT+UPDATE-et kap (055). A mukodo
+-- collector kod (lib/emerging-signal/seed-selection.ts) kizarolag SELECT-et
+-- es -- a markDiscoverySeedSuccess/Failure -> updateSeed() fuggvenyen
+-- keresztul -- PONTOSAN negy oszlopra ir UPDATE-et: next_due_at,
+-- last_run_at, consecutive_failure_count, updated_at (kozvetlen forraskod-
+-- olvasassal igazolva, ld. seed-selection.ts updateSeed()). Semmilyen
+-- alkalmazas-kod nem ir kozvetlen INSERT-et ebbe a tablaba, es semmilyen
+-- alkalmazas-kod nem ir semelyik katalogus-identitasi mezot
+-- (active/seed_fingerprint/seed_text/category/region/language/seed_type).
+--
+-- Az eredeti (v1) migracio tablaszintu UPDATE-et hagyott a service_role-nak
+-- -- ez egy audit-megkerulesi res volt: egy service_role-hitelesitett
+-- kozvetlen PostgREST-hivas csendben felulirhatta volna pl. az active-et
+-- vagy a seed_text-et, teljesen megkerulve a register/deactivate RPC-k
+-- audit-naplozasat. Ez a javitas oszlopszintu GRANT-ra szukiti a
+-- service_role UPDATE-jogat -- kizarolag a negy, forraskoddal bizonyitott
+-- scheduler-oszlopra. Az INSERT jog biztonsagosan visszavonhato marad --
+-- az EGYETLEN irasi ut a register_signal_seed SECURITY DEFINER RPC, ami a
+-- tabla-szintu grantot mar meg sem latja (postgres tulajdonoskent fut).
 --
 -- Fingerprint-kontraktus (nem ismetelve PL/pgSQL-ben): a
 -- computeFingerprint() (lib/emerging-signal/fingerprint.ts) kizarolag
@@ -38,9 +50,13 @@
 BEGIN;
 
 -- ============================================================
--- 0. GRANT-AUDIT: signal_seed_queue -- INSERT visszavonasa service_role-tol.
+-- 0. GRANT-AUDIT: signal_seed_queue -- INSERT visszavonasa, es a
+--    tablaszintu UPDATE oszlopszintu UPDATE-re szukitese service_role-nal.
 -- ============================================================
 DO $$
+DECLARE
+  v_update_columns TEXT[];
+  v_expected_update_columns CONSTANT TEXT[] := ARRAY['consecutive_failure_count', 'last_run_at', 'next_due_at', 'updated_at'];
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.role_table_grants
@@ -53,24 +69,69 @@ BEGIN
     RAISE NOTICE '083: signal_seed_queue INSERT already absent for service_role -- no-op.';
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.role_table_grants
-    WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
-      AND grantee = 'service_role' AND privilege_type = 'SELECT'
-  ) OR NOT EXISTS (
+  -- Tablaszintu UPDATE sosem maradhat -- ez az audit-megkerulesi res.
+  IF EXISTS (
     SELECT 1 FROM information_schema.role_table_grants
     WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
       AND grantee = 'service_role' AND privilege_type = 'UPDATE'
   ) THEN
-    RAISE EXCEPTION '083 drift: signal_seed_queue must retain service_role SELECT+UPDATE (scheduler needs these) -- aborting.';
+    REVOKE UPDATE ON public.signal_seed_queue FROM service_role;
+    RAISE NOTICE '083: signal_seed_queue table-level UPDATE revoked from service_role.';
+  ELSE
+    RAISE NOTICE '083: signal_seed_queue table-level UPDATE already absent for service_role -- no-op.';
   END IF;
 
+  -- Oszlopszintu GRANT -- a GRANT onmagaban idempotens (biztonsagos
+  -- ujra-futtatni), ezert feltetel nelkul, minden futasnal kiadva.
+  GRANT UPDATE (next_due_at, last_run_at, consecutive_failure_count, updated_at)
+    ON public.signal_seed_queue TO service_role;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.role_table_grants
+    WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
+      AND grantee = 'service_role' AND privilege_type = 'SELECT'
+  ) THEN
+    RAISE EXCEPTION '083 drift: signal_seed_queue must retain service_role SELECT -- aborting.';
+  END IF;
+
+  -- Vegallapot-igazolas: SEMMILYEN tablaszintu INSERT/UPDATE/DELETE/
+  -- TRUNCATE nem lehet a service_role-nal (csak SELECT).
   IF EXISTS (
     SELECT 1 FROM information_schema.role_table_grants
     WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
-      AND grantee = 'service_role' AND privilege_type NOT IN ('SELECT', 'UPDATE')
+      AND grantee = 'service_role' AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE')
   ) THEN
-    RAISE EXCEPTION '083 drift: signal_seed_queue service_role grant set is not exactly SELECT+UPDATE after revoke -- aborting.';
+    RAISE EXCEPTION '083 drift: signal_seed_queue must NOT have any table-level INSERT/UPDATE/DELETE/TRUNCATE grant for service_role -- aborting.';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM information_schema.role_table_grants
+    WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
+      AND grantee = 'service_role' AND privilege_type NOT IN ('SELECT')
+  ) THEN
+    RAISE EXCEPTION '083 drift: signal_seed_queue service_role table-level grant set is not exactly SELECT -- aborting.';
+  END IF;
+
+  -- Vegallapot-igazolas: az oszlopszintu UPDATE PONTOSAN a negy
+  -- scheduler-oszlopra all -- se tobb, se kevesebb.
+  SELECT array_agg(DISTINCT column_name ORDER BY column_name) INTO v_update_columns
+    FROM information_schema.column_privileges
+    WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
+      AND grantee = 'service_role' AND privilege_type = 'UPDATE';
+  IF v_update_columns IS DISTINCT FROM v_expected_update_columns THEN
+    RAISE EXCEPTION '083 drift: signal_seed_queue service_role column-level UPDATE grant set is not exactly % (got %) -- aborting.', v_expected_update_columns, v_update_columns;
+  END IF;
+
+  -- Defense-in-depth: explicit negativ ellenorzes minden katalogus-
+  -- identitasi mezore, meg akkor is, ha a fenti egyezes-ellenorzes ezt mar
+  -- lefedte -- egy jovobeli oszlop-atnevezes/bovites sem csusztathat at
+  -- csendben egy tiltott mezot.
+  IF EXISTS (
+    SELECT 1 FROM information_schema.column_privileges
+    WHERE table_schema = 'public' AND table_name = 'signal_seed_queue'
+      AND grantee = 'service_role' AND privilege_type = 'UPDATE'
+      AND column_name IN ('id', 'seed_fingerprint', 'seed_type', 'seed_text', 'category', 'region', 'language', 'active', 'created_at')
+  ) THEN
+    RAISE EXCEPTION '083 drift: service_role must never hold UPDATE on a catalog-identity column of signal_seed_queue -- aborting.';
   END IF;
 END $$;
 

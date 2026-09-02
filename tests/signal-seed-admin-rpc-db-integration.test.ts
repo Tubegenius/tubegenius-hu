@@ -97,13 +97,22 @@ describeIfLocalDb('PFM Collector Seed Admin v0 -- register_signal_seed / deactiv
       ])
     })
 
-    it('signal_seed_queue: service_role retains SELECT+UPDATE but INSERT was revoked', () => {
+    it('signal_seed_queue: service_role table-level grant is exactly SELECT -- INSERT/UPDATE were revoked at the table level', () => {
       const out = dockerPsql(`
         select privilege_type from information_schema.role_table_grants
         where table_schema='public' and table_name='signal_seed_queue' and grantee='service_role'
         order by privilege_type;
       `).trim().split('\n')
-      expect(out).toEqual(['SELECT', 'UPDATE'])
+      expect(out).toEqual(['SELECT'])
+    })
+
+    it('signal_seed_queue: service_role column-level UPDATE grant is exactly the 4 scheduler columns -- no catalog-identity column', () => {
+      const out = dockerPsql(`
+        select column_name from information_schema.column_privileges
+        where table_schema='public' and table_name='signal_seed_queue' and grantee='service_role' and privilege_type='UPDATE'
+        order by column_name;
+      `).trim().split('\n')
+      expect(out).toEqual(['consecutive_failure_count', 'last_run_at', 'next_due_at', 'updated_at'])
     })
 
     it('a direct service_role INSERT into signal_seed_queue via PostgREST is rejected (RPC bypass closed)', async () => {
@@ -114,6 +123,67 @@ describeIfLocalDb('PFM Collector Seed Admin v0 -- register_signal_seed / deactiv
         seed_type: 'curated_global', seed_text: nextMarker('bypass'), category: 'default', region: 'HU', language: 'hu',
       })
       expect(error).not.toBeNull()
+    })
+
+    it('the real collector success/failure update path (updateSeed -> next_due_at/last_run_at/consecutive_failure_count/updated_at) still works via PostgREST', async (ctx) => {
+      const seedText = nextMarker('scheduler-update-path')
+      const fingerprint = realFingerprint('default', seedText)
+      ;(ctx.task.meta as { fingerprint?: string }).fingerprint = fingerprint
+      const seedId = dockerPsql(`
+        insert into signal_seed_queue (seed_fingerprint, seed_type, seed_text, category, region, language)
+        values ('${fingerprint}', 'curated_global', '${seedText}', 'default', 'HU', 'hu') returning id;
+      `).trim()
+
+      const { markDiscoverySeedSuccess, markDiscoverySeedFailure } = await import('@/lib/emerging-signal/seed-selection')
+      const { createAdminClient } = await import('@/lib/supabase-server')
+      const admin = createAdminClient()
+
+      const successResult = await markDiscoverySeedSuccess(seedId, new Date(), admin)
+      expect(successResult.outcome).toBe('success')
+      expect(dockerPsql(`select consecutive_failure_count from signal_seed_queue where id='${seedId}';`).trim()).toBe('0')
+
+      const failureResult = await markDiscoverySeedFailure(seedId, new Date(), admin)
+      expect(failureResult.outcome).toBe('success')
+      expect(dockerPsql(`select consecutive_failure_count from signal_seed_queue where id='${seedId}';`).trim()).toBe('1')
+    })
+
+    it('a direct service_role UPDATE of active/seed_text/category/region/language/seed_type/seed_fingerprint via PostgREST is rejected column-by-column', async (ctx) => {
+      const seedText = nextMarker('catalog-field-lockdown')
+      const fingerprint = realFingerprint('default', seedText)
+      ;(ctx.task.meta as { fingerprint?: string }).fingerprint = fingerprint
+      dockerPsql(`
+        insert into signal_seed_queue (seed_fingerprint, seed_type, seed_text, category, region, language)
+        values ('${fingerprint}', 'curated_global', '${seedText}', 'default', 'HU', 'hu');
+      `)
+      const { createAdminClient } = await import('@/lib/supabase-server')
+      const admin = createAdminClient()
+
+      const attempts: Array<[string, Record<string, unknown>]> = [
+        ['active', { active: false }],
+        ['seed_text', { seed_text: 'hijacked seed text' }],
+        ['category', { category: 'gaming' }],
+        ['region', { region: 'US' }],
+        ['language', { language: 'en' }],
+        ['seed_type', { seed_type: 'cluster_reseed' }],
+        ['seed_fingerprint', { seed_fingerprint: realFingerprint('default', nextMarker('hijack')) }],
+      ]
+      for (const [field, patch] of attempts) {
+        const { error } = await admin.from('signal_seed_queue').update(patch).eq('seed_fingerprint', fingerprint)
+        expect(error, `expected ${field} update to be rejected`).not.toBeNull()
+      }
+
+      const stillActive = dockerPsql(`select active from signal_seed_queue where seed_fingerprint='${fingerprint}';`).trim()
+      const stillOriginalText = dockerPsql(`select seed_text from signal_seed_queue where seed_fingerprint='${fingerprint}';`).trim()
+      expect(stillActive).toBe('t')
+      expect(stillOriginalText).toBe(seedText)
+    })
+
+    it('anon and authenticated roles have zero DML privileges on signal_seed_queue', () => {
+      const out = dockerPsql(`
+        select grantee, privilege_type from information_schema.role_table_grants
+        where table_schema='public' and table_name='signal_seed_queue' and grantee in ('anon','authenticated');
+      `).trim()
+      expect(out).toBe('')
     })
 
     it('a direct service_role UPDATE/DELETE on signal_seed_queue_events via PostgREST is rejected (append-only)', async () => {
