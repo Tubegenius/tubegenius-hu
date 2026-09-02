@@ -1,0 +1,39 @@
+{
+  "manifestVersion": "phase1.v1",
+  "contractVersion": "v1",
+  "description": "PFM Collector Seed Catalog v0 -- Hungary-first Phase 1, four approved seeds, closed in the Hungary-First Product and Contract Closure Gate.",
+  "seeds": [
+    {
+      "id": "hu-entertainment-youtuber-challenge",
+      "seedText": "magyar youtuberek kihívás",
+      "category": "entertainment",
+      "region": "HU",
+      "language": "hu",
+      "seedType": "curated_global"
+    },
+    {
+      "id": "global-tech-ai-viral-demo",
+      "seedText": "AI tool viral demo",
+      "category": "tech_ai",
+      "region": "BOTH",
+      "language": "en",
+      "seedType": "curated_global"
+    },
+    {
+      "id": "hu-gaming-community-trend",
+      "seedText": "magyar gaming közösség trend",
+      "category": "gaming",
+      "region": "HU",
+      "language": "hu",
+      "seedType": "curated_global"
+    },
+    {
+      "id": "global-psychology-social-experiment",
+      "seedText": "viral social experiment reaction",
+      "category": "psychology",
+      "region": "BOTH",
+      "language": "en",
+      "seedType": "curated_global"
+    }
+  ]
+}
