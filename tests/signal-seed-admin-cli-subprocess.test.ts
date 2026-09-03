@@ -119,6 +119,24 @@ describeIfLocalDb('PFM Collector Seed Admin v0 -- CLI subprocess (guards, redact
     expect(dockerPsql(`select count(*) from signal_seed_queue;`).trim()).toBe(before)
   })
 
+  it('the full --confirm-production-project-ref value never appears in stdout/stderr, in dry-run, in the rejected apply-guard path, or in deactivate', async () => {
+    const distinctiveRef = 'zzzdistinctivetestprojectref999'
+    const registerRejected = await runCli(
+      ['register', '--manifest', MANIFEST_PATH, '--operator-reference', 'cli-subprocess-op', '--apply', '--confirm-production-project-ref', distinctiveRef],
+      BASE_ENV,
+    )
+    expect(registerRejected.stdout + registerRejected.stderr).not.toContain(distinctiveRef)
+
+    const deactivateRejected = await runCli(
+      ['deactivate', '--target-fingerprint', 'e'.repeat(64), '--reason-code', 'OPERATOR_REQUESTED', '--operator-reference', 'cli-subprocess-op', '--apply', '--confirm-production-project-ref', distinctiveRef],
+      BASE_ENV,
+    )
+    expect(deactivateRejected.stdout + deactivateRejected.stderr).not.toContain(distinctiveRef)
+
+    const dryRun = await runCli(['register', '--manifest', MANIFEST_PATH, '--operator-reference', 'cli-subprocess-op'], BASE_ENV)
+    expect(dryRun.stdout + dryRun.stderr).not.toContain(distinctiveRef)
+  })
+
   it('dry-run output never contains a full 64-hex fingerprint or a full UUID -- only 8-char prefixes', async () => {
     const result = await runCli(['register', '--manifest', MANIFEST_PATH, '--operator-reference', 'cli-subprocess-op'], BASE_ENV)
     const combined = result.stdout + result.stderr

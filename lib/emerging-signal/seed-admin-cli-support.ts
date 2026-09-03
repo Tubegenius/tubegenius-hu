@@ -171,11 +171,46 @@ export const SEED_ADMIN_EXIT_CODE = {
 } as const
 export type SeedAdminExitCode = (typeof SEED_ADMIN_EXIT_CODE)[keyof typeof SEED_ADMIN_EXIT_CODE]
 
+// ===========================================================================
+// Apply Fail-Fast and Project Identity Redaction Remediation gate.
+//
+// The pre-remediation version of this module logged the RPC's raw
+// error.message verbatim on a 'rejected'/'database_error' outcome. That is
+// unsafe: register_signal_seed's own FINGERPRINT_PAYLOAD_CONFLICT exception
+// text interpolates the full 64-hex fingerprint (`RAISE EXCEPTION '...
+// fingerprint % already exists ...', p_fingerprint` in the 083 migration) --
+// so the raw message could leak a full fingerprint into a log line. Every
+// RPC-outcome type below now carries only a CLOSED reasonCode extracted by
+// classifyRpcErrorMessage() below, never the free-text message itself --
+// structurally the same guarantee as summarizeHumanReviewForLog() elsewhere
+// in this codebase (redact at the type level, not by convention).
+// ===========================================================================
+
+export const REGISTER_REJECT_REASON_CODES = [
+  'FINGERPRINT_PAYLOAD_CONFLICT', 'IDEMPOTENCY_KEY_REUSE',
+  'INVALID_FINGERPRINT_FORMAT', 'INVALID_OPERATOR_REFERENCE_FORMAT', 'INVALID_IDEMPOTENCY_KEY',
+] as const
+export const DEACTIVATE_REJECT_REASON_CODES = [
+  'SEED_NOT_FOUND', 'ALREADY_INACTIVE_DIFFERENT_REQUEST', 'IDEMPOTENCY_KEY_REUSE',
+  'INVALID_FINGERPRINT_FORMAT', 'INVALID_REASON_CODE', 'INVALID_OPERATOR_REFERENCE_FORMAT', 'INVALID_IDEMPOTENCY_KEY',
+] as const
+export type DatabaseErrorReasonCode = 'invalid_rpc_response' | 'unrecognized_outcome' | 'transport_or_unexpected_error'
+
+// Matches ONLY a known, closed reason-code token as a whole word inside the
+// raw RPC error text -- never returns (or logs) the surrounding free text,
+// which is exactly where a fingerprint/UUID could appear.
+function classifyRpcErrorMessage<T extends string>(rawMessage: string, knownCodes: readonly T[]): T | 'unrecognized_error' {
+  for (const code of knownCodes) {
+    if (new RegExp(`\\b${code}\\b`).test(rawMessage)) return code
+  }
+  return 'unrecognized_error'
+}
+
 export type RegisterSeedRpcOutcome =
   | { kind: 'created'; seedId: string }
   | { kind: 'already_exists'; seedId: string; active: boolean }
-  | { kind: 'rejected'; errorMessage: string }
-  | { kind: 'database_error'; errorMessage: string }
+  | { kind: 'rejected'; reasonCode: (typeof REGISTER_REJECT_REASON_CODES)[number] | 'unrecognized_error' }
+  | { kind: 'database_error'; reasonCode: DatabaseErrorReasonCode }
 
 // Calls the REAL register_signal_seed RPC. `client` is a plain
 // postgrest-js-shaped admin client (never created or configured here --
@@ -196,24 +231,25 @@ export async function callRegisterSignalSeed(
   })
   if (error) {
     const message = typeof error.message === 'string' ? error.message : 'unknown database error'
-    return /FINGERPRINT_PAYLOAD_CONFLICT|IDEMPOTENCY_KEY_REUSE|INVALID_/.test(message)
-      ? { kind: 'rejected', errorMessage: message }
-      : { kind: 'database_error', errorMessage: message }
+    const reasonCode = classifyRpcErrorMessage(message, REGISTER_REJECT_REASON_CODES)
+    return reasonCode === 'unrecognized_error'
+      ? { kind: 'database_error', reasonCode: 'transport_or_unexpected_error' }
+      : { kind: 'rejected', reasonCode }
   }
   const row = data as { ok?: boolean; outcome?: string; seed_id?: string; active?: boolean } | null
   if (!row || row.ok !== true || typeof row.seed_id !== 'string') {
-    return { kind: 'database_error', errorMessage: 'invalid_rpc_response' }
+    return { kind: 'database_error', reasonCode: 'invalid_rpc_response' }
   }
   if (row.outcome === 'created') return { kind: 'created', seedId: row.seed_id }
   if (row.outcome === 'already_exists') return { kind: 'already_exists', seedId: row.seed_id, active: row.active === true }
-  return { kind: 'database_error', errorMessage: `invalid_rpc_response: unrecognized outcome ${String(row.outcome)}` }
+  return { kind: 'database_error', reasonCode: 'unrecognized_outcome' }
 }
 
 export type DeactivateSeedRpcOutcome =
   | { kind: 'deactivated'; seedId: string }
   | { kind: 'already_inactive_replay'; seedId: string }
-  | { kind: 'rejected'; errorMessage: string }
-  | { kind: 'database_error'; errorMessage: string }
+  | { kind: 'rejected'; reasonCode: (typeof DEACTIVATE_REJECT_REASON_CODES)[number] | 'unrecognized_error' }
+  | { kind: 'database_error'; reasonCode: DatabaseErrorReasonCode }
 
 export async function callDeactivateSignalSeed(
   client: SignalAdminClient,
@@ -227,15 +263,108 @@ export async function callDeactivateSignalSeed(
   })
   if (error) {
     const message = typeof error.message === 'string' ? error.message : 'unknown database error'
-    return /SEED_NOT_FOUND|ALREADY_INACTIVE_DIFFERENT_REQUEST|IDEMPOTENCY_KEY_REUSE|INVALID_/.test(message)
-      ? { kind: 'rejected', errorMessage: message }
-      : { kind: 'database_error', errorMessage: message }
+    const reasonCode = classifyRpcErrorMessage(message, DEACTIVATE_REJECT_REASON_CODES)
+    return reasonCode === 'unrecognized_error'
+      ? { kind: 'database_error', reasonCode: 'transport_or_unexpected_error' }
+      : { kind: 'rejected', reasonCode }
   }
   const row = data as { ok?: boolean; outcome?: string; seed_id?: string } | null
   if (!row || row.ok !== true || typeof row.seed_id !== 'string') {
-    return { kind: 'database_error', errorMessage: 'invalid_rpc_response' }
+    return { kind: 'database_error', reasonCode: 'invalid_rpc_response' }
   }
   if (row.outcome === 'deactivated') return { kind: 'deactivated', seedId: row.seed_id }
   if (row.outcome === 'already_inactive_replay') return { kind: 'already_inactive_replay', seedId: row.seed_id }
-  return { kind: 'database_error', errorMessage: `invalid_rpc_response: unrecognized outcome ${String(row.outcome)}` }
+  return { kind: 'database_error', reasonCode: 'unrecognized_outcome' }
+}
+
+// ===========================================================================
+// Full-manifest, pre-write validation (item 1) and the fail-fast apply loop
+// (items 2-4). prepareAllSeeds() computes every seed's fingerprint BEFORE
+// applyRegisterManifest() is ever called, so a manifest with a bad entry
+// anywhere in it is rejected before any RPC -- not discovered mid-loop.
+// ===========================================================================
+
+export type PrepareAllSeedsResult = { ok: true; seeds: PreparedSeed[] } | { ok: false; message: string }
+
+export function prepareAllSeeds(manifest: SeedManifest): PrepareAllSeedsResult {
+  const seeds: PreparedSeed[] = []
+  for (const entry of manifest.seeds) {
+    const result = prepareSeed(entry)
+    if (!result.ok) return { ok: false, message: result.message }
+    seeds.push(result.seed)
+  }
+  return { ok: true, seeds }
+}
+
+export type ApplySeedProgressEvent =
+  | { seedId: string; kind: 'created' }
+  | { seedId: string; kind: 'already_exists'; active: boolean }
+
+// Only 'rejected' | 'database_error' | 'exception' can stop the loop --
+// deliberately not open-ended, so a future outcome kind neither this file
+// nor its caller recognizes cannot silently be treated as success.
+export type ApplyStopReason = 'rejected' | 'database_error' | 'exception'
+
+export type ApplyManifestResult =
+  | { outcome: 'completed'; succeededCount: number }
+  | {
+      outcome: 'partial_apply'
+      totalSeeds: number
+      succeededCount: number
+      failedAtIndex: number
+      remainingUncalledCount: number
+      stopReason: ApplyStopReason
+    }
+
+// Applies an already-validated, already-fingerprinted manifest one seed at a
+// time, in order. Stops on the FIRST outcome that is not exactly 'created'
+// or 'already_exists' (a real RPC rejection, a database/transport error, an
+// unrecognized outcome shape -- callRegisterSignalSeed() itself funnels all
+// three into 'rejected'/'database_error' already -- or a thrown exception,
+// caught here) -- the remaining seeds' RPCs are never called. Already-
+// succeeded seeds are never touched, modified, or compensated here; the
+// caller decides what to do next. onSeedResult, when supplied, fires only
+// for a genuine success (never for the stopping failure), and only with a
+// seedId (a manifest-authored label, never a secret) plus a closed outcome
+// kind -- never a fingerprint, idempotency key, or raw RPC response.
+export async function applyRegisterManifest(
+  client: SignalAdminClient,
+  input: {
+    seeds: PreparedSeed[]
+    operatorReference: string
+    manifestVersion: string
+    onSeedResult?: (event: ApplySeedProgressEvent) => void
+  },
+): Promise<ApplyManifestResult> {
+  let succeededCount = 0
+  for (let i = 0; i < input.seeds.length; i++) {
+    const seed = input.seeds[i]
+    const idempotencyKey = deriveRegisterIdempotencyKey(input.manifestVersion, seed.id)
+    let outcome: RegisterSeedRpcOutcome
+    try {
+      outcome = await callRegisterSignalSeed(client, { seed, operatorReference: input.operatorReference, idempotencyKey })
+    } catch {
+      return {
+        outcome: 'partial_apply', totalSeeds: input.seeds.length, succeededCount,
+        failedAtIndex: i + 1, remainingUncalledCount: input.seeds.length - i - 1, stopReason: 'exception',
+      }
+    }
+    if (outcome.kind === 'created') {
+      succeededCount += 1
+      input.onSeedResult?.({ seedId: seed.id, kind: 'created' })
+      continue
+    }
+    if (outcome.kind === 'already_exists') {
+      succeededCount += 1
+      input.onSeedResult?.({ seedId: seed.id, kind: 'already_exists', active: outcome.active })
+      continue
+    }
+    // outcome.kind is 'rejected' or 'database_error' -- stop immediately,
+    // never call the RPC for any remaining seed.
+    return {
+      outcome: 'partial_apply', totalSeeds: input.seeds.length, succeededCount,
+      failedAtIndex: i + 1, remainingUncalledCount: input.seeds.length - i - 1, stopReason: outcome.kind,
+    }
+  }
+  return { outcome: 'completed', succeededCount }
 }

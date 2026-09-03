@@ -129,10 +129,16 @@ async function main(): Promise<number> {
       })
       return support.SEED_ADMIN_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
     }
+    // Apply Fail-Fast and Project Identity Redaction gate: the full project
+    // ref is never printed, not even in the interactive prompt text (the
+    // operator already typed it as --confirm-production-project-ref; there
+    // is no need to echo it back). Only a closed confirmation flag and the
+    // resolved identity KIND (never the ref itself) are logged.
+    log('info', 'production apply guard passed', { projectIdentityConfirmed: true, environmentKind: identity.kind })
     const rl = createInterface({ input: process.stdin, output: process.stdout })
     let typed: string
     try {
-      typed = await rl.question(`About to APPLY against project ref ${cli.confirmProductionProjectRef}. Type YES to continue: `)
+      typed = await rl.question('About to APPLY against the confirmed production project. Type YES to continue: ')
     } finally {
       rl.close()
     }
@@ -156,34 +162,47 @@ async function main(): Promise<number> {
       return support.SEED_ADMIN_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
     }
 
-    let exitCode: number = support.SEED_ADMIN_EXIT_CODE.COMPLETED
-    for (const entry of loaded.manifest.seeds) {
-      const prepared = support.prepareSeed(entry)
-      if (!prepared.ok) {
-        log('error', 'fingerprint computation failed', { seedId: entry.id, message: prepared.message })
-        exitCode = support.SEED_ADMIN_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
-        continue
-      }
-      const idempotencyKey = support.deriveRegisterIdempotencyKey(loaded.manifest.manifestVersion, entry.id)
-      const preview = {
-        seedId: entry.id, category: entry.category, region: entry.region, language: entry.language,
-        fingerprintPrefix: prepared.seed.fingerprint.slice(0, 8), idempotencyKeyPrefix: idempotencyKey.slice(0, 24),
-      }
-      if (!cli.apply) {
-        log('info', 'dry-run preview -- register', preview)
-        continue
-      }
-      const outcome = await support.callRegisterSignalSeed(client, {
-        seed: prepared.seed, operatorReference: cli.operatorReference, idempotencyKey,
-      })
-      if (outcome.kind === 'created' || outcome.kind === 'already_exists') {
-        log('info', 'register outcome', { seedId: entry.id, outcome: outcome.kind })
-      } else {
-        log('error', 'register outcome', { seedId: entry.id, outcome: outcome.kind, message: outcome.errorMessage })
-        exitCode = outcome.kind === 'rejected' ? support.SEED_ADMIN_EXIT_CODE.RPC_REJECTED : support.SEED_ADMIN_EXIT_CODE.DATABASE_ERROR
-      }
+    // Item 1: the ENTIRE manifest is validated and fingerprinted here,
+    // before any write RPC is ever reached -- a bad entry anywhere in the
+    // manifest aborts before seed #1's RPC call, not partway through.
+    const prepared = support.prepareAllSeeds(loaded.manifest)
+    if (!prepared.ok) {
+      log('error', 'manifest validation failed -- no RPC was called', { message: prepared.message })
+      return support.SEED_ADMIN_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
     }
-    return exitCode
+
+    if (!cli.apply) {
+      for (const seed of prepared.seeds) {
+        const idempotencyKey = support.deriveRegisterIdempotencyKey(loaded.manifest.manifestVersion, seed.id)
+        log('info', 'dry-run preview -- register', {
+          seedId: seed.id, category: seed.category, region: seed.region, language: seed.language,
+          fingerprintPrefix: seed.fingerprint.slice(0, 8), idempotencyKeyPrefix: idempotencyKey.slice(0, 24),
+        })
+      }
+      return support.SEED_ADMIN_EXIT_CODE.COMPLETED
+    }
+
+    // Items 2-4: fail-fast apply loop. Stops on the first non-success
+    // outcome (rejected/database_error/exception), never calls the RPC for
+    // any remaining seed, and never modifies/compensates seeds that already
+    // succeeded -- that state is left exactly as-is for a separate operator
+    // decision.
+    const result = await support.applyRegisterManifest(client, {
+      seeds: prepared.seeds, operatorReference: cli.operatorReference, manifestVersion: loaded.manifest.manifestVersion,
+      onSeedResult: (event) => log('info', 'register outcome', event),
+    })
+    if (result.outcome === 'completed') {
+      log('info', 'apply completed', { succeededCount: result.succeededCount })
+      return support.SEED_ADMIN_EXIT_CODE.COMPLETED
+    }
+    // Item 3: a safe partial_apply summary -- exclusively counts and a
+    // closed stop-reason enum, never a seed identity, message, or raw
+    // RPC response. No automatic retry is attempted here.
+    log('error', 'partial_apply', {
+      totalSeeds: result.totalSeeds, succeededCount: result.succeededCount,
+      failedAtIndex: result.failedAtIndex, remainingUncalledCount: result.remainingUncalledCount, stopReason: result.stopReason,
+    })
+    return result.stopReason === 'rejected' ? support.SEED_ADMIN_EXIT_CODE.RPC_REJECTED : support.SEED_ADMIN_EXIT_CODE.DATABASE_ERROR
   }
 
   // deactivate
@@ -212,7 +231,7 @@ async function main(): Promise<number> {
     log('info', 'deactivate outcome', { outcome: outcome.kind })
     return support.SEED_ADMIN_EXIT_CODE.COMPLETED
   }
-  log('error', 'deactivate outcome', { outcome: outcome.kind, message: outcome.errorMessage })
+  log('error', 'deactivate outcome', { outcome: outcome.kind, reasonCode: outcome.reasonCode })
   return outcome.kind === 'rejected' ? support.SEED_ADMIN_EXIT_CODE.RPC_REJECTED : support.SEED_ADMIN_EXIT_CODE.DATABASE_ERROR
 }
 
