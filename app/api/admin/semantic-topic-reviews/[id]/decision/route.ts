@@ -13,6 +13,7 @@ import { jsonNoStore, readJsonBody, reviewFailureToResponse } from '@/lib/semant
 import { isPlainRecord, isOptionalTextWithinLimit } from '@/lib/api-input-validation'
 import {
   isUuid,
+  isDuplicateSearchOutcomeValidFor,
   REJECTION_REASONS,
   REVIEW_FIELD_MAX_LENGTHS,
   type DuplicateSearchOutcome,
@@ -25,7 +26,7 @@ import {
 const MAX_BODY_BYTES = 20_000
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200
 
-const DUPLICATE_SEARCH_OUTCOMES: readonly DuplicateSearchOutcome[] = ['no_duplicate_found', 'possible_duplicate_reviewed_and_distinct']
+const DUPLICATE_SEARCH_OUTCOMES: readonly DuplicateSearchOutcome[] = ['no_duplicate_found', 'possible_duplicate_reviewed_and_distinct', 'existing_topic_match_confirmed']
 const UNCERTAINTY_CLASSIFICATIONS: readonly UncertaintyClassification[] = ['low', 'medium', 'high']
 const PROPOSED_OUTCOMES: readonly ProposedOutcome[] = ['CREATE_NEW', 'ATTACH_EXISTING']
 
@@ -103,6 +104,15 @@ function parseDecisionBody(body: unknown): { ok: true; decision: StructuredDecis
   }
   if (body.proposedOutcome === 'ATTACH_EXISTING' && targetSemanticTopicId === null) {
     return { ok: false, error: 'ATTACH_EXISTING esetén targetSemanticTopicId kötelező' }
+  }
+  // Migration 084 fail-closed pairing rule -- ATTACH_EXISTING means a
+  // matching existing topic WAS found, so only existing_topic_match_confirmed
+  // is truthful; CREATE_NEW must never claim existing_topic_match_confirmed.
+  // This is a fast, pre-RPC 422 -- the RPC/table CHECK (084) remains the
+  // actual enforcement point, matching this route's own established pattern
+  // for every other structural rule above.
+  if (!isDuplicateSearchOutcomeValidFor(body.proposedOutcome as ProposedOutcome, body.duplicateSearchOutcome as DuplicateSearchOutcome)) {
+    return { ok: false, error: 'duplicateSearchOutcome nem egyeztethető össze a választott proposedOutcome-mal' }
   }
   if (typeof body.uncertaintyClassification !== 'string' || !UNCERTAINTY_CLASSIFICATIONS.includes(body.uncertaintyClassification as UncertaintyClassification)) {
     return { ok: false, error: 'uncertaintyClassification kötelező, a megengedett értékek egyike' }

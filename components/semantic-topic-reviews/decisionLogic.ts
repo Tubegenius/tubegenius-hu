@@ -14,6 +14,8 @@
 import {
   REVIEW_FIELD_MAX_LENGTHS,
   isUuid,
+  isDuplicateSearchOutcomeValidFor,
+  duplicateSearchOutcomesFor,
   type DuplicateSearchOutcome,
   type ProposedOutcome,
   type RejectionReason,
@@ -72,6 +74,13 @@ export function validateApprovalFields(f: ApprovalFormFields): ValidationResult 
   if (!f.evidenceAdequateConfirmed) errors.evidenceAdequateConfirmed = 'Meg kell erősíteni, hogy a bizonyíték elegendő'
   if (!f.duplicateSearchOutcome) errors.duplicateSearchOutcome = 'Válassz duplikátum-keresési eredményt'
   if (!f.proposedOutcome) errors.proposedOutcome = 'Válassz: új topic vagy meglévőhöz csatolás'
+  // Migration 084 fail-closed pairing rule, client-side mirror (immediate UX
+  // feedback only -- the RPC/table CHECK, migration 084, is the actual
+  // enforcement point). Only checked once both fields are chosen, so this
+  // never doubles up with the two "not chosen yet" errors above.
+  if (f.duplicateSearchOutcome && f.proposedOutcome && !isDuplicateSearchOutcomeValidFor(f.proposedOutcome, f.duplicateSearchOutcome)) {
+    errors.duplicateSearchOutcome = 'A választott duplikátum-keresési eredmény nem egyeztethető össze a javasolt kimenettel'
+  }
   if (f.proposedOutcome === 'ATTACH_EXISTING' && !isUuid(f.targetSemanticTopicId)) {
     errors.targetSemanticTopicId = 'Pontos, érvényes UUID szükséges (supervised pilot input)'
   }
@@ -104,6 +113,30 @@ export function validateApprovalFields(f: ApprovalFormFields): ValidationResult 
       reviewPolicyVersion: f.reviewPolicyVersion,
     },
   }
+}
+
+// Called from DecisionForm.tsx's selectProposedOutcome whenever the
+// reviewer switches proposedOutcome. Pure and DOM-free (same rationale as
+// the rest of this file -- see header) so the "switching proposedOutcome
+// never leaves a stale/incompatible duplicateSearchOutcome selected"
+// guarantee is unit-tested for real, not only described in prose.
+//
+// - If the CURRENT selection is still valid for the NEW proposedOutcome,
+//   keep it (e.g. staying on CREATE_NEW while relabeling the same choice
+//   never needs to reset).
+// - Otherwise, if the new proposedOutcome has exactly ONE valid option
+//   (ATTACH_EXISTING today -- only existing_topic_match_confirmed), select
+//   it automatically -- there is no meaningful choice left to make.
+// - Otherwise (CREATE_NEW's two options), reset to '' and require an
+//   explicit re-selection rather than guessing which of the two the
+//   reviewer meant.
+export function resolveDuplicateSearchOutcomeOnProposedOutcomeChange(
+  next: ProposedOutcome,
+  current: DuplicateSearchOutcome | '',
+): DuplicateSearchOutcome | '' {
+  const allowed = duplicateSearchOutcomesFor(next)
+  if (current && (allowed as readonly string[]).includes(current)) return current
+  return allowed.length === 1 ? allowed[0] : ''
 }
 
 export function validateRejectionFields(f: RejectionFormFields): ValidationResult {

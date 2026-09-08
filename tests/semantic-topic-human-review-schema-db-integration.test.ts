@@ -236,7 +236,9 @@ function fullApprovedFields(marker: string, extractionRunId: string, proposedOut
     exclusion_criteria: 'HR test exclusion criteria.',
     lane_neutral_confirmed: true,
     evidence_adequacy: 'adequate',
-    duplicate_search_outcome: 'no_duplicate_found',
+    // Migration 084 pairing rule: ATTACH_EXISTING requires
+    // existing_topic_match_confirmed; CREATE_NEW keeps the pre-084 default.
+    duplicate_search_outcome: proposedOutcome === 'ATTACH_EXISTING' ? 'existing_topic_match_confirmed' : 'no_duplicate_found',
     proposed_outcome: proposedOutcome,
     target_semantic_topic_id: targetTopicId,
     uncertainty_classification: 'low',
@@ -310,15 +312,34 @@ describeIfLocalDb('Semantic Topic Identity v0 — Human Review schema foundation
   // implementation), second run no-op, definition drift fail-closed.
   // ============================================================
   describe('migration idempotency and drift', () => {
-    it('re-running 077 against the already-applied schema is a byte-exact no-op', () => {
+    it('re-running 077 against the already-applied schema is a byte-exact no-op -- OR topic_assignment_review_requests has since gained an extra CHECK constraint from a later migration (084), which is also a correct, expected outcome', () => {
+      // Migration 084 (docs/architecture/semantic-topic-identity-v0-contract.md
+      // SS37) ADDs a new CHECK constraint,
+      // topic_assignment_review_requests_dup_search_outcome_pairing, to this
+      // same table. Once 084 has run against this local DB (a real,
+      // expected state on a shared, persistent local stack -- migrations
+      // here are never re-run out of order in a real deployment), 077's own
+      // VALIDATE branch -- which exhaustively enumerates its OWN original
+      // constraint set -- correctly refuses to touch a table that now
+      // carries a constraint it doesn't recognize. That refusal IS the
+      // desired fail-closed behavior (never silently accepting an
+      // unrecognized extra constraint, whatever its origin), not a
+      // regression. Mirrors the exact same, already-established
+      // 081-vs-082 precedent in
+      // tests/semantic-topic-supervised-intake-081-db-integration.test.ts.
       const result = runMigration()
-      expect(result.threw).toBe(false)
-      expect(result.out).toMatch(/semantic_topic_reviewers already exists and matches exactly -- no-op/)
-      expect(result.out).toMatch(/semantic_topic_reviewer_events already exists and matches exactly -- no-op/)
-      expect(result.out).toMatch(/topic_assignment_review_requests already exists and matches exactly -- no-op/)
-      expect(result.out).toMatch(/topic_assignment_review_events already exists and matches exactly -- no-op/)
-      expect(result.out).toMatch(/topic_assignment_decisions_decision_reason_check already corrected -- no-op/)
-      expect(result.out).toMatch(/final self-check passed/)
+      if (result.threw) {
+        expect(result.out).toMatch(/077 drift: topic_assignment_review_requests has an unexpected extra constraint/)
+        expect(result.out).toMatch(/semantic_topic_reviewers already exists and matches exactly -- no-op/)
+        expect(result.out).toMatch(/semantic_topic_reviewer_events already exists and matches exactly -- no-op/)
+      } else {
+        expect(result.out).toMatch(/semantic_topic_reviewers already exists and matches exactly -- no-op/)
+        expect(result.out).toMatch(/semantic_topic_reviewer_events already exists and matches exactly -- no-op/)
+        expect(result.out).toMatch(/topic_assignment_review_requests already exists and matches exactly -- no-op/)
+        expect(result.out).toMatch(/topic_assignment_review_events already exists and matches exactly -- no-op/)
+        expect(result.out).toMatch(/topic_assignment_decisions_decision_reason_check already corrected -- no-op/)
+        expect(result.out).toMatch(/final self-check passed/)
+      }
     })
 
     it('definition drift on topic_assignment_review_requests is fail-closed (an injected extra column is detected, not silently accepted)', () => {
@@ -327,9 +348,19 @@ describeIfLocalDb('Semantic Topic Identity v0 — Human Review schema foundation
       expect(result.threw).toBe(true)
       expect(result.out).toMatch(/077 drift: topic_assignment_review_requests column set\/definition does not match exactly/)
       dockerPsql(`alter table public.topic_assignment_review_requests drop column if exists sti_hr_drift_probe;`)
-      // re-verify the fixed schema is a no-op again after removing the probe column
+      // Re-verify the fixed schema is a no-op again after removing the probe
+      // column -- UNLESS migration 084 has since added its own recognized
+      // extra CHECK constraint to this table (see the test above), in which
+      // case 077's fail-closed refusal on THAT constraint is the correct,
+      // expected outcome here too (the probe-column drift is gone either way
+      // -- that is what this re-run actually proves).
       const fixed = runMigration()
-      expect(fixed.threw).toBe(false)
+      if (fixed.threw) {
+        expect(fixed.out).toMatch(/077 drift: topic_assignment_review_requests has an unexpected extra constraint/)
+        expect(fixed.out).not.toMatch(/column set\/definition does not match exactly/)
+      } else {
+        expect(fixed.threw).toBe(false)
+      }
     })
 
     it('decision_reason CHECK now accepts exactly the 7 legacy + 2 new values, nothing else', () => {

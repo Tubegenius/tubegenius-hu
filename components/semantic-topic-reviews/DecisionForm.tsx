@@ -3,12 +3,14 @@
 import { useRef, useState } from 'react'
 import FormField from './FormField'
 import ConfirmActionModal from './ConfirmActionModal'
-import { validateApprovalFields, validateRejectionFields, resolveIdempotencyKey, type IdempotencyAttempt } from './decisionLogic'
+import { validateApprovalFields, validateRejectionFields, resolveIdempotencyKey, resolveDuplicateSearchOutcomeOnProposedOutcomeChange, type IdempotencyAttempt } from './decisionLogic'
 import {
   REJECTION_REASONS,
   REJECTION_REASON_LABELS,
   REVIEW_FIELD_MAX_LENGTHS,
   REVIEW_POLICY_VERSION,
+  DUPLICATE_SEARCH_OUTCOME_LABELS,
+  duplicateSearchOutcomesFor,
   type DuplicateSearchOutcome,
   type ProposedOutcome,
   type RejectionReason,
@@ -95,6 +97,13 @@ export default function DecisionForm({ reviewRequestId, onApprovedOrRejected, on
   function selectProposedOutcome(next: ProposedOutcome) {
     setProposedOutcome(next)
     if (next === 'CREATE_NEW') setTargetSemanticTopicId('')
+    // Migration 084 pairing rule: never leave a stale/incompatible
+    // duplicateSearchOutcome selected after switching -- keeps the current
+    // choice if it's still valid, auto-selects the single valid option for
+    // ATTACH_EXISTING, or resets to '' (forcing an explicit re-selection)
+    // for CREATE_NEW's two options. See decisionLogic.ts for the pure,
+    // unit-tested implementation.
+    setDuplicateSearchOutcome(current => resolveDuplicateSearchOutcomeOnProposedOutcomeChange(next, current))
   }
 
   function buildPayload(): { ok: true; payload: StructuredDecisionPayload } | { ok: false; errors: FormErrors } {
@@ -280,8 +289,17 @@ export default function DecisionForm({ reviewRequestId, onApprovedOrRejected, on
               aria-describedby={errors.duplicateSearchOutcome ? 'duplicate-search-error' : undefined}
             >
               <option value="">Válassz...</option>
-              <option value="no_duplicate_found">Nem található duplikátum</option>
-              <option value="possible_duplicate_reviewed_and_distinct">Lehetséges duplikátum, ellenőrizve, megkülönböztethető</option>
+              {/* Migration 084: a legördülő csak a proposedOutcome-mal
+                  párosítható értékeket mutatja -- lásd
+                  decisionLogic.ts:resolveDuplicateSearchOutcomeOnProposedOutcomeChange
+                  a proposedOutcome-váltáskori reset/auto-select logikáért. */}
+              {(proposedOutcome ? duplicateSearchOutcomesFor(proposedOutcome) : (['no_duplicate_found', 'possible_duplicate_reviewed_and_distinct', 'existing_topic_match_confirmed'] as const)).map(
+                value => (
+                  <option key={value} value={value}>
+                    {DUPLICATE_SEARCH_OUTCOME_LABELS[value]}
+                  </option>
+                ),
+              )}
             </select>
             {errors.duplicateSearchOutcome && <p id="duplicate-search-error" role="alert" className="text-xs mt-1.5" style={{ color: '#EF4444' }}>{errors.duplicateSearchOutcome}</p>}
           </div>

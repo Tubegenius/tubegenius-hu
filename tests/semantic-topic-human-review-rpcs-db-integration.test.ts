@@ -22,6 +22,7 @@ const execAsync = promisify(exec)
 
 const MIGRATION_077_PATH = join(process.cwd(), 'supabase/migrations/077_semantic_topic_human_review_schema_foundation.sql')
 const MIGRATION_078_PATH = join(process.cwd(), 'supabase/migrations/078_semantic_topic_human_review_rpcs.sql')
+const MIGRATION_084_PATH = join(process.cwd(), 'supabase/migrations/084_semantic_topic_attach_duplicate_outcome_contract.sql')
 
 function dockerPsql(sql: string): string {
   return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
@@ -156,6 +157,13 @@ function ensureFullyApplied() {
     const r078 = runMigration(MIGRATION_078_PATH)
     if (r078.threw) throw new Error(`ensureFullyApplied: 078 failed -- ${r078.out}`)
   }
+  const pairingCheck = dockerPsql(
+    `select count(*) from pg_constraint where conrelid='public.topic_assignment_review_requests'::regclass and conname='topic_assignment_review_requests_dup_search_outcome_pairing';`,
+  ).trim()
+  if (pairingCheck !== '1') {
+    const r084 = runMigration(MIGRATION_084_PATH)
+    if (r084.threw) throw new Error(`ensureFullyApplied: 084 failed -- ${r084.out}`)
+  }
 }
 
 function cleanupTestData() {
@@ -218,11 +226,16 @@ function createReviewRequest(extractionRunId: string): { id: string; body: any }
   return { id: out.review_request_id, body: out }
 }
 
+// Migration 084 pairing rule: duplicate_search_outcome must be
+// 'existing_topic_match_confirmed' for ATTACH_EXISTING and one of the two
+// legacy values for CREATE_NEW -- kept outcome-conditional here so every
+// existing ATTACH_EXISTING call site in this file stays truthful/valid
+// without individually threading a new parameter through.
 const APPROVE_ARGS = (reqId: string, key: string, outcome: 'CREATE_NEW' | 'ATTACH_EXISTING', target: string | null) => `
   select record_topic_assignment_review_decision(
     '${reqId}'::uuid, '${key}', 'approved',
     '${MARKER} topic label', 'A definition.', 'A scope.', 'Inclusion criteria.', 'Exclusion criteria.',
-    true, 'adequate', 'no_duplicate_found', '${outcome}', ${target ? `'${target}'::uuid` : 'NULL'},
+    true, 'adequate', '${outcome === 'ATTACH_EXISTING' ? 'existing_topic_match_confirmed' : 'no_duplicate_found'}', '${outcome}', ${target ? `'${target}'::uuid` : 'NULL'},
     'low', 'Clear rationale.', 1, NULL
   );
 `
@@ -257,14 +270,35 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
   // 1. Migration idempotency and 074 regression
   // ------------------------------------------------------------
   describe('migration idempotency and 074/0.8500 regression', () => {
-    it('078 second run is a byte-exact no-op for all 8 RPCs', () => {
+    it('078 second run is a byte-exact no-op for all 8 RPCs -- OR record_topic_assignment_review_decision has since been corrected in place by a later migration (084), which is also a correct, expected outcome', () => {
+      // Migration 084 (docs/architecture/semantic-topic-identity-v0-contract.md
+      // SS37) CREATE OR REPLACEs record_topic_assignment_review_decision's
+      // body in place to add the ATTACH_EXISTING/duplicate_search_outcome
+      // pairing rule. Once 084 has run against this local DB (a real,
+      // expected state on a shared, persistent local stack -- migrations
+      // here are never re-run out of order in a real deployment), 078's own
+      // VALIDATE branch -- which only knows its OWN original body hash --
+      // correctly refuses to touch a body it no longer recognizes as its
+      // own. That refusal IS the desired fail-closed behavior (never
+      // silently reverting 084's correction), not a regression. Mirrors the
+      // exact same, already-established 081-vs-082 precedent in
+      // tests/semantic-topic-supervised-intake-081-db-integration.test.ts.
       const result = runMigration(MIGRATION_078_PATH)
-      expect(result.threw).toBe(false)
-      for (const name of NEW_RPC_NAMES) {
-        expect(result.out).toMatch(new RegExp(`${name} already exists and matches exactly -- no-op\\.`))
+      if (result.threw) {
+        expect(result.out).toMatch(/078 drift: record_topic_assignment_review_decision body hash does not match exactly/)
+        // Every RPC 078 validates BEFORE reaching the corrected one (in its
+        // own declaration order) is still a clean no-op -- only the one
+        // function 084 actually touched is refused.
+        for (const name of ['create_topic_assignment_review_request', 'list_pending_topic_assignment_review_requests', 'get_topic_assignment_review_request']) {
+          expect(result.out).toMatch(new RegExp(`${name} already exists and matches exactly -- no-op\\.`))
+        }
+      } else {
+        for (const name of NEW_RPC_NAMES) {
+          expect(result.out).toMatch(new RegExp(`${name} already exists and matches exactly -- no-op\\.`))
+        }
+        expect(result.out).toMatch(/final self-check passed/)
+        expect(result.out).not.toMatch(/drift/i)
       }
-      expect(result.out).toMatch(/final self-check passed/)
-      expect(result.out).not.toMatch(/drift/i)
     })
 
     it('078 fails closed if 077 is not applied', () => {
@@ -682,6 +716,205 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       dockerPsql(`update semantic_topics set lifecycle_status='ambiguous' where id='${topicId}';`)
       const approve = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(reqId, nextMarker(), 'ATTACH_EXISTING', topicId))).trim())
       expect(approve.outcome).toBe('approved')
+    })
+  })
+
+  // ------------------------------------------------------------
+  // 5b. Migration 084 -- duplicate_search_outcome/ATTACH_EXISTING pairing
+  //     contract. A real production review request (evidence prefix
+  //     62ce9381, review request prefix 02f2a5ac) is currently stuck
+  //     pending in production specifically because the pre-084 schema had
+  //     no way to correctly express "the reviewer found a matching
+  //     existing topic" -- see docs/architecture/semantic-topic-identity-v0-contract.md
+  //     SS37. This block proves the fix directly against the RPC, matching
+  //     the full F.1-F.8 test matrix from the migration's own spec.
+  // ------------------------------------------------------------
+  describe('Migration 084 -- duplicate_search_outcome/ATTACH_EXISTING pairing contract', () => {
+    function directApproveSql(reqId: string, key: string, outcome: 'CREATE_NEW' | 'ATTACH_EXISTING', dup: string, target: string | null): string {
+      return `
+        select record_topic_assignment_review_decision(
+          '${reqId}'::uuid, '${key}', 'approved',
+          '${MARKER} topic label', 'A definition.', 'A scope.', 'Inclusion criteria.', 'Exclusion criteria.',
+          true, 'adequate', '${dup}', '${outcome}', ${target ? `'${target}'::uuid` : 'NULL'},
+          'low', 'Clear rationale.', 1, NULL
+        );
+      `
+    }
+
+    // F.1
+    it('CREATE_NEW + no_duplicate_found -> accepted', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const result = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, nextMarker(), 'CREATE_NEW', 'no_duplicate_found', null))).trim())
+      expect(result.outcome).toBe('approved')
+    })
+
+    // F.2
+    it('CREATE_NEW + possible_duplicate_reviewed_and_distinct -> accepted', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const result = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, nextMarker(), 'CREATE_NEW', 'possible_duplicate_reviewed_and_distinct', null))).trim())
+      expect(result.outcome).toBe('approved')
+    })
+
+    // F.3
+    it('CREATE_NEW + existing_topic_match_confirmed -> rejected', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const err = asReviewerExpectError(REVIEWER_A, directApproveSql(id, nextMarker(), 'CREATE_NEW', 'existing_topic_match_confirmed', null))
+      expect(err).toMatch(/CREATE_NEW requires duplicate_search_outcome no_duplicate_found or possible_duplicate_reviewed_and_distinct/)
+    })
+
+    // F.4
+    it('ATTACH_EXISTING + existing_topic_match_confirmed + valid target -> accepted', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const attach = createExtraction()
+      const attachReq = createReviewRequest(attach.extractionRunId)
+      const result = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(attachReq.id, nextMarker(), 'ATTACH_EXISTING', 'existing_topic_match_confirmed', seedExec.semantic_topic_id))).trim())
+      expect(result.outcome).toBe('approved')
+    })
+
+    // F.5
+    it('ATTACH_EXISTING + no_duplicate_found -> rejected', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const attach = createExtraction()
+      const attachReq = createReviewRequest(attach.extractionRunId)
+      const err = asReviewerExpectError(REVIEWER_A, directApproveSql(attachReq.id, nextMarker(), 'ATTACH_EXISTING', 'no_duplicate_found', seedExec.semantic_topic_id))
+      expect(err).toMatch(/ATTACH_EXISTING requires duplicate_search_outcome=existing_topic_match_confirmed/)
+    })
+
+    // F.6
+    it('ATTACH_EXISTING + possible_duplicate_reviewed_and_distinct -> rejected', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const attach = createExtraction()
+      const attachReq = createReviewRequest(attach.extractionRunId)
+      const err = asReviewerExpectError(REVIEWER_A, directApproveSql(attachReq.id, nextMarker(), 'ATTACH_EXISTING', 'possible_duplicate_reviewed_and_distinct', seedExec.semantic_topic_id))
+      expect(err).toMatch(/ATTACH_EXISTING requires duplicate_search_outcome=existing_topic_match_confirmed/)
+    })
+
+    // F.7 (regression -- must still hold post-084)
+    it('ATTACH_EXISTING with no target -> rejected (target check fires before the pairing check)', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const err = asReviewerExpectError(REVIEWER_A, directApproveSql(id, nextMarker(), 'ATTACH_EXISTING', 'existing_topic_match_confirmed', null))
+      expect(err).toMatch(/ATTACH_EXISTING requires target_semantic_topic_id/)
+    })
+
+    // F.8 (regression -- must still hold post-084)
+    it('CREATE_NEW with a target -> rejected', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const err = asReviewerExpectError(REVIEWER_A, directApproveSql(id, nextMarker(), 'CREATE_NEW', 'no_duplicate_found', seedExec.semantic_topic_id))
+      expect(err).toMatch(/CREATE_NEW must not supply target_semantic_topic_id/)
+    })
+
+    // The table-level CHECK enforces the identical rule independently of the
+    // RPC's own application-level validation (belt and suspenders) -- proven
+    // via a direct postgres-privileged UPDATE that bypasses the RPC entirely.
+    it('the table-level CHECK also rejects an ATTACH_EXISTING/no_duplicate_found combination via a direct UPDATE, independent of the RPC', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const attach = createExtraction()
+      const attachReq = createReviewRequest(attach.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, directApproveSql(attachReq.id, nextMarker(), 'ATTACH_EXISTING', 'existing_topic_match_confirmed', seedExec.semantic_topic_id)))
+      const err = dockerPsqlExpectError(`update topic_assignment_review_requests set duplicate_search_outcome = 'no_duplicate_found' where id = '${attachReq.id}';`)
+      expect(err).toMatch(/topic_assignment_review_requests_dup_search_outcome_pairing/)
+    })
+
+    it('the table-level CHECK also rejects a CREATE_NEW/existing_topic_match_confirmed combination via a direct UPDATE, independent of the RPC', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, nextMarker(), 'CREATE_NEW', 'no_duplicate_found', null)))
+      const err = dockerPsqlExpectError(`update topic_assignment_review_requests set duplicate_search_outcome = 'existing_topic_match_confirmed' where id = '${id}';`)
+      expect(err).toMatch(/topic_assignment_review_requests_dup_search_outcome_pairing/)
+    })
+
+    // Decision replay (idempotency) with the NEW enum value end-to-end --
+    // proves approval_digest/decision_operation_digest recomputation is
+    // correct for existing_topic_match_confirmed, not just the two old
+    // values.
+    it('ATTACH_EXISTING + existing_topic_match_confirmed decision replays correctly on a retried identical call', () => {
+      const seed = createExtraction()
+      const seedReq = createReviewRequest(seed.extractionRunId)
+      dockerPsql(asReviewer(REVIEWER_A, APPROVE_ARGS(seedReq.id, nextMarker(), 'CREATE_NEW', null)))
+      const seedExec = JSON.parse(dockerPsql(`select execute_approved_topic_assignment_review('${seedReq.id}'::uuid, '${nextMarker()}');`).trim())
+      const attach = createExtraction()
+      const attachReq = createReviewRequest(attach.extractionRunId)
+      const key = nextMarker()
+      const first = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(attachReq.id, key, 'ATTACH_EXISTING', 'existing_topic_match_confirmed', seedExec.semantic_topic_id))).trim())
+      const second = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(attachReq.id, key, 'ATTACH_EXISTING', 'existing_topic_match_confirmed', seedExec.semantic_topic_id))).trim())
+      expect(first.outcome).toBe('approved')
+      expect(second.outcome).toBe('replayed')
+      expect(second.approval_digest).toBe(first.approval_digest)
+    })
+
+    // F.12 -- a historical (pre-084) CREATE_NEW decision, made with the old
+    // value set, still reads/replays correctly after 084 is applied. 084
+    // only widens the CHECK/RPC's *allowed* value set going forward; it
+    // never rewrites or re-validates already-stored rows.
+    it('a historical CREATE_NEW decision made before 084 still replays correctly after 084 (no retroactive re-validation)', () => {
+      const { extractionRunId } = createExtraction()
+      const { id } = createReviewRequest(extractionRunId)
+      const key = nextMarker()
+      const first = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, key, 'CREATE_NEW', 'no_duplicate_found', null))).trim())
+      expect(first.outcome).toBe('approved')
+      // Re-run migration 084 again (idempotent no-op by this point) to model
+      // "the migration has already been applied" and confirm the existing
+      // row is untouched and still replays.
+      const migrationRerun = runMigration(MIGRATION_084_PATH)
+      expect(migrationRerun.threw).toBe(false)
+      const replay = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, key, 'CREATE_NEW', 'no_duplicate_found', null))).trim())
+      expect(replay.outcome).toBe('replayed')
+      expect(replay.approval_digest).toBe(first.approval_digest)
+      const stored = dockerPsql(`select duplicate_search_outcome from topic_assignment_review_requests where id='${id}';`).trim()
+      expect(stored).toBe('no_duplicate_found')
+    })
+
+    // F.13 -- migration 084 applied twice is a byte-exact no-op, proven for
+    // real against this same local DB (mirrors 077's own
+    // "re-running is a byte-exact no-op" test pattern).
+    it('re-running 084 against the already-applied schema/RPC is a byte-exact no-op', () => {
+      const result = runMigration(MIGRATION_084_PATH)
+      expect(result.threw).toBe(false)
+      expect(result.out).toMatch(/topic_assignment_review_requests_dup_search_check already corrected -- no-op/)
+      expect(result.out).toMatch(/topic_assignment_review_requests_dup_search_outcome_pairing already exists and matches exactly -- no-op/)
+      expect(result.out).toMatch(/record_topic_assignment_review_decision already exactly the corrected body -- no-op/)
+      expect(result.out).toMatch(/final self-check passed -- record_topic_assignment_decision \(074\) and execute_approved_topic_assignment_review \(078\) confirmed unchanged/)
+    })
+
+    // F.14 -- an injected, unrecognized prestate (a definition that is
+    // neither the known legacy nor the known corrected text) is fail-closed:
+    // RAISE EXCEPTION, no DDL applied, the whole migration rolls back
+    // (mirrors 077's own "definition drift...detected" test pattern).
+    it('an injected, unrecognized pairing-CHECK definition causes migration 084 to fail closed (RAISE EXCEPTION, full rollback)', () => {
+      dockerPsql(`
+        alter table public.topic_assignment_review_requests drop constraint topic_assignment_review_requests_dup_search_outcome_pairing;
+        alter table public.topic_assignment_review_requests add constraint topic_assignment_review_requests_dup_search_outcome_pairing
+          check (proposed_outcome is null or duplicate_search_outcome is not null);
+      `)
+      const result = runMigration(MIGRATION_084_PATH)
+      expect(result.threw).toBe(true)
+      expect(result.out).toMatch(/084 fail-closed: DEFINITION_DRIFT -- topic_assignment_review_requests_dup_search_outcome_pairing exists but does not match/)
+      // Restore the correct state so the rest of this suite (and every
+      // other suite sharing this DB) is unaffected.
+      dockerPsql(`alter table public.topic_assignment_review_requests drop constraint topic_assignment_review_requests_dup_search_outcome_pairing;`)
+      const fixed = runMigration(MIGRATION_084_PATH)
+      expect(fixed.threw).toBe(false)
     })
   })
 

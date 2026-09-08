@@ -17,7 +17,61 @@
 
 export type ReviewRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | 'revoked' | 'executed'
 export type ProposedOutcome = 'CREATE_NEW' | 'ATTACH_EXISTING'
-export type DuplicateSearchOutcome = 'no_duplicate_found' | 'possible_duplicate_reviewed_and_distinct'
+export type DuplicateSearchOutcome = 'no_duplicate_found' | 'possible_duplicate_reviewed_and_distinct' | 'existing_topic_match_confirmed'
+
+export const DUPLICATE_SEARCH_OUTCOME_LABELS: Record<DuplicateSearchOutcome, string> = {
+  no_duplicate_found: 'Nem található duplikátum',
+  possible_duplicate_reviewed_and_distinct: 'Lehetséges duplikátum, ellenőrizve, megkülönböztethető',
+  existing_topic_match_confirmed: 'Egyező meglévő topic megerősítve',
+}
+
+// Migration 084 fail-closed pairing rule -- deliberately duplicated from
+// lib/semantic-topic/human-review-types.ts (same rationale as this file's
+// header comment: the static import-boundary scan in
+// tests/human-review-ui-security.test.ts asserts this whole directory never
+// imports from lib/semantic-topic/*). ATTACH_EXISTING means the reviewer
+// FOUND a matching existing topic and is attaching to it --
+// 'no_duplicate_found'/'possible_duplicate_reviewed_and_distinct' are both
+// factually false for that case; CREATE_NEW must never claim
+// 'existing_topic_match_confirmed'. Switched on DuplicateSearchOutcome (not
+// ProposedOutcome) so a future 4th value breaks the build via the `never`
+// exhaustiveness check until this function says which proposedOutcome(s) it
+// is valid for.
+export function allowedProposedOutcomesForDuplicateSearchOutcome(outcome: DuplicateSearchOutcome): readonly ProposedOutcome[] {
+  switch (outcome) {
+    case 'no_duplicate_found':
+    case 'possible_duplicate_reviewed_and_distinct':
+      return ['CREATE_NEW']
+    case 'existing_topic_match_confirmed':
+      return ['ATTACH_EXISTING']
+    default: {
+      const exhaustiveCheck: never = outcome
+      throw new Error(`Unhandled duplicate_search_outcome: ${exhaustiveCheck}`)
+    }
+  }
+}
+
+export function isDuplicateSearchOutcomeValidFor(proposedOutcome: ProposedOutcome, duplicateSearchOutcome: DuplicateSearchOutcome): boolean {
+  return allowedProposedOutcomesForDuplicateSearchOutcome(duplicateSearchOutcome).includes(proposedOutcome)
+}
+
+// The set of duplicateSearchOutcome options the dropdown should render for a
+// given proposedOutcome -- the inverse mapping of the function above, used
+// by DecisionForm.tsx to filter its <select> and by decisionLogic.ts's
+// switch-reset logic. Exhaustive over ProposedOutcome (only 2 values today).
+export function duplicateSearchOutcomesFor(proposedOutcome: ProposedOutcome): readonly DuplicateSearchOutcome[] {
+  switch (proposedOutcome) {
+    case 'CREATE_NEW':
+      return ['no_duplicate_found', 'possible_duplicate_reviewed_and_distinct']
+    case 'ATTACH_EXISTING':
+      return ['existing_topic_match_confirmed']
+    default: {
+      const exhaustiveCheck: never = proposedOutcome
+      throw new Error(`Unhandled proposedOutcome: ${exhaustiveCheck}`)
+    }
+  }
+}
+
 export type UncertaintyClassification = 'low' | 'medium' | 'high'
 export type RejectionReason =
   | 'insufficient_evidence'

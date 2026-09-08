@@ -292,7 +292,10 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- minimal reviewer UI b
       exclusionCriteria: 'Excl.',
       laneNeutralConfirmed: true,
       evidenceAdequacy: 'adequate',
-      duplicateSearchOutcome: 'no_duplicate_found',
+      // Migration 084: ATTACH_EXISTING requires existing_topic_match_confirmed
+      // -- no_duplicate_found/possible_duplicate_reviewed_and_distinct are
+      // both factually wrong for an attach decision (see the contract doc).
+      duplicateSearchOutcome: 'existing_topic_match_confirmed',
       proposedOutcome: 'ATTACH_EXISTING',
       targetSemanticTopicId: targetTopicId,
       uncertaintyClassification: 'low',

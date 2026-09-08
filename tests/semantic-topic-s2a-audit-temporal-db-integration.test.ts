@@ -15,6 +15,10 @@ import { join } from 'node:path'
 
 const MIGRATION_PATH = join(process.cwd(), 'supabase/migrations/073_semantic_topic_s2a_audit_and_temporal_hardening.sql')
 const MIGRATION_077_PATH = join(process.cwd(), 'supabase/migrations/077_semantic_topic_human_review_schema_foundation.sql')
+// 078 (record_topic_assignment_review_decision) is deliberately never
+// re-applied by this file's restoreHumanReviewObjects() -- see that
+// function's own header comment for why.
+const MIGRATION_084_PATH = join(process.cwd(), 'supabase/migrations/084_semantic_topic_attach_duplicate_outcome_contract.sql')
 
 function dockerPsql(sql: string): string {
   return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
@@ -51,6 +55,19 @@ function runMigration(): { out: string; threw: boolean } {
 
 function runMigration077(): { out: string; threw: boolean } {
   const migrationSql = readFileSync(MIGRATION_077_PATH, 'utf8')
+  try {
+    const out = execSync(
+      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      { input: migrationSql, encoding: 'utf8' },
+    )
+    return { out, threw: false }
+  } catch (e: any) {
+    return { out: String(e.stdout || e.stderr || e.message || ''), threw: true }
+  }
+}
+
+function runMigrationAtPath(path: string): { out: string; threw: boolean } {
+  const migrationSql = readFileSync(path, 'utf8')
   try {
     const out = execSync(
       'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
@@ -214,6 +231,24 @@ function dropHumanReviewObjects() {
 // Idempotent: 077's own migration is CREATE-if-missing / validate-if-present,
 // so re-running it is always safe once the 072-076 topology it depends on is
 // intact. A no-op when 077 was never applied locally.
+//
+// A plain DROP TABLE on topic_assignment_review_requests (dropHumanReviewObjects
+// above) does not touch record_topic_assignment_review_decision (078) --
+// that function is a separate object that merely references the table by
+// name in its body, so it survives the drop untouched; 078 itself never
+// needs (or wants) to be re-run here -- doing so would fail closed, exactly
+// as intended, since 078's own VALIDATE branch only recognizes its OWN
+// original body hash, and 084 (see below) has already corrected that body
+// in place. Restoring the table via 077's own CREATE branch alone would
+// recreate it in 077's ORIGINAL, pre-084 shape (missing the widened
+// duplicate_search_outcome CHECK and the
+// topic_assignment_review_requests_dup_search_outcome_pairing constraint --
+// see docs/architecture/semantic-topic-identity-v0-contract.md SS37) while
+// the surviving RPC body still contains 084's corrected validation logic --
+// an internally inconsistent state (the RPC would permit
+// existing_topic_match_confirmed while the freshly-recreated table CHECK
+// would reject it). Re-applying 084 (table-only changes, no RPC hash-gate
+// surprise) directly after 077 closes that gap without ever touching 078.
 function restoreHumanReviewObjects() {
   const out = dockerPsql(`select count(*) from pg_tables where schemaname='public' and tablename in ('topic_assignment_review_events','topic_assignment_review_requests','semantic_topic_reviewer_events','semantic_topic_reviewers');`).trim()
   if (out === '4') {
@@ -222,6 +257,10 @@ function restoreHumanReviewObjects() {
   const result = runMigration077()
   if (result.threw) {
     throw new Error(`restoreHumanReviewObjects: 077 re-apply failed -- ${result.out}`)
+  }
+  const r084 = runMigrationAtPath(MIGRATION_084_PATH)
+  if (r084.threw) {
+    throw new Error(`restoreHumanReviewObjects: 084 re-apply failed -- ${r084.out}`)
   }
 }
 

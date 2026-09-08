@@ -20,7 +20,41 @@ export type SemanticTopicUserSessionClient = SupabaseClient
 export type ReviewRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | 'revoked' | 'executed'
 export type ProposedOutcome = 'CREATE_NEW' | 'ATTACH_EXISTING'
 export type EvidenceAdequacy = 'adequate' | 'marginal'
-export type DuplicateSearchOutcome = 'no_duplicate_found' | 'possible_duplicate_reviewed_and_distinct'
+export type DuplicateSearchOutcome = 'no_duplicate_found' | 'possible_duplicate_reviewed_and_distinct' | 'existing_topic_match_confirmed'
+
+// Migration 084 fail-closed pairing rule (mirrors the DB CHECK
+// topic_assignment_review_requests_dup_search_outcome_pairing and the
+// record_topic_assignment_review_decision RPC's own application-level
+// validation exactly -- see docs/architecture/semantic-topic-identity-v0-contract.md
+// SS37). ATTACH_EXISTING means the reviewer FOUND a matching existing topic
+// and is attaching to it -- 'no_duplicate_found' and
+// 'possible_duplicate_reviewed_and_distinct' are both factually false for
+// that case. CREATE_NEW must never claim 'existing_topic_match_confirmed'.
+//
+// Switched on DuplicateSearchOutcome (not ProposedOutcome) deliberately --
+// a `never`-exhaustiveness check here means a future 4th
+// duplicate_search_outcome value breaks the TypeScript build until this
+// function is updated to say which proposedOutcome(s) it is valid for,
+// instead of silently defaulting to "invalid everywhere" or "valid
+// everywhere". This is the same never-exhaustiveness idiom already used by
+// human-review-http-mapping.ts's status-mapping switch.
+export function allowedProposedOutcomesForDuplicateSearchOutcome(outcome: DuplicateSearchOutcome): readonly ProposedOutcome[] {
+  switch (outcome) {
+    case 'no_duplicate_found':
+    case 'possible_duplicate_reviewed_and_distinct':
+      return ['CREATE_NEW']
+    case 'existing_topic_match_confirmed':
+      return ['ATTACH_EXISTING']
+    default: {
+      const exhaustiveCheck: never = outcome
+      throw new Error(`Unhandled duplicate_search_outcome: ${exhaustiveCheck}`)
+    }
+  }
+}
+
+export function isDuplicateSearchOutcomeValidFor(proposedOutcome: ProposedOutcome, duplicateSearchOutcome: DuplicateSearchOutcome): boolean {
+  return allowedProposedOutcomesForDuplicateSearchOutcome(duplicateSearchOutcome).includes(proposedOutcome)
+}
 export type UncertaintyClassification = 'low' | 'medium' | 'high'
 export type RejectionReason =
   | 'insufficient_evidence'
