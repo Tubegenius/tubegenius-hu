@@ -254,6 +254,9 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
       manualReviewConfirmedSourceCount: 0,
       manualReviewOverrideSourceCount: 0,
       automatedAssignmentSourceCount: 0,
+      topicCreationSeedSourceCount: 0,
+      assignmentReasonBreakdownComplete: true,
+      unclassifiedAssignmentReasonEligibleMembershipCount: 0,
       mixedAlgorithmVersions: false,
       byAlgorithmVersion: {},
       confidenceDiagnostics: { min: null, max: null, count: 0 },
@@ -428,6 +431,123 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     // Documented: the sum is NOT asserted equal to knownIndependentSourceCount --
     // here it deliberately overshoots it (1 + 1 = 2 != 1) because of the overlap.
     expect(out.manualReviewConfirmedSourceCount + out.automatedAssignmentSourceCount).not.toBe(out.knownIndependentSourceCount)
+    expect(out.topicCreationSeedSourceCount).toBe(0)
+    expect(out.assignmentReasonBreakdownComplete).toBe(true)
+    expect(out.unclassifiedAssignmentReasonEligibleMembershipCount).toBe(0)
+  })
+
+  // ------------------------------------------------------------
+  // 11b. topic_creation_seed-only membership (the 5th, previously
+  // unclassified assignment_reason -- 073 widened the CHECK constraint to
+  // include it, but the original v1 draft silently omitted it from every
+  // named breakdown. This is the highest-value new test in this remediation
+  // pass.)
+  // ------------------------------------------------------------
+  it('11b. a topic_creation_seed-only eligible membership is counted in topicCreationSeedSourceCount, NOT in manual/automated, and breakdown stays complete', () => {
+    const topicId = insertTopic()
+    const m = nextMarker()
+    const ev = insertKnownEvidence(m, `${m}-chan`)
+    insertMembership(topicId, ev, { assignment_reason: `'topic_creation_seed'` })
+    const out = callRpc(topicId)
+    expect(out.eligibleMembershipCount).toBe(1)
+    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.topicCreationSeedSourceCount).toBe(1)
+    expect(out.manualReviewConfirmedSourceCount).toBe(0)
+    expect(out.manualReviewOverrideSourceCount).toBe(0)
+    expect(out.automatedAssignmentSourceCount).toBe(0)
+    expect(out.assignmentReasonBreakdownComplete).toBe(true)
+    expect(out.unclassifiedAssignmentReasonEligibleMembershipCount).toBe(0)
+  })
+
+  // ------------------------------------------------------------
+  // 11c. same channel under topic_creation_seed AND another reason
+  // ------------------------------------------------------------
+  it('11c. the same known channel with a topic_creation_seed membership AND a manual_review_confirmed membership is counted in BOTH source-sets, independent count stays 1', () => {
+    const topicId = insertTopic()
+    const m1 = nextMarker()
+    const m2 = nextMarker()
+    const channel = `${m1}-shared-chan`
+    const evA = insertKnownEvidence(m1, channel)
+    const evB = insertKnownEvidence(m2, channel)
+    insertMembership(topicId, evA, { assignment_reason: `'topic_creation_seed'` })
+    insertMembership(topicId, evB, { assignment_reason: `'manual_review_confirmed'` })
+    const out = callRpc(topicId)
+    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.topicCreationSeedSourceCount).toBe(1)
+    expect(out.manualReviewConfirmedSourceCount).toBe(1)
+    // Documented overlap again -- 1 + 1 = 2 != 1.
+    expect(out.topicCreationSeedSourceCount + out.manualReviewConfirmedSourceCount).not.toBe(out.knownIndependentSourceCount)
+  })
+
+  // ------------------------------------------------------------
+  // 11d. all five known assignment_reason values, five different channels
+  // ------------------------------------------------------------
+  it('11d. five different channels, one per known assignment_reason value -> each counted exactly once in its own bucket, independent count = 5', () => {
+    const topicId = insertTopic()
+    const reasons = ['entity_event_match', 'embedding_similarity', 'manual_review_confirmed', 'manual_review_override', 'topic_creation_seed']
+    for (const reason of reasons) {
+      const m = nextMarker()
+      const ev = insertKnownEvidence(m, `${m}-chan`)
+      insertMembership(topicId, ev, { assignment_reason: `'${reason}'` })
+    }
+    const out = callRpc(topicId)
+    expect(out.eligibleMembershipCount).toBe(5)
+    expect(out.knownIndependentSourceCount).toBe(5)
+    // entity_event_match + embedding_similarity both roll into automatedAssignmentSourceCount (2 distinct channels).
+    expect(out.automatedAssignmentSourceCount).toBe(2)
+    expect(out.manualReviewConfirmedSourceCount).toBe(1)
+    expect(out.manualReviewOverrideSourceCount).toBe(1)
+    expect(out.topicCreationSeedSourceCount).toBe(1)
+    expect(out.assignmentReasonBreakdownComplete).toBe(true)
+    expect(out.unclassifiedAssignmentReasonEligibleMembershipCount).toBe(0)
+    // Top-level knownIndependentSourceCount (5) is NOT derived from summing
+    // the breakdown buckets (2+1+1+1=5 only coincidentally matches here
+    // because every channel in this fixture is used by exactly one reason --
+    // test 11/11c already prove the sum can legitimately exceed the
+    // top-level count when a channel appears under more than one reason).
+  })
+
+  // ------------------------------------------------------------
+  // 11e. unknown-source topic_creation_seed membership
+  // ------------------------------------------------------------
+  it('11e. an unknown-source (no resolvable channel_id) topic_creation_seed membership counts toward unknownSourceCount, never topicCreationSeedSourceCount', () => {
+    const topicId = insertTopic()
+    const m = nextMarker()
+    const ev = insertUnknownEvidence(m)
+    insertMembership(topicId, ev, { assignment_reason: `'topic_creation_seed'` })
+    const out = callRpc(topicId)
+    expect(out.eligibleMembershipCount).toBe(1)
+    expect(out.unknownSourceCount).toBe(1)
+    expect(out.knownIndependentSourceCount).toBe(0)
+    // count(DISTINCT channel_id) never counts a NULL channel_id as a value,
+    // so an unknown-source membership contributes to NONE of the
+    // per-reason known-source buckets, regardless of its assignment_reason.
+    expect(out.topicCreationSeedSourceCount).toBe(0)
+    expect(out.assignmentReasonBreakdownComplete).toBe(true)
+  })
+
+  // ------------------------------------------------------------
+  // 11f. top-level counts are unaffected by the reason breakdown
+  // ------------------------------------------------------------
+  it('11f. activeMembershipCount/eligibleMembershipCount/knownIndependentSourceCount are computed directly from the full eligible set, not by summing any reason breakdown', () => {
+    const topicId = insertTopic()
+    const m1 = nextMarker()
+    const m2 = nextMarker()
+    const m3 = nextMarker()
+    const sharedChannel = `${m1}-shared-chan`
+    const ev1 = insertKnownEvidence(m1, sharedChannel)
+    const ev2 = insertKnownEvidence(m2, sharedChannel)
+    const ev3 = insertKnownEvidence(m3, `${m3}-other-chan`)
+    insertMembership(topicId, ev1, { assignment_reason: `'manual_review_confirmed'` })
+    insertMembership(topicId, ev2, { assignment_reason: `'topic_creation_seed'` })
+    insertMembership(topicId, ev3, { assignment_reason: `'entity_event_match'` })
+    const out = callRpc(topicId)
+    expect(out.activeMembershipCount).toBe(3)
+    expect(out.eligibleMembershipCount).toBe(3)
+    // 2 distinct channels total (sharedChannel + other-chan), NOT 3 -- and
+    // NOT equal to any naive sum of the per-reason buckets (1+1+1=3 != 2).
+    expect(out.knownIndependentSourceCount).toBe(2)
+    expect(out.manualReviewConfirmedSourceCount + out.topicCreationSeedSourceCount + out.automatedAssignmentSourceCount).not.toBe(out.knownIndependentSourceCount)
   })
 
   // ------------------------------------------------------------

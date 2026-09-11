@@ -52,12 +52,23 @@
 -- hordozza) -- ezert v1-ben ez a mezo KIZAROLAG a canonical_url
 -- jelenletet vizsgalja, semmi mast.
 --
--- assignment_reason-bontas -- a harom forras-halmaz (manual confirmed /
--- manual override / automated) FEDHET egymassal (egy csatorna
--- rendelkezhet egyszerre human-reviewed ES automatikus eligibilis
--- membershippel is) -- osszeguk EMIATT NEM garantaltan egyenlo
--- knownIndependentSourceCount-tal. Ez SZANDEKOS, dokumentalt
--- viselkedes, nem hiba.
+-- assignment_reason-bontas -- a NEGY nevesitett forras-halmaz (manual
+-- confirmed / manual override / automated / topic_creation_seed) FEDHET
+-- egymassal (egy csatorna rendelkezhet egyszerre tobbfele eligibilis
+-- membershippel is, pl. human-reviewed ES automatikus) -- osszeguk
+-- EMIATT NEM garantaltan egyenlo knownIndependentSourceCount-tal. Ez
+-- SZANDEKOS, dokumentalt viselkedes, nem hiba.
+--
+-- assignmentReasonBreakdownComplete /
+-- unclassifiedAssignmentReasonEligibleMembershipCount -- ez a ket mezo
+-- teszi a bontas teljesseget explicit, ellenorizheto allitassa, nem
+-- csendes feltetelezesse. v1-ben pontosan 5 ismert assignment_reason
+-- ertek van (ld. 073 CHECK-bovites) -- normalis v1 allapotban
+-- unclassifiedAssignmentReasonEligibleMembershipCount=0 es
+-- assignmentReasonBreakdownComplete=true. Ha egy JOVOBELI migracio
+-- bovitene a CHECK-et egy hatodik ertekkel, ez a szamlalo nem-nulla
+-- lenne, es a completeness-flag false-ra valtana -- SOHA nem sorolodna
+-- csendben egy meglevo kategoriaba.
 --
 -- KRITIKUS HELYESSEGI KOVETELMENY -- knownIndependentSourceCount: a
 -- top-level ertek EGYETLEN lekerdezesben szamitott COUNT(DISTINCT
@@ -125,7 +136,7 @@ DECLARE
   v_oid oid;
   v_prosrc text;
   v_hash text;
-  v_expected_hash CONSTANT text := 'fa63b2064fa8450c227dce539476fc80';
+  v_expected_hash CONSTANT text := 'f08afed6a21ebf4af78cd6ecfd92025c';
   v_expected_args CONSTANT text := 'p_semantic_topic_id uuid';
 BEGIN
   SELECT count(*) INTO v_name_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -149,6 +160,8 @@ BEGIN
       v_manual_confirmed_source_count BIGINT;
       v_manual_override_source_count BIGINT;
       v_automated_source_count BIGINT;
+      v_topic_creation_seed_source_count BIGINT;
+      v_unclassified_reason_membership_count BIGINT;
       v_mixed_algorithm_versions BOOLEAN;
       v_by_algorithm_version JSONB;
       v_confidence_min NUMERIC;
@@ -202,6 +215,23 @@ BEGIN
         (SELECT count(DISTINCT channel_id) FROM eligible WHERE assignment_reason = 'manual_review_confirmed'),
         (SELECT count(DISTINCT channel_id) FROM eligible WHERE assignment_reason = 'manual_review_override'),
         (SELECT count(DISTINCT channel_id) FROM eligible WHERE assignment_reason IN ('entity_event_match', 'embedding_similarity')),
+        -- 073 bovitette az assignment_reason CHECK-et egy otodik ertekkel
+        -- (topic_creation_seed) -- ezt a v1 eredeti valtozata csendben
+        -- kihagyta minden nevesitett bontasbol (bar helyesen szamitott az
+        -- active/eligible/independent countokba). Kulon mezo, NEM
+        -- sorolando az automated vagy human kategoriaba szemantikai
+        -- bizonyitas nelkul -- egy topic-letrehozaskor rogzitett seed
+        -- membership sem nem "automatikus dontesi algoritmus", sem nem
+        -- "emberi review", hanem egy harmadik, onallo eredet.
+        (SELECT count(DISTINCT channel_id) FROM eligible WHERE assignment_reason = 'topic_creation_seed'),
+        -- Fail-closed lathatosag: ha valaha egy JOVOBELI hatodik
+        -- assignment_reason ertek jelenne meg (uj CHECK-bovites), ez a
+        -- szamlalo NEM nulla lenne, es assignmentReasonBreakdownComplete
+        -- false-ra valtana -- SOHA nem csendben az egyik meglevo
+        -- kategoriaba sorolva.
+        (SELECT count(*) FROM eligible WHERE assignment_reason NOT IN (
+          'entity_event_match', 'embedding_similarity', 'manual_review_confirmed', 'manual_review_override', 'topic_creation_seed'
+        )),
         (SELECT count(DISTINCT algorithm_version) > 1 FROM eligible),
         (SELECT min(confidence) FROM eligible),
         (SELECT max(confidence) FROM eligible),
@@ -233,6 +263,7 @@ BEGIN
         v_active_count, v_eligible_count, v_syndication_excluded_count,
         v_known_independent_source_count, v_unknown_source_count,
         v_manual_confirmed_source_count, v_manual_override_source_count, v_automated_source_count,
+        v_topic_creation_seed_source_count, v_unclassified_reason_membership_count,
         v_mixed_algorithm_versions, v_confidence_min, v_confidence_max, v_confidence_count,
         v_by_algorithm_version, v_all_canonical_url_present;
 
@@ -257,6 +288,9 @@ BEGIN
         'manualReviewConfirmedSourceCount', v_manual_confirmed_source_count,
         'manualReviewOverrideSourceCount', v_manual_override_source_count,
         'automatedAssignmentSourceCount', v_automated_source_count,
+        'topicCreationSeedSourceCount', v_topic_creation_seed_source_count,
+        'assignmentReasonBreakdownComplete', (v_unclassified_reason_membership_count = 0),
+        'unclassifiedAssignmentReasonEligibleMembershipCount', v_unclassified_reason_membership_count,
         'mixedAlgorithmVersions', v_mixed_algorithm_versions,
         'byAlgorithmVersion', v_by_algorithm_version,
         'confidenceDiagnostics', jsonb_build_object('min', v_confidence_min, 'max', v_confidence_max, 'count', v_confidence_count),
@@ -333,7 +367,7 @@ DO $final_selfcheck$
 DECLARE
   v_fn_count int;
   v_final_hash text;
-  v_expected_hash CONSTANT text := 'fa63b2064fa8450c227dce539476fc80';
+  v_expected_hash CONSTANT text := 'f08afed6a21ebf4af78cd6ecfd92025c';
 BEGIN
   SELECT count(*) INTO v_fn_count FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = 'compute_topic_evidence_vector';
