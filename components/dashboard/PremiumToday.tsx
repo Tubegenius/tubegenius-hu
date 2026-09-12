@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { CreatorProfile } from '@/types'
 import { CREATOR_LANE_PRESENTATION, type CreatorLane } from '@/lib/creator-lane-presentation'
+import { CREATOR_TODAY_PRESENTATION } from '@/lib/creator-today-presentation'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 interface PremiumTodayProps {
@@ -42,6 +43,7 @@ export default function PremiumToday({ profile, displayName, memoryCount, creato
   const [greeting, setGreeting] = useState('Szia')
   const [pulsePaused, setPulsePaused] = useState(false)
   const lane = CREATOR_LANE_PRESENTATION[creatorLane]
+  const today = CREATOR_TODAY_PRESENTATION[creatorLane]
 
   useEffect(() => setGreeting(localGreeting()), [])
 
@@ -70,8 +72,8 @@ export default function PremiumToday({ profile, displayName, memoryCount, creato
           <div className="wv-proof-summary">
             <span className="wv-proof-icon"><Link2 aria-hidden="true" /></span>
             <span className="wv-proof-copy">
-              <strong>{creatorLane === 'evidence' ? '5 forrás kapcsolódik' : '4 élménypont kapcsolódik'}</strong>
-              <span>{creatorLane === 'evidence' ? 'Egy ellenőrzés szükséges' : 'Egy ritmusváltás erősíthető'}</span>
+              <strong>{today.proofTitle}</strong>
+              <span>{today.proofDetail}</span>
             </span>
           </div>
         </aside>
@@ -79,22 +81,22 @@ export default function PremiumToday({ profile, displayName, memoryCount, creato
         <article className="wv-video-artifact">
           <header className="wv-artifact-head">
             <span className="wv-artifact-title">
-              <strong>Miért nem hűt minden városi fa ugyanannyit?</strong>
+              <strong>{today.projectTitle}</strong>
               <span>Aktív mintaprojekt · legutóbbi állapot</span>
             </span>
-            <span className="wv-artifact-phase">Állítások · 2/4</span>
+            <span className="wv-artifact-phase">{today.artifactPhase}</span>
           </header>
-          <div className="wv-project-visual" role="img" aria-label="Szemléltető városi hőtérképes videóképkocka">
+          <div className={`wv-project-visual${creatorLane === 'entertainment' ? ' is-entertainment' : ''}`} role="img" aria-label={today.visualLabel}>
             <div className="wv-heat" />
             <div className="wv-city" />
             <div className="wv-tree" />
             <div className="wv-frame-note">
-              <strong>Állítás 02 · 04:18</strong>
-              <span>Lombkorona és felszíni hőmérséklet</span>
+              <strong>{today.frameMoment}</strong>
+              <span>{today.frameLabel}</span>
             </div>
           </div>
           <div className="wv-timeline">
-            <div className="wv-timeline-head"><span>Magyarázó képsor</span><span>Vázlat · 01:24</span></div>
+            <div className="wv-timeline-head"><span>{today.timelineLabel}</span><span>{today.timelineState}</span></div>
             <div className="wv-shots" aria-hidden="true">
               <span className="wv-shot" /><span className="wv-shot" /><span className="wv-shot is-current" /><span className="wv-shot" />
             </div>
@@ -107,30 +109,32 @@ export default function PremiumToday({ profile, displayName, memoryCount, creato
             <h3>Innen folytatod</h3>
           </div>
           <div className="wv-steps">
-            <div className="wv-step is-done"><i><Check aria-hidden="true" /></i><span>Kutatás</span></div>
-            <div className="wv-step is-current"><i>2</i><span>Állítások</span></div>
-            <div className="wv-step"><i>3</i><span>Magyarázat</span></div>
-            <div className="wv-step"><i>4</i><span>Publikálás</span></div>
+            {lane.stages.map((stage, index) => (
+              <div className={`wv-step${index === 0 ? ' is-done' : ''}${index === 1 ? ' is-current' : ''}`} key={stage.id}>
+                <i>{index === 0 ? <Check aria-hidden="true" /> : stage.number}</i><span>{stage.label}</span>
+              </div>
+            ))}
           </div>
         </aside>
       </section>
 
       <section className="wv-intelligence" aria-label="Háttérfigyelés">
-        <article className="wv-intel"><span className="wv-intel-icon"><Radar aria-hidden="true" /></span><span className="wv-intel-copy"><strong>Nyitott lehetőségablak</strong><span>Becsült idő: 31 óra · mintaadat</span></span></article>
-        <article className="wv-intel"><span className="wv-intel-icon"><FileCheck2 aria-hidden="true" /></span><span className="wv-intel-copy"><strong>Új megerősítő forrás</strong><span>Az árnyékolás hatásáról</span></span></article>
-        <article className="wv-intel"><span className="wv-intel-icon"><Brain aria-hidden="true" /></span><span className="wv-intel-copy"><strong>Közönségmemória</strong><span>{memoryCount > 0 ? `${memoryCount} mentett témához kapcsolódik` : 'Az összehasonlítás erős minta'}</span></span></article>
+        <article className="wv-intel"><span className="wv-intel-icon"><Radar aria-hidden="true" /></span><span className="wv-intel-copy"><strong>{today.intelligence[0].title}</strong><span>{today.intelligence[0].detail}</span></span></article>
+        <article className="wv-intel"><span className="wv-intel-icon"><FileCheck2 aria-hidden="true" /></span><span className="wv-intel-copy"><strong>{today.intelligence[1].title}</strong><span>{today.intelligence[1].detail}</span></span></article>
+        <article className="wv-intel"><span className="wv-intel-icon"><Brain aria-hidden="true" /></span><span className="wv-intel-copy"><strong>{today.intelligence[2].title}</strong><span>{memoryCount > 0 ? `${memoryCount} mentett témához kapcsolódik` : today.intelligence[2].emptyDetail}</span></span></article>
       </section>
 
       <section className="wv-secondary-grid">
         <article className="wv-secondary-panel">
           <h3>Következő lehetőségek</h3>
-          <div className="wv-opportunity-row"><span className="wv-opportunity-copy"><strong>A lakások hőcsapdái</strong><span>Erős csatornailleszkedés · minta</span></span><Link href="/dashboard/opportunities">Megnézem</Link></div>
-          <div className="wv-opportunity-row"><span className="wv-opportunity-copy"><strong>Mit mér valójában a hőérzet?</strong><span>Friss összehasonlítás · minta</span></span><Link href="/dashboard/opportunities">Megnézem</Link></div>
+          {today.opportunities.map(opportunity => (
+            <div className="wv-opportunity-row" key={opportunity.title}><span className="wv-opportunity-copy"><strong>{opportunity.title}</strong><span>{opportunity.detail}</span></span><Link href="/dashboard/discover">Megnézem</Link></div>
+          ))}
         </article>
         <aside className="wv-secondary-panel wv-editorial-tip">
           <span className="wv-tip-label">Mai alkotói előny</span>
-          <strong>A szám előtt mutasd meg, mit változtat meg a néző életében.</strong>
-          <p>„Ez a két fa hat fok különbséget jelenthet.”</p>
+          <strong>{today.tip}</strong>
+          <p>{today.tipExample}</p>
         </aside>
       </section>
 
