@@ -15,14 +15,17 @@ import {
   X,
 } from 'lucide-react'
 import { useFocusTrap } from '@/lib/useFocusTrap'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 import type { CreatorLane } from '@/lib/creator-lane-presentation'
 import {
   CREATOR_OPPORTUNITIES,
+  creatorOpportunityStarterHref,
   type CreatorOpportunity,
 } from '@/lib/creator-opportunity-presentation'
 
 interface CreatorDiscoverProps {
   creatorLane?: CreatorLane
+  createHrefBase?: string
 }
 
 interface OpportunityPanelProps {
@@ -30,9 +33,11 @@ interface OpportunityPanelProps {
   saved: boolean
   onClose: () => void
   onSave: () => void
+  onStart: () => void
+  createHrefBase: string
 }
 
-function OpportunityPanel({ opportunity, saved, onClose, onSave }: OpportunityPanelProps) {
+function OpportunityPanel({ opportunity, saved, onClose, onSave, onStart, createHrefBase }: OpportunityPanelProps) {
   const panelRef = useFocusTrap(onClose)
 
   useEffect(() => {
@@ -96,7 +101,7 @@ function OpportunityPanel({ opportunity, saved, onClose, onSave }: OpportunityPa
             {saved ? <Check aria-hidden="true" /> : <Bookmark aria-hidden="true" />}
             {saved ? 'Mentve a mintába' : 'Mentés a könyvtárba'}
           </button>
-          <Link href="/dashboard/create" className="wv-primary-action">Projekt indítása<ArrowRight aria-hidden="true" /></Link>
+          <Link href={creatorOpportunityStarterHref(opportunity, createHrefBase)} className="wv-primary-action" onClick={onStart}>Projektvázlat indítása<ArrowRight aria-hidden="true" /></Link>
         </footer>
       </section>
     </div>,
@@ -104,8 +109,10 @@ function OpportunityPanel({ opportunity, saved, onClose, onSave }: OpportunityPa
   )
 }
 
-export default function CreatorDiscover({ creatorLane = 'evidence' }: CreatorDiscoverProps) {
-  const opportunities = CREATOR_OPPORTUNITIES[creatorLane]
+export default function CreatorDiscover({ creatorLane, createHrefBase = '/dashboard/create' }: CreatorDiscoverProps) {
+  const { creatorLane: contextLane, setCreatorLane } = useCreatorOS()
+  const activeLane = creatorLane ?? contextLane
+  const opportunities = CREATOR_OPPORTUNITIES[activeLane]
   const [selected, setSelected] = useState<CreatorOpportunity | null>(null)
   const [savedIds, setSavedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [status, setStatus] = useState<string | null>(null)
@@ -128,11 +135,11 @@ export default function CreatorDiscover({ creatorLane = 'evidence' }: CreatorDis
   }
 
   return (
-    <div className="wv-destination" data-creator-lane={creatorLane}>
+    <div className="wv-destination" data-creator-lane={activeLane}>
       <header className="wv-page-heading">
         <div>
-          <span className="wv-eyebrow">Felfedezés · {creatorLane === 'evidence' ? 'bizonyítékvezérelt' : 'élményvezérelt'}</span>
-          <h1>{creatorLane === 'evidence' ? 'Ne trendet keress. Saját lehetőséget ismerj fel.' : 'Ne formátumot másolj. Saját élményígéretet találj.'}</h1>
+          <span className="wv-eyebrow">Felfedezés · {activeLane === 'evidence' ? 'bizonyítékvezérelt' : 'élményvezérelt'}</span>
+          <h1>{activeLane === 'evidence' ? 'Ne trendet keress. Saját lehetőséget ismerj fel.' : 'Ne formátumot másolj. Saját élményígéretet találj.'}</h1>
         </div>
         <span className="wv-heading-meta">3 szemléltető jel<br />csatornádhoz rendezve</span>
       </header>
@@ -187,6 +194,8 @@ export default function CreatorDiscover({ creatorLane = 'evidence' }: CreatorDis
           saved={savedIds.has(selected.id)}
           onClose={() => setSelected(null)}
           onSave={() => toggleSaved(selected)}
+          onStart={() => setCreatorLane(selected.lane)}
+          createHrefBase={createHrefBase}
         />
       )}
       {status && <div className="wv-toast" role="status" aria-live="polite"><Check aria-hidden="true" /><span>{status}</span></div>}

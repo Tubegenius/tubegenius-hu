@@ -21,6 +21,7 @@ import type { CreatorProfile } from '@/types'
 import Logo from '@/components/brand/Logo'
 import { CREATOR_OS_NAV_ITEMS, creatorOSSectionForPath, type CreatorOSSectionId } from '@/lib/creator-os-navigation'
 import { CREATOR_LANE_PRESENTATION, type CreatorLane } from '@/lib/creator-lane-presentation'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 interface CreatorOSShellProps {
   children: ReactNode
@@ -38,9 +39,11 @@ const navIcons = {
   growth: BarChart3,
 } satisfies Record<CreatorOSSectionId, typeof Sun>
 
-export default function CreatorOSShell({ children, profile, userEmail, activeSectionOverride, creatorLane = 'evidence' }: CreatorOSShellProps) {
+export default function CreatorOSShell({ children, profile, userEmail, activeSectionOverride, creatorLane: creatorLaneOverride }: CreatorOSShellProps) {
   const pathname = usePathname()
   const router = useRouter()
+  const { creatorLane: contextLane } = useCreatorOS()
+  const creatorLane = creatorLaneOverride ?? contextLane
   const menuRef = useRef<HTMLDivElement>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const activeSection = activeSectionOverride ?? creatorOSSectionForPath(pathname)

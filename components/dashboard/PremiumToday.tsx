@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { CreatorProfile } from '@/types'
 import { CREATOR_LANE_PRESENTATION, type CreatorLane } from '@/lib/creator-lane-presentation'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 interface PremiumTodayProps {
   profile: CreatorProfile | null
@@ -35,7 +36,9 @@ function localGreeting(): string {
   return 'Szia'
 }
 
-export default function PremiumToday({ profile, displayName, memoryCount, creatorLane = 'evidence' }: PremiumTodayProps) {
+export default function PremiumToday({ profile, displayName, memoryCount, creatorLane: creatorLaneOverride }: PremiumTodayProps) {
+  const { creatorLane: contextLane } = useCreatorOS()
+  const creatorLane = creatorLaneOverride ?? contextLane
   const [greeting, setGreeting] = useState('Szia')
   const [pulsePaused, setPulsePaused] = useState(false)
   const lane = CREATOR_LANE_PRESENTATION[creatorLane]
