@@ -1,16 +1,9 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
 import './globals.css'
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-})
-
 export const metadata: Metadata = {
-  title: 'WillViral — Creator Intelligence Platform',
-  description: 'Találd meg a következő sikeres videódat. Magyar créatoroknak.',
+  title: 'WillViral — Creator Operating System',
+  description: 'A következő videód itt kezdődik.',
   icons: {
     icon: '/brand/favicon.svg',
   },
@@ -22,7 +15,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="hu" className={inter.variable}>
+    <html lang="hu">
       <head>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" />
       </head>
