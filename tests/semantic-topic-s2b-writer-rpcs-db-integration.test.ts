@@ -35,6 +35,25 @@ function extractLegacyRterBodySql(): string {
   return createStatement.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION') + '\n' + grantStatements
 }
 
+// Same rationale/technique as extractLegacyRterBodySql() above, for the
+// OTHER 074 function migration 086 (Lifecycle Foundation Correctness v1)
+// has since legitimately CREATE OR REPLACEd: restoring
+// record_topic_assignment_decision to "exactly what 074 itself would
+// create" lets 074's own idempotency checks run in isolation, unaffected
+// by 086 having already advanced it in this same shared local DB.
+function extractLegacyRtadBodySql(): string {
+  const migrationText = readFileSync(MIGRATION_PATH, 'utf8')
+  const start = migrationText.indexOf('CREATE FUNCTION public.record_topic_assignment_decision(')
+  if (start === -1) throw new Error('extractLegacyRtadBodySql: CREATE FUNCTION record_topic_assignment_decision not found in 074')
+  const bodyEnd = migrationText.indexOf('$rpc$;', start)
+  if (bodyEnd === -1) throw new Error('extractLegacyRtadBodySql: closing $rpc$; not found')
+  const createStatement = migrationText.slice(start, bodyEnd + '$rpc$;'.length)
+  const grantStart = migrationText.indexOf('REVOKE ALL ON FUNCTION public.record_topic_assignment_decision(', bodyEnd)
+  const grantEnd = migrationText.indexOf(') TO service_role;', grantStart) + ') TO service_role;'.length
+  const grantStatements = migrationText.slice(grantStart, grantEnd)
+  return createStatement.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION') + '\n' + grantStatements
+}
+
 function dockerPsql(sql: string): string {
   return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
     input: sql,
@@ -873,11 +892,14 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
 
     it('second migration run is a byte-exact no-op (VALIDATE branch, no DDL/DCL)', () => {
       // Migration 076 (canonical input timestamp v2) may have already
-      // advanced record_topic_extraction_run to its corrected v2 body as a
-      // side effect of an earlier test file in this same run/DB -- 074's own
-      // VALIDATE branch only ever accepts 074's own pinned hash, so this
-      // test must restore the exact 074-created state first, or it would be
-      // testing "074 vs. a function 076 already replaced," not "074 vs.
+      // advanced record_topic_extraction_run to its corrected v2 body, and
+      // migration 086 (Lifecycle Foundation Correctness v1) may have already
+      // advanced record_topic_assignment_decision to its corrected
+      // eligible-source-identity body -- both as a side effect of an earlier
+      // test file in this same run/DB. 074's own VALIDATE branch only ever
+      // accepts 074's own pinned hashes, so this test must restore BOTH
+      // functions to the exact 074-created state first, or it would be
+      // testing "074 vs. functions 076/086 already replaced," not "074 vs.
       // itself." See the parallel case for 070/071 in
       // tests/shadow-topic-scoring-rpc-db-integration.test.ts.
       const currentHash = dockerPsql(
@@ -893,10 +915,34 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
         }
       }
 
+      const currentRtadHash = dockerPsql(
+        `select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_topic_assignment_decision';`,
+      ).trim()
+      if (currentRtadHash !== '759de5ab474c9a7aa105564ca95541cc') {
+        dockerPsql(extractLegacyRtadBodySql())
+        const restoredRtadHash = dockerPsql(
+          `select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_topic_assignment_decision';`,
+        ).trim()
+        if (restoredRtadHash !== '759de5ab474c9a7aa105564ca95541cc') {
+          throw new Error(`restore-to-legacy failed: got ${restoredRtadHash}, expected 759de5ab474c9a7aa105564ca95541cc`)
+        }
+      }
+
       const { out, threw } = runMigration()
       expect(threw).toBe(false)
       expect(out).toMatch(/record_topic_extraction_run already exists and matches exactly -- no-op/)
       expect(out).toMatch(/record_topic_assignment_decision already exists and matches exactly -- no-op/)
+
+      // Leave the shared local DB in its normal, fully-advanced state for
+      // every other test file: restore record_topic_assignment_decision to
+      // 086's corrected body (086 is additive/idempotent -- re-applying it
+      // against the just-restored 074 legacy body is exactly its own
+      // REPLACE branch, proven independently by 086's own test suite).
+      const migration086Path = join(process.cwd(), 'supabase/migrations/086_semantic_topic_eligible_source_identity_correctness.sql')
+      execSync(
+        'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+        { input: readFileSync(migration086Path, 'utf8'), encoding: 'utf8' },
+      )
     })
 
     it('074 standalone can never be safely re-applied once migration 076 has advanced record_topic_extraction_run to v2 (forward-only enforcement)', () => {

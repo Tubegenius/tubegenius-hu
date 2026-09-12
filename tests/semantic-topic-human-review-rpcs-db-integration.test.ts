@@ -23,6 +23,7 @@ const execAsync = promisify(exec)
 const MIGRATION_077_PATH = join(process.cwd(), 'supabase/migrations/077_semantic_topic_human_review_schema_foundation.sql')
 const MIGRATION_078_PATH = join(process.cwd(), 'supabase/migrations/078_semantic_topic_human_review_rpcs.sql')
 const MIGRATION_084_PATH = join(process.cwd(), 'supabase/migrations/084_semantic_topic_attach_duplicate_outcome_contract.sql')
+const MIGRATION_086_PATH = join(process.cwd(), 'supabase/migrations/086_semantic_topic_eligible_source_identity_correctness.sql')
 
 function dockerPsql(sql: string): string {
   return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
@@ -311,9 +312,24 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       expect(err).toMatch(/077 is not fully applied/)
     })
 
-    it('record_topic_assignment_decision (074) body/signature/ACL unchanged', () => {
+    it('record_topic_assignment_decision (074) signature/ACL unchanged; body is the 086 eligible-source-identity-corrected version', () => {
+      // Migration 086 (Lifecycle Foundation Correctness v1) legitimately
+      // CREATE OR REPLACEs this function's body -- the raw active-membership
+      // count(*) used for the candidate_singleton -> corroborating
+      // enforcement is replaced by a call into the shared
+      // _semantic_topic_eligible_membership_sources() helper. 078/084's own
+      // "this function must NEVER change" self-checks only ever asserted
+      // that 078/084 THEMSELVES never touched it -- a later, separately
+      // audited migration (086) is expected to, and does. Other suites
+      // sharing this same local DB may have temporarily reverted this
+      // function to its pre-086 legacy body for their own isolated
+      // idempotency checks -- re-applying 086 (always a safe, idempotent
+      // no-op when already correct) guarantees this test sees the real,
+      // current-architecture state regardless of file execution order.
+      const migrate086 = runMigration(MIGRATION_086_PATH)
+      if (migrate086.threw) throw new Error(`086 reapply failed -- ${migrate086.out}`)
       const hash = dockerPsql(`select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc where oid = 'public.record_topic_assignment_decision(uuid, text, text, jsonb, text, uuid)'::regprocedure;`).trim()
-      expect(hash).toBe('759de5ab474c9a7aa105564ca95541cc')
+      expect(hash).toBe('9e681c94870719a0a7cb4605de458baf')
       const acl = dockerPsql(`
         select has_function_privilege('service_role', 'public.record_topic_assignment_decision(uuid, text, text, jsonb, text, uuid)'::regprocedure, 'EXECUTE')::text,
                has_function_privilege('authenticated', 'public.record_topic_assignment_decision(uuid, text, text, jsonb, text, uuid)'::regprocedure, 'EXECUTE')::text;
@@ -873,11 +889,11 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       const key = nextMarker()
       const first = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, key, 'CREATE_NEW', 'no_duplicate_found', null))).trim())
       expect(first.outcome).toBe('approved')
-      // Re-run migration 084 again (idempotent no-op by this point) to model
-      // "the migration has already been applied" and confirm the existing
-      // row is untouched and still replays.
-      const migrationRerun = runMigration(MIGRATION_084_PATH)
-      expect(migrationRerun.threw).toBe(false)
+      // (Migration 084's own reapply-no-op guarantee is proven separately,
+      // by the dedicated test below -- not repeated here, since migration
+      // 086 now legitimately changes what a standalone 084 reapply detects,
+      // which is an orthogonal concern to this test's actual point: that a
+      // historical, already-decided row keeps replaying correctly.)
       const replay = JSON.parse(dockerPsql(asReviewer(REVIEWER_A, directApproveSql(id, key, 'CREATE_NEW', 'no_duplicate_found', null))).trim())
       expect(replay.outcome).toBe('replayed')
       expect(replay.approval_digest).toBe(first.approval_digest)
@@ -885,16 +901,30 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       expect(stored).toBe('no_duplicate_found')
     })
 
-    // F.13 -- migration 084 applied twice is a byte-exact no-op, proven for
-    // real against this same local DB (mirrors 077's own
-    // "re-running is a byte-exact no-op" test pattern).
-    it('re-running 084 against the already-applied schema/RPC is a byte-exact no-op', () => {
+    // F.13 -- migration 084 applied twice is a byte-exact no-op FOR THE
+    // PARTS IT OWNS (the dup-search CHECK/pairing constraint and
+    // record_topic_assignment_review_decision's own body). Migration 086
+    // (Lifecycle Foundation Correctness v1, applied later in the migration
+    // sequence) legitimately CREATE OR REPLACEs record_topic_assignment_
+    // decision (074) and execute_approved_topic_assignment_review (078) --
+    // the exact two functions 084's own final self-check asserts must never
+    // drift. That self-check is scoped to "084 itself never touched them",
+    // not "no migration ever may" -- a standalone reapply of 084's file
+    // AFTER 086 therefore correctly, deliberately fails at that self-check,
+    // proving the fail-closed guard still fires rather than silently
+    // ignoring a real (later, authorized) body change.
+    it('re-running 084 against the already-applied schema/RPC is a byte-exact no-op for its own parts; its cross-function self-check correctly detects the later, authorized 086 change', () => {
+      // Guarantee record_topic_assignment_decision is in its 086-corrected
+      // state before this assertion, regardless of file execution order
+      // (see the equivalent guard on the hash-check test above).
+      const migrate086 = runMigration(MIGRATION_086_PATH)
+      if (migrate086.threw) throw new Error(`086 reapply failed -- ${migrate086.out}`)
       const result = runMigration(MIGRATION_084_PATH)
-      expect(result.threw).toBe(false)
+      expect(result.threw).toBe(true)
       expect(result.out).toMatch(/topic_assignment_review_requests_dup_search_check already corrected -- no-op/)
       expect(result.out).toMatch(/topic_assignment_review_requests_dup_search_outcome_pairing already exists and matches exactly -- no-op/)
       expect(result.out).toMatch(/record_topic_assignment_review_decision already exactly the corrected body -- no-op/)
-      expect(result.out).toMatch(/final self-check passed -- record_topic_assignment_decision \(074\) and execute_approved_topic_assignment_review \(078\) confirmed unchanged/)
+      expect(result.out).toMatch(/084 CRITICAL: record_topic_assignment_decision body hash changed/)
     })
 
     // F.14 -- an injected, unrecognized prestate (a definition that is
@@ -911,10 +941,34 @@ describeIfLocalDb('Semantic Topic Identity v0 -- Human-Reviewed Candidate Workfl
       expect(result.threw).toBe(true)
       expect(result.out).toMatch(/084 fail-closed: DEFINITION_DRIFT -- topic_assignment_review_requests_dup_search_outcome_pairing exists but does not match/)
       // Restore the correct state so the rest of this suite (and every
-      // other suite sharing this DB) is unaffected.
+      // other suite sharing this DB) is unaffected. Migration 084's own
+      // file can no longer be relied on to recreate this constraint (its
+      // unconditional final self-check now always fails on 074's
+      // 086-corrected body, rolling back the ENTIRE transaction -- including
+      // whatever CREATE branch ran earlier in that same transaction) -- so
+      // this restores the constraint directly, verbatim from 084's own
+      // source text (never retyped, to guarantee byte-identical wording).
       dockerPsql(`alter table public.topic_assignment_review_requests drop constraint topic_assignment_review_requests_dup_search_outcome_pairing;`)
+      dockerPsql(`
+        ALTER TABLE public.topic_assignment_review_requests ADD CONSTRAINT topic_assignment_review_requests_dup_search_outcome_pairing
+          CHECK (
+            proposed_outcome IS NULL
+            OR (proposed_outcome = 'ATTACH_EXISTING' AND duplicate_search_outcome = 'existing_topic_match_confirmed')
+            OR (proposed_outcome = 'CREATE_NEW' AND duplicate_search_outcome IN ('no_duplicate_found', 'possible_duplicate_reviewed_and_distinct'))
+          );
+      `)
+      const constraintDef = dockerPsql(
+        `select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'public.topic_assignment_review_requests'::regclass and conname = 'topic_assignment_review_requests_dup_search_outcome_pairing';`,
+      ).trim()
+      expect(constraintDef).toContain('existing_topic_match_confirmed')
+      // A standalone 084 reapply now (correctly) still fails -- but only for
+      // the separate, expected 086-vs-074 reason (see the dedicated F.13
+      // test above), never again for the constraint this test just
+      // restored directly.
       const fixed = runMigration(MIGRATION_084_PATH)
-      expect(fixed.threw).toBe(false)
+      expect(fixed.threw).toBe(true)
+      expect(fixed.out).toMatch(/topic_assignment_review_requests_dup_search_outcome_pairing already exists and matches exactly -- no-op/)
+      expect(fixed.out).toMatch(/084 CRITICAL: record_topic_assignment_decision body hash changed/)
     })
   })
 

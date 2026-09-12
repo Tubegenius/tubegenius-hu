@@ -111,8 +111,22 @@ function cleanupTestData() {
   `)
 }
 
+// Keyed on (source_type, external_id) via a real UPSERT -- exactly the
+// production capture-time pattern (lib/emerging-signal/capture.ts's own
+// upsertSource()) -- so that calling this twice with the SAME channelId
+// deterministically reuses the SAME signal_sources row (the actual,
+// post-086 canonical source identity), not two different rows that merely
+// share a human-readable label. This is the corrected replacement for the
+// pre-086 "same youtube_videos.channel_id string, two different
+// signal_sources rows" fixture shape, which no longer reflects how source
+// identity is computed.
 function insertFixtureSource(externalId: string): string {
-  return dockerPsql(`insert into signal_sources (source_type, external_id, source_family_key) values ('youtube_channel', '${externalId}', '${externalId}') returning id;`).trim()
+  return dockerPsql(`
+    insert into signal_sources (source_type, external_id, source_family_key)
+    values ('youtube_channel', '${externalId}', '${externalId}')
+    on conflict (source_type, external_id) do update set last_seen_at = now()
+    returning id;
+  `).trim()
 }
 function insertFixtureRun(idempotencyKey: string): string {
   return dockerPsql(`insert into signal_runs (run_type, idempotency_key, status, completed_at) values ('shadow_batch', '${idempotencyKey}', 'completed', now()) returning id;`).trim()
@@ -122,10 +136,12 @@ function insertYoutubeVideo(videoId: string, channelId: string): void {
 }
 
 // "Known source" evidence -- a youtube_video evidence row whose
-// youtube_videos_ref resolves (via youtube_videos.video_id) to a row with a
-// non-null channel_id.
+// signal_source_id resolves to a real signal_sources row (the canonical,
+// post-086 source identity). Two calls with the SAME channelId now
+// correctly share ONE signal_sources row (see insertFixtureSource above) --
+// two calls with DIFFERENT channelIds produce two distinct sources.
 function insertKnownEvidence(marker: string, channelId: string, canonicalUrl: string | null = null): string {
-  const sourceId = insertFixtureSource(`${marker}-src`)
+  const sourceId = insertFixtureSource(channelId)
   const runId = insertFixtureRun(`${marker}-run`)
   const videoId = `${marker}-vid`
   insertYoutubeVideo(videoId, channelId)
@@ -137,8 +153,17 @@ function insertKnownEvidence(marker: string, channelId: string, canonicalUrl: st
   `).trim()
 }
 
-// "Unknown source" evidence -- no youtube_videos_ref at all, so the LEFT
-// JOIN inside the RPC resolves to a NULL channel_id.
+// Pre-086, "unknown source" meant "no youtube_videos_ref" (the old,
+// fragile, YouTube-only join path). Post-086, source identity is
+// signal_source_id -- NOT NULL, ON DELETE RESTRICT -- so this fixture (a
+// real signal_sources row always attached) is now correctly a KNOWN
+// source. This is intentional: no realistic fixture can construct a
+// genuinely unresolved source_identity_id under the current schema (see
+// migration 086's own header comment and its DB-integration test file's
+// helper-correctness section). Kept under its original name only because
+// several already-passing tests below still call it to build a
+// syndication-copy source; its "unknown" framing in older comments has
+// been corrected below wherever it mattered to a test's assertion.
 function insertUnknownEvidence(marker: string): string {
   const sourceId = insertFixtureSource(`${marker}-src`)
   const runId = insertFixtureRun(`${marker}-run`)
@@ -249,7 +274,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
       activeMembershipCount: 0,
       eligibleMembershipCount: 0,
       syndicationExcludedCount: 0,
-      knownIndependentSourceCount: 0,
+      eligibleDistinctSourceIdentityCount: 0,
       unknownSourceCount: 0,
       manualReviewConfirmedSourceCount: 0,
       manualReviewOverrideSourceCount: 0,
@@ -260,6 +285,10 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
       mixedAlgorithmVersions: false,
       byAlgorithmVersion: {},
       confidenceDiagnostics: { min: null, max: null, count: 0 },
+      // Vacuous-case fail-closed (086): an empty eligible set never reads as
+      // "complete" for either boolean.
+      evidenceIdentityComplete: false,
+      sourceIdentityKnown: false,
       inputIntegrityStatus: 'not_applicable',
     })
   })
@@ -267,7 +296,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
   // ------------------------------------------------------------
   // 3. One known source
   // ------------------------------------------------------------
-  it('3. one known source -> knownIndependentSourceCount=1', () => {
+  it('3. one known source -> eligibleDistinctSourceIdentityCount=1', () => {
     const topicId = insertTopic()
     const m = nextMarker()
     const evidenceId = insertKnownEvidence(m, `${m}-chanA`)
@@ -275,20 +304,24 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     const out = callRpc(topicId)
     expect(out.ok).toBe(true)
     expect(out.eligibleMembershipCount).toBe(1)
-    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
     expect(out.unknownSourceCount).toBe(0)
-    // youtube_video evidence with canonical_url left NULL (allowed by the
-    // signal_evidence schema for evidence_type='youtube_video') -- the
-    // narrow inputIntegrityStatus definition correctly flags this as
-    // incomplete, not not_applicable (which is reserved for the
-    // zero-eligible-membership case only).
-    expect(out.inputIntegrityStatus).toBe('incomplete')
+    // 086 correction: youtube_video evidence identity is evaluated via its
+    // external_ref (always present), not canonical_url -- a NULL
+    // canonical_url is expected, schema-legitimate YouTube behavior (051's
+    // own signal_evidence_canonical_url_required CHECK deliberately exempts
+    // youtube_video), so this now correctly reads as complete, not
+    // incomplete. (The pre-086 assertion here was itself proof of the bug
+    // this migration fixes -- see migration 086's own header comment.)
+    expect(out.evidenceIdentityComplete).toBe(true)
+    expect(out.sourceIdentityKnown).toBe(true)
+    expect(out.inputIntegrityStatus).toBe('complete')
   })
 
   // ------------------------------------------------------------
   // 4. Two independent known sources
   // ------------------------------------------------------------
-  it('4. two independent known sources (different channel_id) -> knownIndependentSourceCount=2', () => {
+  it('4. two independent known sources (different channel_id) -> eligibleDistinctSourceIdentityCount=2', () => {
     const topicId = insertTopic()
     const m1 = nextMarker()
     const m2 = nextMarker()
@@ -298,13 +331,13 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     insertMembership(topicId, evB)
     const out = callRpc(topicId)
     expect(out.eligibleMembershipCount).toBe(2)
-    expect(out.knownIndependentSourceCount).toBe(2)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(2)
   })
 
   // ------------------------------------------------------------
   // 5. Multiple eligible memberships from the SAME known source
   // ------------------------------------------------------------
-  it('5. multiple eligible memberships from the same known source -> knownIndependentSourceCount stays 1', () => {
+  it('5. multiple eligible memberships from the same known source -> eligibleDistinctSourceIdentityCount stays 1', () => {
     const topicId = insertTopic()
     const m1 = nextMarker()
     const m2 = nextMarker()
@@ -315,21 +348,28 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     insertMembership(topicId, evB)
     const out = callRpc(topicId)
     expect(out.eligibleMembershipCount).toBe(2)
-    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
   })
 
   // ------------------------------------------------------------
-  // 6. Unknown-source membership
+  // 6. serper_web evidence with no youtube_videos_ref -- pre-086 this was
+  // (wrongly) an "unknown source" fixture, because the old RPC resolved
+  // source identity via a youtube_videos join, which serper_web evidence
+  // can never satisfy. Migration 086 resolves source identity via
+  // signal_source_id (NOT NULL, ON DELETE RESTRICT) instead, uniformly for
+  // every evidence type -- this evidence's real, always-present
+  // signal_sources row now correctly counts as a KNOWN source. This
+  // flipped assertion IS the proof of the 086 fix, not a relaxed test.
   // ------------------------------------------------------------
-  it('6. unknown-source membership -> unknownSourceCount increments, knownIndependentSourceCount does not', () => {
+  it('6. non-YouTube (serper_web) evidence with a resolvable signal_source_id is correctly counted as a KNOWN source (086 fix)', () => {
     const topicId = insertTopic()
     const m = nextMarker()
     const evidenceId = insertUnknownEvidence(m)
     insertMembership(topicId, evidenceId)
     const out = callRpc(topicId)
     expect(out.eligibleMembershipCount).toBe(1)
-    expect(out.unknownSourceCount).toBe(1)
-    expect(out.knownIndependentSourceCount).toBe(0)
+    expect(out.unknownSourceCount).toBe(0)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
   })
 
   // ------------------------------------------------------------
@@ -347,7 +387,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     expect(out.activeMembershipCount).toBe(2)
     expect(out.eligibleMembershipCount).toBe(1)
     expect(out.syndicationExcludedCount).toBe(1)
-    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
   })
 
   // ------------------------------------------------------------
@@ -364,14 +404,14 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     const out = callRpc(topicId)
     expect(out.activeMembershipCount).toBe(0)
     expect(out.eligibleMembershipCount).toBe(0)
-    expect(out.knownIndependentSourceCount).toBe(0)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(0)
     expect(out.syndicationExcludedCount).toBe(0)
   })
 
   // ------------------------------------------------------------
   // 9. Mixed algorithm_version, SAME channel -- highest-value test
   // ------------------------------------------------------------
-  it('9. mixed algorithm_version with the SAME channel under two versions -> top-level knownIndependentSourceCount must NOT double-count', () => {
+  it('9. mixed algorithm_version with the SAME channel under two versions -> top-level eligibleDistinctSourceIdentityCount must NOT double-count', () => {
     const topicId = insertTopic()
     const m1 = nextMarker()
     const m2 = nextMarker()
@@ -385,9 +425,9 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     expect(out.mixedAlgorithmVersions).toBe(true)
     // The critical assertion: distinct-channel count over the FULL eligible
     // set, not the sum of per-version distinct counts (which would be 2).
-    expect(out.knownIndependentSourceCount).toBe(1)
-    expect(out.byAlgorithmVersion['1'].knownIndependentSourceCount).toBe(1)
-    expect(out.byAlgorithmVersion['2'].knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
+    expect(out.byAlgorithmVersion['1'].eligibleDistinctSourceIdentityCount).toBe(1)
+    expect(out.byAlgorithmVersion['2'].eligibleDistinctSourceIdentityCount).toBe(1)
     expect(out.byAlgorithmVersion['1'].eligibleMembershipCount).toBe(1)
     expect(out.byAlgorithmVersion['2'].eligibleMembershipCount).toBe(1)
   })
@@ -406,9 +446,9 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     const out = callRpc(topicId)
     expect(out.mixedAlgorithmVersions).toBe(true)
     expect(out.eligibleMembershipCount).toBe(2)
-    expect(out.knownIndependentSourceCount).toBe(2)
-    expect(out.byAlgorithmVersion['1']).toMatchObject({ eligibleMembershipCount: 1, knownIndependentSourceCount: 1, unknownSourceCount: 0 })
-    expect(out.byAlgorithmVersion['2']).toMatchObject({ eligibleMembershipCount: 1, knownIndependentSourceCount: 1, unknownSourceCount: 0 })
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(2)
+    expect(out.byAlgorithmVersion['1']).toMatchObject({ eligibleMembershipCount: 1, eligibleDistinctSourceIdentityCount: 1, unknownSourceCount: 0 })
+    expect(out.byAlgorithmVersion['2']).toMatchObject({ eligibleMembershipCount: 1, eligibleDistinctSourceIdentityCount: 1, unknownSourceCount: 0 })
   })
 
   // ------------------------------------------------------------
@@ -424,13 +464,13 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     insertMembership(topicId, evA, { assignment_reason: `'manual_review_confirmed'` })
     insertMembership(topicId, evB, { assignment_reason: `'entity_event_match'` })
     const out = callRpc(topicId)
-    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
     expect(out.manualReviewConfirmedSourceCount).toBe(1)
     expect(out.automatedAssignmentSourceCount).toBe(1)
     expect(out.manualReviewOverrideSourceCount).toBe(0)
-    // Documented: the sum is NOT asserted equal to knownIndependentSourceCount --
+    // Documented: the sum is NOT asserted equal to eligibleDistinctSourceIdentityCount --
     // here it deliberately overshoots it (1 + 1 = 2 != 1) because of the overlap.
-    expect(out.manualReviewConfirmedSourceCount + out.automatedAssignmentSourceCount).not.toBe(out.knownIndependentSourceCount)
+    expect(out.manualReviewConfirmedSourceCount + out.automatedAssignmentSourceCount).not.toBe(out.eligibleDistinctSourceIdentityCount)
     expect(out.topicCreationSeedSourceCount).toBe(0)
     expect(out.assignmentReasonBreakdownComplete).toBe(true)
     expect(out.unclassifiedAssignmentReasonEligibleMembershipCount).toBe(0)
@@ -450,7 +490,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     insertMembership(topicId, ev, { assignment_reason: `'topic_creation_seed'` })
     const out = callRpc(topicId)
     expect(out.eligibleMembershipCount).toBe(1)
-    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
     expect(out.topicCreationSeedSourceCount).toBe(1)
     expect(out.manualReviewConfirmedSourceCount).toBe(0)
     expect(out.manualReviewOverrideSourceCount).toBe(0)
@@ -472,11 +512,11 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     insertMembership(topicId, evA, { assignment_reason: `'topic_creation_seed'` })
     insertMembership(topicId, evB, { assignment_reason: `'manual_review_confirmed'` })
     const out = callRpc(topicId)
-    expect(out.knownIndependentSourceCount).toBe(1)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
     expect(out.topicCreationSeedSourceCount).toBe(1)
     expect(out.manualReviewConfirmedSourceCount).toBe(1)
     // Documented overlap again -- 1 + 1 = 2 != 1.
-    expect(out.topicCreationSeedSourceCount + out.manualReviewConfirmedSourceCount).not.toBe(out.knownIndependentSourceCount)
+    expect(out.topicCreationSeedSourceCount + out.manualReviewConfirmedSourceCount).not.toBe(out.eligibleDistinctSourceIdentityCount)
   })
 
   // ------------------------------------------------------------
@@ -492,7 +532,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     }
     const out = callRpc(topicId)
     expect(out.eligibleMembershipCount).toBe(5)
-    expect(out.knownIndependentSourceCount).toBe(5)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(5)
     // entity_event_match + embedding_similarity both roll into automatedAssignmentSourceCount (2 distinct channels).
     expect(out.automatedAssignmentSourceCount).toBe(2)
     expect(out.manualReviewConfirmedSourceCount).toBe(1)
@@ -500,7 +540,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     expect(out.topicCreationSeedSourceCount).toBe(1)
     expect(out.assignmentReasonBreakdownComplete).toBe(true)
     expect(out.unclassifiedAssignmentReasonEligibleMembershipCount).toBe(0)
-    // Top-level knownIndependentSourceCount (5) is NOT derived from summing
+    // Top-level eligibleDistinctSourceIdentityCount (5) is NOT derived from summing
     // the breakdown buckets (2+1+1+1=5 only coincidentally matches here
     // because every channel in this fixture is used by exactly one reason --
     // test 11/11c already prove the sum can legitimately exceed the
@@ -508,28 +548,36 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
   })
 
   // ------------------------------------------------------------
-  // 11e. unknown-source topic_creation_seed membership
+  // 11e. a topic_creation_seed membership on non-YouTube evidence -- same
+  // 086 correction as test 6: this evidence's signal_source_id is real and
+  // resolvable, so it correctly counts as a known source in its own
+  // reason-bucket. A genuinely UNRESOLVED source_identity_id (the case this
+  // test used to construct via a fragile youtube_videos-only join) cannot
+  // be built with a real fixture under the current schema at all
+  // (signal_source_id is NOT NULL / ON DELETE RESTRICT on every
+  // signal_evidence row) -- that a NULL source_identity_id would never
+  // inflate any DISTINCT-based count is instead proven structurally, by the
+  // helper's own COUNT(DISTINCT source_identity_id) semantics (standard SQL
+  // NULL-exclusion, not custom logic), in migration 086's own
+  // DB-integration test file.
   // ------------------------------------------------------------
-  it('11e. an unknown-source (no resolvable channel_id) topic_creation_seed membership counts toward unknownSourceCount, never topicCreationSeedSourceCount', () => {
+  it('11e. a topic_creation_seed membership on non-YouTube evidence is correctly counted as a known source in its own bucket (086 fix)', () => {
     const topicId = insertTopic()
     const m = nextMarker()
     const ev = insertUnknownEvidence(m)
     insertMembership(topicId, ev, { assignment_reason: `'topic_creation_seed'` })
     const out = callRpc(topicId)
     expect(out.eligibleMembershipCount).toBe(1)
-    expect(out.unknownSourceCount).toBe(1)
-    expect(out.knownIndependentSourceCount).toBe(0)
-    // count(DISTINCT channel_id) never counts a NULL channel_id as a value,
-    // so an unknown-source membership contributes to NONE of the
-    // per-reason known-source buckets, regardless of its assignment_reason.
-    expect(out.topicCreationSeedSourceCount).toBe(0)
+    expect(out.unknownSourceCount).toBe(0)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(1)
+    expect(out.topicCreationSeedSourceCount).toBe(1)
     expect(out.assignmentReasonBreakdownComplete).toBe(true)
   })
 
   // ------------------------------------------------------------
   // 11f. top-level counts are unaffected by the reason breakdown
   // ------------------------------------------------------------
-  it('11f. activeMembershipCount/eligibleMembershipCount/knownIndependentSourceCount are computed directly from the full eligible set, not by summing any reason breakdown', () => {
+  it('11f. activeMembershipCount/eligibleMembershipCount/eligibleDistinctSourceIdentityCount are computed directly from the full eligible set, not by summing any reason breakdown', () => {
     const topicId = insertTopic()
     const m1 = nextMarker()
     const m2 = nextMarker()
@@ -546,8 +594,8 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     expect(out.eligibleMembershipCount).toBe(3)
     // 2 distinct channels total (sharedChannel + other-chan), NOT 3 -- and
     // NOT equal to any naive sum of the per-reason buckets (1+1+1=3 != 2).
-    expect(out.knownIndependentSourceCount).toBe(2)
-    expect(out.manualReviewConfirmedSourceCount + out.topicCreationSeedSourceCount + out.automatedAssignmentSourceCount).not.toBe(out.knownIndependentSourceCount)
+    expect(out.eligibleDistinctSourceIdentityCount).toBe(2)
+    expect(out.manualReviewConfirmedSourceCount + out.topicCreationSeedSourceCount + out.automatedAssignmentSourceCount).not.toBe(out.eligibleDistinctSourceIdentityCount)
   })
 
   // ------------------------------------------------------------
@@ -623,7 +671,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
   // ------------------------------------------------------------
   // 14. Deactivation never increases a support count
   // ------------------------------------------------------------
-  it('14. deactivating one of two same-channel eligible memberships never increases knownIndependentSourceCount', () => {
+  it('14. deactivating one of two same-channel eligible memberships never increases eligibleDistinctSourceIdentityCount', () => {
     const topicId = insertTopic()
     const m1 = nextMarker()
     const m2 = nextMarker()
@@ -634,20 +682,20 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     const memB = insertMembership(topicId, evB, { confidence: '0.9000', valid_from: `(now() - interval '1 hour')` })
 
     const before = callRpc(topicId)
-    expect(before.knownIndependentSourceCount).toBe(1)
+    expect(before.eligibleDistinctSourceIdentityCount).toBe(1)
     expect(before.eligibleMembershipCount).toBe(2)
 
     // Deactivate the EARLIER, lower-confidence membership first.
     dockerPsql(`update semantic_topic_membership set valid_to = now() where id = '${memA}';`)
     const afterDeactivateA = callRpc(topicId)
-    expect(afterDeactivateA.knownIndependentSourceCount).toBe(1) // unchanged, never increased
+    expect(afterDeactivateA.eligibleDistinctSourceIdentityCount).toBe(1) // unchanged, never increased
     expect(afterDeactivateA.eligibleMembershipCount).toBe(1)
 
     // Now deactivate the remaining one too -- must decrease to 0, never
     // increase back up.
     dockerPsql(`update semantic_topic_membership set valid_to = now() where id = '${memB}';`)
     const afterDeactivateBoth = callRpc(topicId)
-    expect(afterDeactivateBoth.knownIndependentSourceCount).toBe(0)
+    expect(afterDeactivateBoth.eligibleDistinctSourceIdentityCount).toBe(0)
     expect(afterDeactivateBoth.eligibleMembershipCount).toBe(0)
   })
 
@@ -662,7 +710,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     const memB = insertMembership(topicId, evB, { confidence: '0.9000', valid_from: `(now() - interval '1 hour')` })
 
     const before = callRpc(topicId)
-    expect(before.knownIndependentSourceCount).toBe(1)
+    expect(before.eligibleDistinctSourceIdentityCount).toBe(1)
 
     // This time deactivate B (the later, higher-confidence one) first --
     // proves the result does not depend on which "representative" row is
@@ -671,12 +719,12 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
     // active.
     dockerPsql(`update semantic_topic_membership set valid_to = now() where id = '${memB}';`)
     const afterDeactivateB = callRpc(topicId)
-    expect(afterDeactivateB.knownIndependentSourceCount).toBe(1)
+    expect(afterDeactivateB.eligibleDistinctSourceIdentityCount).toBe(1)
     expect(afterDeactivateB.eligibleMembershipCount).toBe(1)
 
     dockerPsql(`update semantic_topic_membership set valid_to = now() where id = '${memA}';`)
     const afterDeactivateBoth = callRpc(topicId)
-    expect(afterDeactivateBoth.knownIndependentSourceCount).toBe(0)
+    expect(afterDeactivateBoth.eligibleDistinctSourceIdentityCount).toBe(0)
   })
 
   // ------------------------------------------------------------
@@ -736,13 +784,22 @@ describeIfLocalDb('Semantic Topic Identity v0 -- compute_topic_evidence_vector (
   })
 
   // ------------------------------------------------------------
-  // 17. Migration applied twice is a byte-exact no-op
+  // 17. Migration 085 standalone reapply now correctly detects the later,
+  // authorized 086 replacement -- 085's own VALIDATE branch and final
+  // self-check are pinned to 085's OWN original hash (f08afed6a21ebf4af78
+  // cd6ecfd92025c); migration 086 (Lifecycle Foundation Correctness v1)
+  // legitimately CREATE OR REPLACEs compute_topic_evidence_vector's body
+  // (eligible-source-identity correctness). A standalone 085 reapply is
+  // therefore expected to fail closed here, exactly like 074's and 078's
+  // own standalone-reapply guarantees after 086 (see
+  // semantic-topic-s2b-writer-rpcs-db-integration.test.ts and
+  // semantic-topic-human-review-rpcs-db-integration.test.ts for the
+  // parallel cases) -- proving the fail-closed guard still fires for a real
+  // drift, not silently accepting it.
   // ------------------------------------------------------------
-  it('17. re-applying migration 085 is a byte-exact no-op', () => {
+  it('17. migration 085 standalone reapply correctly fails closed once 086 has legitimately replaced its function body', () => {
     const result = runMigration(MIGRATION_085_PATH)
-    expect(result.threw).toBe(false)
-    expect(result.out).toMatch(/compute_topic_evidence_vector already exists and matches exactly -- no-op\./)
-    expect(result.out).toMatch(/final self-check passed/)
-    expect(result.out).not.toMatch(/drift/i)
+    expect(result.threw).toBe(true)
+    expect(result.out).toMatch(/085 drift: compute_topic_evidence_vector body hash does not match exactly/)
   })
 })

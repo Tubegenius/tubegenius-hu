@@ -374,10 +374,26 @@ describeIfLocalDb('Semantic Topic Identity v0 — Human Review schema foundation
   })
 
   // ============================================================
-  // 4/17. record_topic_assignment_decision (074) completely untouched.
+  // 4/17. record_topic_assignment_decision (074) -- signature/ACL
+  // unchanged; body is the 086 eligible-source-identity-corrected version.
+  // Migration 086 (Lifecycle Foundation Correctness v1) legitimately
+  // CREATE OR REPLACEs this function's body (the raw active-membership
+  // count(*) used for candidate_singleton -> corroborating is replaced by a
+  // call into the shared _semantic_topic_eligible_membership_sources()
+  // helper) -- 077's own original "completely untouched" framing predates
+  // that later, separately audited migration.
   // ============================================================
   describe('existing assignment writer RPC (074) unchanged', () => {
     it('body hash, signature and ACL are byte-identical to the pinned 074 values', () => {
+      // Guarantee the 086-corrected body is live before asserting its hash,
+      // regardless of which other DB-integration test files (sharing this
+      // same local Postgres) already ran and may have temporarily reverted
+      // it for their own isolated 074-vs-itself checks.
+      const migrate086 = execSync(
+        'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+        { input: readFileSync(join(process.cwd(), 'supabase/migrations/086_semantic_topic_eligible_source_identity_correctness.sql'), 'utf8'), encoding: 'utf8' },
+      )
+      if (/ERROR/i.test(migrate086)) throw new Error(`086 reapply failed -- ${migrate086}`)
       const row = dockerPsql(`
         select md5(replace(prosrc, E'\\r\\n', E'\\n')) || '|' || pg_get_function_identity_arguments(oid) || '|' ||
                has_function_privilege('postgres', oid, 'EXECUTE')::text || '|' ||
@@ -387,7 +403,7 @@ describeIfLocalDb('Semantic Topic Identity v0 — Human Review schema foundation
         from pg_proc where oid = 'public.record_topic_assignment_decision(uuid, text, text, jsonb, text, uuid)'::regprocedure;
       `).trim()
       const [hash, args, pg, svc, anon, authd] = row.split('|')
-      expect(hash).toBe('759de5ab474c9a7aa105564ca95541cc')
+      expect(hash).toBe('9e681c94870719a0a7cb4605de458baf')
       expect(args).toBe('p_extraction_run_id uuid, p_outcome text, p_decision_reason text, p_deterministic_signals jsonb, p_idempotency_key text, p_existing_semantic_topic_id uuid')
       expect(pg).toBe('true')
       expect(svc).toBe('true')

@@ -110,8 +110,22 @@ describeIfLocalDb('Semantic Topic Identity v0 -- post-suite schema fingerprint (
     if (result.threw) throw new Error(`forceBothCorrected: 076 apply failed -- ${result.out}`)
   }
 
-  it('074/076: record_topic_extraction_run and record_topic_assignment_decision -- exact 076-corrected hash, self-healed, unchanged ACL', () => {
+  // Same self-healing rationale as forceBothCorrected() above, for
+  // record_topic_assignment_decision -- migration 086 (Lifecycle Foundation
+  // Correctness v1) legitimately CREATE OR REPLACEs it (eligible-source-
+  // identity-based candidate_singleton -> corroborating enforcement,
+  // replacing the raw active-membership count(*)). Unlike 074/075/076's
+  // hand-extracted-body self-heal, this one simply re-applies 086's own
+  // (already fully idempotent, fail-closed) migration file directly.
+  function forceAssignmentDecisionCorrected(): void {
+    const migration086 = readFileSync(join(process.cwd(), 'supabase/migrations/086_semantic_topic_eligible_source_identity_correctness.sql'), 'utf8')
+    const out = execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1', { input: migration086, encoding: 'utf8' })
+    if (/ERROR/i.test(out)) throw new Error(`forceAssignmentDecisionCorrected: 086 apply failed -- ${out}`)
+  }
+
+  it('074/076/086: record_topic_extraction_run (076-corrected) and record_topic_assignment_decision (086-corrected) -- exact hash, self-healed, unchanged ACL', () => {
     forceBothCorrected()
+    forceAssignmentDecisionCorrected()
     const rows = dockerPsql(`
       select p.proname || '|' || md5(replace(p.prosrc, E'\\r\\n', E'\\n')) || '|' ||
         (has_function_privilege('service_role', p.oid, 'EXECUTE'))::text || '|' ||
@@ -123,7 +137,7 @@ describeIfLocalDb('Semantic Topic Identity v0 -- post-suite schema fingerprint (
     `).trim().split('\n')
     expect(rows).toHaveLength(2)
     const expected: Record<string, string> = {
-      record_topic_assignment_decision: '759de5ab474c9a7aa105564ca95541cc', // never touched by 076, always this hash
+      record_topic_assignment_decision: '9e681c94870719a0a7cb4605de458baf', // untouched by 076; CREATE OR REPLACEd by 086 (eligible-source-identity correctness)
       record_topic_extraction_run: 'ef55f0b83d78d001d9e2f903f434c79f',
     }
     for (const row of rows) {
