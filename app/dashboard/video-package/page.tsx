@@ -14,7 +14,14 @@ import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
 import TagPill from '@/components/video-package/TagPill'
 import PlatformChecklistCard from '@/components/video-package/PlatformChecklistCard'
-import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2, Image, Pin, Send, PlayCircle, Globe } from 'lucide-react'
+import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2, Image, Pin, Send, PlayCircle, Globe, Sparkles } from 'lucide-react'
+import {
+  CREATOR_STUDIO_FORMATS,
+  CREATOR_STUDIO_GOALS,
+  resolveCreatorStudioFormat,
+  resolveCreatorStudioGoal,
+  resolveCreatorStudioLane,
+} from '@/lib/creator-studio-presentation'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -299,14 +306,17 @@ function SelectGroup({ options, value, onChange }: { options: { value: string; l
 export default function VideoPackagePage() {
   const searchParams = useSearchParams()
   const supabase = createClient()
+  const incomingStudioFormat = resolveCreatorStudioFormat(searchParams.get('platform'))
+  const incomingStudioGoal = resolveCreatorStudioGoal(searchParams.get('goal'))
+  const incomingStudioLane = resolveCreatorStudioLane(searchParams.get('creator_lane'))
 
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [topic, setTopic] = useState(searchParams.get('topic') || '')
-  const [platform, setPlatform] = useState('youtube_long')
-  const [videoLength, setVideoLength] = useState('6-10min')
+  const [platform, setPlatform] = useState<string>(incomingStudioFormat ? CREATOR_STUDIO_FORMATS[incomingStudioFormat].platform : 'youtube_long')
+  const [videoLength, setVideoLength] = useState<string>(incomingStudioFormat ? CREATOR_STUDIO_FORMATS[incomingStudioFormat].videoLength : '6-10min')
   const [narrationStyle, setNarrationStyle] = useState('storytelling')
   const [intensity, setIntensity] = useState('classic')
-  const [goal, setGoal] = useState('views')
+  const [goal, setGoal] = useState<string>(incomingStudioGoal ?? 'views')
   const [customPrompt, setCustomPrompt] = useState('')
 
   const [loading, setLoading] = useState(false)
@@ -999,6 +1009,17 @@ export default function VideoPackagePage() {
         <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🎬 Gyártási csomag</h1>
         <p className="text-sm" style={{ color: '#CBD5E1' }}>Platformra szabott, teljes videócsomag — a Creator Profile alapján.</p>
       </div>
+
+      {sourceContext === 'creator_studio' && incomingStudioLane && incomingStudioFormat && incomingStudioGoal && (
+        <div className="wv-video-studio-inheritance" role="status">
+          <Sparkles aria-hidden="true" />
+          <div>
+            <span>Creator Studio projektöröklés</span>
+            <strong>{incomingStudioLane === 'evidence' ? 'Bizonyítékvezérelt' : 'Élményvezérelt'} · {CREATOR_STUDIO_FORMATS[incomingStudioFormat].label} · {CREATOR_STUDIO_GOALS[incomingStudioGoal]}</strong>
+            <p>A téma, a formátum és az elsődleges cél átérkezett. Generálás előtt minden beállítást módosíthatsz.</p>
+          </div>
+        </div>
+      )}
 
       {/* Profil badge — ez a csatorna ÁLLANDÓ alapbeállítása, NEM az aktuálisan
           gyártott téma kontextusa. A kettő eltérhet (pl. profil niche "AI és
