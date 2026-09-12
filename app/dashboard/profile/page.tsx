@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
+import { ArrowRight, CheckCircle2, CircleAlert, Compass, Facebook, Globe2, Instagram, Layers3, Save, ShieldCheck, Sparkles, Target, UserRound, Youtube, Zap, type LucideIcon } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 import { NARRATION_STYLES } from '@/types'
 import type { Platform, Language, CreatorLevel, VideoLength, Region, NarrationStyle } from '@/types'
 import { MAIN_CATEGORIES, categoryLabel, type MainCategory } from '@/lib/search/search-context'
@@ -12,6 +14,7 @@ import type { ChannelSnapshot } from '@/lib/competitor-tracker'
 import { candidatesForActiveChannel, isNicheReviewRequired } from '@/lib/channel-scope'
 import NicheReviewBanner from '@/components/dashboard/NicheReviewBanner'
 import OnboardingStepper from '@/components/dashboard/OnboardingStepper'
+import { CREATOR_PROFILE_LANE_GUIDE, creatorProfileMarketLabel, deriveCreatorProfileFocus } from '@/lib/creator-profile-presentation'
 
 const channelUsageModes: { value: ChannelUsageMode; label: string; desc: string }[] = [
   { value: 'primary_profile', label: 'A csatornám legyen a fő profilom alapja', desc: 'A WillViral a csatornád eddigi videói alapján személyre szabja az ajánlásokat.' },
@@ -27,11 +30,11 @@ function connectionTypeBadge(type: ChannelConnectionType | null): { text: string
   return null
 }
 
-const platforms: { value: Platform; label: string; icon: string }[] = [
-  { value: 'youtube', label: 'YouTube', icon: '▶️' },
-  { value: 'tiktok', label: 'TikTok', icon: '🎵' },
-  { value: 'instagram', label: 'Instagram', icon: '📸' },
-  { value: 'facebook', label: 'Facebook', icon: '👥' },
+const platforms: { value: Platform; label: string; icon: LucideIcon }[] = [
+  { value: 'youtube', label: 'YouTube', icon: Youtube },
+  { value: 'tiktok', label: 'TikTok', icon: Zap },
+  { value: 'instagram', label: 'Instagram', icon: Instagram },
+  { value: 'facebook', label: 'Facebook', icon: Facebook },
 ]
 
 const creatorLevels: { value: CreatorLevel; label: string; desc: string }[] = [
@@ -48,8 +51,8 @@ const videoLengths: { value: VideoLength; label: string; desc: string }[] = [
 ]
 
 export default function ProfilePage() {
-  const router = useRouter()
   const searchParams = useSearchParams()
+  const { creatorLane, setCreatorLane } = useCreatorOS()
   const [isOnboardingMode, setIsOnboardingMode] = useState(() => searchParams.get('onboarding') === '1')
   // A profil `onboarding_completed` mezője — csak a guided-mode
   // eldöntéséhez kell, a stepper mezőit/handleSave-et nem érinti.
@@ -212,15 +215,16 @@ export default function ProfilePage() {
     setTimeout(() => { window.location.href = '/dashboard?setup=complete' }, 1000)
   }
 
-  async function handleResolveChannel() {
-    if (!channelInputValue.trim()) return
+  async function handleResolveChannel(inputOverride?: string) {
+    const channelInput = (inputOverride ?? channelInputValue).trim()
+    if (!channelInput) return
     setResolving(true)
     setResolveError(null)
     setResolvePreview(null)
     const res = await fetch('/api/youtube/resolve-channel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: channelInputValue.trim() }),
+      body: JSON.stringify({ input: channelInput }),
     })
     const data = await res.json()
     setResolving(false)
@@ -308,8 +312,9 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-6 h-6 border-2 border-violet border-t-transparent rounded-full animate-spin" />
+      <div className="wv-destination wv-profile">
+        <header className="wv-page-heading"><div><span className="wv-eyebrow">Creator Profile</span><h1>Az alkotói profil összeáll…</h1></div></header>
+        <section className="wv-profile-loading" aria-label="Creator Profile betöltése"><i /><div><span /><span /><span /></div></section>
       </div>
     )
   }
@@ -320,20 +325,20 @@ export default function ProfilePage() {
   // változik, csak a JSX elrendezés.
 
   const channelNameCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <label className="block text-sm font-medium text-text-secondary mb-1.5">Csatorna neve</label>
       <input value={channelName} onChange={e => setChannelName(e.target.value)} placeholder="pl. Mr.MexBrain" className="input" />
     </div>
   )
 
   const platformCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <p className="text-sm font-medium text-text-secondary mb-3">Fő platform</p>
       <div className="grid grid-cols-2 gap-2">
         {platforms.map(p => (
           <button key={p.value} type="button" onClick={() => setPlatform(p.value)}
             className={`flex items-center gap-2.5 px-4 py-3 rounded-lg border text-sm font-medium transition-all duration-150 ${platform === p.value ? 'bg-violet/10 border-violet/40 text-violet' : 'bg-surface-2 border-border text-text-secondary hover:border-border-2'}`}>
-            <span>{p.icon}</span>{p.label}
+            <p.icon aria-hidden="true" />{p.label}
           </button>
         ))}
       </div>
@@ -341,7 +346,7 @@ export default function ProfilePage() {
   )
 
   const contentDirectionCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <p className="text-sm font-medium text-text-secondary mb-1">Milyen tartalomirányban keressünk lehetőséget?</p>
       <p className="text-text-muted text-xs mb-4">Minél konkrétabb a fókusz, annál pontosabb trendtémákat kapsz.</p>
 
@@ -386,7 +391,7 @@ export default function ProfilePage() {
   )
 
   const narrationCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <p className="text-sm font-medium text-text-secondary mb-1">Alapértelmezett narrációs stílus</p>
       <p className="text-text-muted text-xs mb-3">Minden videócsomag generálásnál ezt a stílust használjuk.</p>
       <div className="grid grid-cols-2 gap-2">
@@ -406,7 +411,7 @@ export default function ProfilePage() {
   )
 
   const creatorLevelCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <p className="text-sm font-medium text-text-secondary mb-3">Creator szint</p>
       <div className="grid grid-cols-2 gap-2">
         {creatorLevels.map(l => (
@@ -421,7 +426,7 @@ export default function ProfilePage() {
   )
 
   const videoLengthCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <p className="text-sm font-medium text-text-secondary mb-3">Videó hossza</p>
       <div className="grid grid-cols-3 gap-2">
         {videoLengths.map(l => (
@@ -436,7 +441,7 @@ export default function ProfilePage() {
   )
 
   const regionCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <p className="text-sm font-medium text-text-secondary mb-3">Piaci fókusz</p>
       <div className="grid grid-cols-3 gap-2">
         {[
@@ -444,7 +449,8 @@ export default function ProfilePage() {
           { value: 'US', label: '🌍 Globális', desc: 'EN piac' },
           { value: 'BOTH', label: '🌐 Mindkettő', desc: 'Hamarosan', disabled: true },
         ].map(r => (
-          <button key={r.value} type="button" onClick={() => {
+          <button key={r.value} type="button" disabled={r.disabled} onClick={() => {
+            if (r.disabled) return
             setRegion(r.value as Region)
             // A régió és a keresési nyelv legyen mindig konzisztens —
             // eltérő régió/nyelv kombináció gyengítette a Serper/YouTube
@@ -463,7 +469,7 @@ export default function ProfilePage() {
   )
 
   const subscriberCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <label className="block text-sm font-medium text-text-secondary mb-1.5">Feliratkozók száma (opcionális)</label>
       <input type="number" value={subscriberCount} onChange={e => setSubscriberCount(e.target.value)} placeholder="pl. 3100" className="input" min="0" />
     </div>
@@ -500,7 +506,7 @@ export default function ProfilePage() {
           )}
 
           <div className="flex flex-wrap gap-2 mt-3">
-            <button type="button" onClick={() => { setChannelInputValue(connectedChannel.channelUrl || connectedChannel.channelId || ''); handleResolveChannel() }} disabled={resolving} className="btn-secondary text-xs px-3 py-1.5">
+            <button type="button" onClick={() => { const channelInput = connectedChannel.channelUrl || connectedChannel.channelId || ''; setChannelInputValue(channelInput); void handleResolveChannel(channelInput) }} disabled={resolving} className="btn-secondary text-xs px-3 py-1.5">
               Újraelemzés
             </button>
             <button type="button" onClick={() => setPickerOpen(true)} className="btn-secondary text-xs px-3 py-1.5">
@@ -553,7 +559,7 @@ export default function ProfilePage() {
               <div className="flex gap-2">
                 <input value={channelInputValue} onChange={e => setChannelInputValue(e.target.value)}
                   placeholder="pl. youtube.com/@csatornaneved" className="input flex-1" />
-                <button type="button" onClick={handleResolveChannel} disabled={resolving || !channelInputValue.trim()} className="btn-secondary text-sm px-4 whitespace-nowrap">
+                <button type="button" onClick={() => void handleResolveChannel()} disabled={resolving || !channelInputValue.trim()} className="btn-secondary text-sm px-4 whitespace-nowrap">
                   {resolving ? 'Keresés...' : 'Csatorna elemzése'}
                 </button>
               </div>
@@ -590,7 +596,7 @@ export default function ProfilePage() {
       )}
     </>
   )
-  const youtubeChannelCard = <div className="card">{youtubeChannelCardInner}</div>
+  const youtubeChannelCard = <div className="card wv-profile-card">{youtubeChannelCardInner}</div>
 
   const nicheValidationContent = (
     <>
@@ -605,7 +611,7 @@ export default function ProfilePage() {
       )}
 
       {nicheCandidates && nicheCandidates.length > 0 && (
-        <div className="card">
+        <div className="card wv-profile-card">
           <p className="text-sm font-medium text-text-secondary mb-2">Lehetséges tartalomirányok a csatornád alapján</p>
           <div className="space-y-2">
             {nicheCandidates.map((c, i) => (
@@ -623,7 +629,7 @@ export default function ProfilePage() {
       )}
 
       {!nicheNeedsReview && !(nicheCandidates && nicheCandidates.length > 0) && (
-        <div className="card flex items-center gap-2">
+        <div className="card wv-profile-card flex items-center gap-2">
           <span className="text-emerald">✓</span>
           <p className="text-sm text-text-secondary">A niche-ed rendben van, nincs teendő.</p>
         </div>
@@ -632,7 +638,7 @@ export default function ProfilePage() {
   )
 
   const avoidTopicsCard = (
-    <div className="card">
+    <div className="card wv-profile-card">
       <label className="block text-sm font-medium text-text-secondary mb-1.5">Kerülendő témák (opcionális)</label>
       <input value={avoidTopics} onChange={e => setAvoidTopics(e.target.value)}
         placeholder="Pl. politika, bulvár, egészségügyi tanácsadás" className="input" />
@@ -640,7 +646,7 @@ export default function ProfilePage() {
   )
 
   const customPromptCard = narrationStyle === 'sajat' ? (
-    <div className="card">
+    <div className="card wv-profile-card">
       <label className="block text-sm font-medium text-text-secondary mb-1.5">Egyéni narrációs prompt</label>
       <p className="text-text-muted text-xs mb-2">A Creator Profile-nál kiválasztott „Saját” narrációs stílushoz tartozó szöveg.</p>
       <textarea
@@ -654,8 +660,8 @@ export default function ProfilePage() {
   ) : null
 
   const submitButton = (
-    <button type="submit" disabled={saving} className="btn-primary w-full">
-      {saving ? 'Mentés...' : saved ? '✓ Mentve — visszairányítás...' : 'Profil mentése'}
+    <button type="submit" disabled={saving} className="wv-primary-action w-full">
+      {saving ? 'Mentés…' : saved ? 'Mentve — visszairányítás…' : 'Profil mentése'}<Save aria-hidden="true" />
     </button>
   )
 
@@ -669,64 +675,67 @@ export default function ProfilePage() {
     { key: 'market', label: 'Piac és preferenciák', content: <>{regionCard}{subscriberCard}{avoidTopicsCard}{customPromptCard}</> },
   ]
 
+  const profileFocus = deriveCreatorProfileFocus({ specificFocus, nicheNeedsReview })
+  const creatorLevelLabel = creatorLevels.find(item => item.value === creatorLevel)?.label || creatorLevel
+  const platformLabel = platforms.find(item => item.value === platform)?.label || platform
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-text-primary mb-1">Creator Profil</h1>
-        <p className="text-text-secondary text-sm">
-          Ezek alapján személyre szabjuk az összes elemzést és generálást.
-        </p>
-      </div>
+    <div className="wv-destination wv-profile" data-creator-lane={creatorLane}>
+      <header className="wv-page-heading"><div><span className="wv-eyebrow">Creator Profile</span><h1>Innen lesz a platform valóban a tiéd.</h1></div><span className="wv-heading-meta">alkotói identitás<br />személyre szabott rendszer</span></header>
 
       {error && (
-        <div className="mb-5 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5' }}>
-          <i className="ti ti-alert-circle" />
-          <span>{error}</span>
+        <div className="wv-profile-alert" role="alert">
+          <CircleAlert aria-hidden="true" /><span><strong>A profil most nem menthető.</strong>{error}</span>
         </div>
       )}
 
-      <form onSubmit={handleSave} className="space-y-8">
+      <section className="wv-profile-stage" aria-label="Aktív alkotói profil és következő döntés">
+        <div className="wv-profile-identity">
+          <div className="wv-profile-avatar">{connectedChannel?.avatarUrl ? <img src={connectedChannel.avatarUrl} alt={connectedChannel.channelName || 'Csatorna'} /> : <UserRound aria-hidden="true" />}<i aria-hidden="true" /></div>
+          <div className="wv-profile-identity-copy"><span className="wv-eyebrow">Aktív alkotói identitás</span><h2>{channelName || connectedChannel?.channelName || 'A csatornád karaktere'}</h2>{connectedChannel?.handle && <a href={connectedChannel.channelUrl || '#'} target="_blank" rel="noopener noreferrer">@{connectedChannel.handle}</a>}<p>{specificFocus || 'A konkrét tartalmi fókusz megadásával válik személyessé a lehetőségkeresés és az alkotói workflow.'}</p></div>
+          <div className="wv-profile-facts"><div><span>Fő platform</span><strong>{platformLabel}</strong></div><div><span>Piaci fókusz</span><strong>{creatorProfileMarketLabel(region, language)}</strong></div><div><span>Creator szint</span><strong>{creatorLevelLabel}</strong></div></div>
+        </div>
+        <div className={`wv-profile-focus state-${profileFocus.kind}`}>
+          <span className="wv-profile-focus-index"><Target aria-hidden="true" />01</span><div><span className="wv-eyebrow">{profileFocus.label}</span><h2>{profileFocus.title}</h2><p>{profileFocus.description}</p></div>
+          <a href={profileFocus.kind === 'niche_review' ? '#niche-review' : '#profile-direction'} className="wv-primary-action">{profileFocus.kind === 'niche_review' ? 'Niche-döntés megnyitása' : profileFocus.kind === 'needs_focus' ? 'Fókusz megadása' : 'Profil finomhangolása'}<ArrowRight aria-hidden="true" /></a>
+        </div>
+      </section>
+
+      <section className="wv-profile-lanes" aria-labelledby="wv-profile-lanes-title">
+        <header><div><span className="wv-eyebrow">Két Creator Lane</span><h2 id="wv-profile-lanes-title">Két alkotói logika. Egy közös platformmag.</h2></div><span>Az aktuális projekt dönti el, melyik Lane vezeti a munkát.</span></header>
+        <div>{(['evidence', 'entertainment'] as const).map((lane, index) => {
+          const guide = CREATOR_PROFILE_LANE_GUIDE[lane]
+          return <button key={lane} type="button" aria-pressed={creatorLane === lane} onClick={() => setCreatorLane(lane)}><span>{String(index + 1).padStart(2, '0')}</span><div><small>{guide.label}</small><h3>{guide.headline}</h3><p>{guide.role}</p><div>{guide.signals.map(signal => <em key={signal}>{signal}</em>)}</div></div>{creatorLane === lane && <CheckCircle2 aria-hidden="true" />}</button>
+        })}</div>
+        <p><ShieldCheck aria-hidden="true" /><span><strong>Ez munkanézet, nem globális korlátozás.</strong>Itt összehasonlíthatod a két alkotói logikát; a valódi Lane minden új projekt indításakor dől el.</span></p>
+      </section>
+
+      <form onSubmit={handleSave} className="wv-profile-form">
         {isOnboardingMode ? (
-          <OnboardingStepper steps={onboardingSteps} submitSlot={submitButton} />
+          <section className="wv-profile-onboarding"><OnboardingStepper steps={onboardingSteps} submitSlot={submitButton} /></section>
         ) : (
           <>
-            {/* ══ 1. Creator Profile ══ */}
-            <section>
-              <p className="section-label mb-3">Creator Profile</p>
-              <div className="space-y-6">
-                {channelNameCard}
-                {platformCard}
-                {contentDirectionCard}
-                {narrationCard}
-                {creatorLevelCard}
-                {videoLengthCard}
-                {regionCard}
-                {subscriberCard}
-              </div>
+            <section className="wv-profile-section" id="profile-identity">
+              <header><span>01</span><div><small>Identitás</small><h2>Hogyan jelenik meg az alkotói profilod?</h2></div><UserRound aria-hidden="true" /></header>
+              <div className="wv-profile-grid">{channelNameCard}{platformCard}{creatorLevelCard}{subscriberCard}</div>
             </section>
-
-            {/* ══ 2. YouTube Channel ══ */}
-            <section>
-              <p className="section-label mb-3">YouTube Channel</p>
+            <section className="wv-profile-section" id="profile-direction">
+              <header><span>02</span><div><small>Tartalmi irány</small><h2>Hol keressen neked valódi lehetőséget a rendszer?</h2></div><Compass aria-hidden="true" /></header>
+              <div className="wv-profile-direction-grid">{contentDirectionCard}<div className="wv-profile-niche-state">{nicheValidationContent}</div></div>
+            </section>
+            <section className="wv-profile-section" id="profile-channel">
+              <header><span>03</span><div><small>Csatornakapcsolat</small><h2>A publikus identitás és a privát analitika külön réteg.</h2></div><Youtube aria-hidden="true" /></header>
               {youtubeChannelCard}
             </section>
-
-            {/* ══ 3. Niche Validation Status ══ */}
-            <section>
-              <p className="section-label mb-3">Niche Validation Status</p>
-              {nicheValidationContent}
+            <section className="wv-profile-section" id="profile-voice">
+              <header><span>04</span><div><small>Hang és forma</small><h2>A megszólalás ritmusa illeszkedjen hozzád.</h2></div><Sparkles aria-hidden="true" /></header>
+              <div className="wv-profile-grid">{narrationCard}{videoLengthCard}</div>
             </section>
-
-            {/* ══ 4. Preferences ══ */}
-            <section>
-              <p className="section-label mb-3">Preferences</p>
-              <div className="space-y-6">
-                {avoidTopicsCard}
-                {customPromptCard}
-              </div>
+            <section className="wv-profile-section" id="profile-market">
+              <header><span>05</span><div><small>Piac és határok</small><h2>Hol keressünk, és mit hagyjunk tudatosan kívül?</h2></div><Globe2 aria-hidden="true" /></header>
+              <div className="wv-profile-grid">{regionCard}{avoidTopicsCard}{customPromptCard}</div>
             </section>
-
-            {submitButton}
+            <div className="wv-profile-save-rail"><span>{saved ? <CheckCircle2 aria-hidden="true" /> : <Layers3 aria-hidden="true" />}<span><strong>{saved ? 'A profil mentve.' : 'A változtatások mentésre készek.'}</strong><small>A mentés a meglévő profilmezőket frissíti.</small></span></span>{submitButton}</div>
           </>
         )}
       </form>
