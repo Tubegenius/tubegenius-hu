@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import PublishKitFrame from '@/components/publish-kit/PublishKitFrame'
+import { AlertTriangle, Bookmark, Check, Gauge, Info, PenLine, Sparkles, WandSparkles } from 'lucide-react'
 
 interface TitleVariation {
   title: string
@@ -26,14 +28,11 @@ interface TitleVariation {
 const TITLE_STUDIO_COST = 1
 
 function ScoreBar({ label, value }: { label: string; value: number }) {
-  const color = value >= 70 ? '#22C55E' : value >= 40 ? '#F59E0B' : '#EF4444'
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-24 flex-shrink-0" style={{ color: '#94A3B8' }}>{label}</span>
-      <div className="flex-1 h-1.5 rounded-full" style={{ background: '#121826' }}>
-        <div className="h-full rounded-full" style={{ width: `${value}%`, background: color }} />
-      </div>
-      <span className="w-8 text-right font-medium" style={{ color: '#F8FAFC' }}>{value}</span>
+    <div className="wv-publish-score">
+      <span>{label}</span>
+      <div><i style={{ width: `${value}%` }} /></div>
+      <strong>{value}</strong>
     </div>
   )
 }
@@ -47,6 +46,7 @@ export default function TitleStudioPage() {
   const [variations, setVariations] = useState<TitleVariation[] | null>(null)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const [savedTitles, setSavedTitles] = useState<Set<string>>(new Set())
+  const [acceptedTitle, setAcceptedTitle] = useState('')
   const [fromPaidResult, setFromPaidResult] = useState(false)
   const [paidResultId, setPaidResultId] = useState<string | null>(null)
 
@@ -59,6 +59,13 @@ export default function TitleStudioPage() {
       loadPaidResult(paidResultId)
       return
     }
+    const incomingTopic = searchParams.get('topic')
+    const incomingTitle = searchParams.get('existingTitle')
+    if (incomingTopic || incomingTitle) {
+      if (incomingTopic) setTopic(incomingTopic)
+      if (incomingTitle) setExistingTitle(incomingTitle)
+      return
+    }
     const saved = sessionStorage.getItem('willviral_title_studio_state')
     if (saved) {
       try {
@@ -67,6 +74,7 @@ export default function TitleStudioPage() {
         if (state.existingTitle) setExistingTitle(state.existingTitle)
         if (state.variations) setVariations(state.variations)
         if (state.paidResultId) setPaidResultId(state.paidResultId)
+        if (state.acceptedTitle) setAcceptedTitle(state.acceptedTitle)
       } catch {}
     }
   }, [])
@@ -131,6 +139,7 @@ export default function TitleStudioPage() {
         return
       }
       setVariations(data.variations)
+      setAcceptedTitle('')
       setTopic(data.topic || topic.trim())
       setPaidResultId(data.paid_result_id || null)
       sessionStorage.setItem('willviral_title_studio_state', JSON.stringify({
@@ -154,114 +163,78 @@ export default function TitleStudioPage() {
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.error || 'A cím mentése sikertelen.')
       setSavedTitles(prev => new Set(prev).add(title))
+      setAcceptedTitle(title)
+      try {
+        const current = JSON.parse(sessionStorage.getItem('willviral_title_studio_state') || '{}')
+        sessionStorage.setItem('willviral_title_studio_state', JSON.stringify({ ...current, acceptedTitle: title }))
+      } catch {}
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'A cím mentése sikertelen.')
     }
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {creditCheck && (
-        <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => setCreditCheck(null)} loading={loading} />
-      )}
+    <PublishKitFrame
+      active="title"
+      title="A kattintás előtti első ígéret."
+      description="Öt eltérő címirány egyetlen témára. Nem automatikus győztest választunk: megmutatjuk, melyik megközelítés mit erősít és mit kockáztat."
+      topic={topic}
+      existingTitle={acceptedTitle || existingTitle}
+    >
+      {creditCheck && <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => setCreditCheck(null)} loading={loading} />}
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>✏️ Title Studio</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>5 címvariáció szubjektív AI csomagolási értékeléssel — ez nem mért CTR vagy kattintás-előrejelzés.</p>
-      </div>
-
-      <div className="card mb-6 space-y-3">
-        <input
-          value={topic}
-          onChange={e => setTopic(e.target.value)}
-          placeholder="Miről szól a videó?"
-          className="w-full px-4 py-2.5 rounded-lg text-sm"
-          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
-          maxLength={300}
-        />
-        <input
-          value={existingTitle}
-          onChange={e => setExistingTitle(e.target.value)}
-          placeholder="Van már egy cím-ötleted? (opcionális)"
-          className="w-full px-4 py-2.5 rounded-lg text-sm"
-          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
-          maxLength={100}
-        />
-        <button onClick={runGenerate} disabled={loading || !topic.trim()} className="btn-primary w-full">
-          {loading ? 'Generálás...' : 'Címvariációk generálása'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
-          <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+      <section className="wv-publish-composer" aria-labelledby="wv-title-brief-title">
+        <header>
+          <div><span>01</span><div><small>Címbrief</small><h2 id="wv-title-brief-title">Rögzítsd a nézői ígéretet.</h2></div></div>
+          <aside><PenLine aria-hidden="true" /><span><small>Generálás ára</small><strong>1 kredit</strong></span></aside>
+        </header>
+        <div className="wv-publish-fields">
+          <label className="is-primary"><span>Videó témája</span><input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Miről szól a videó?" maxLength={300} /><small>Ez tartja egy irányban mind az öt változatot.</small></label>
+          <label><span>Meglévő címötlet <i>opcionális</i></span><input value={existingTitle} onChange={event => setExistingTitle(event.target.value)} placeholder="Ha van kiinduló címed, innen finomítjuk" maxLength={100} /><small>Nem kötelező; valódi alternatívákat kapsz mellé.</small></label>
         </div>
-      )}
+        <footer>
+          <div><Info aria-hidden="true" /><span><strong>Csomagolási értékelés</strong><small>Nem mért CTR és nem kattintás-előrejelzés.</small></span></div>
+          <button type="button" onClick={runGenerate} disabled={loading || !topic.trim()}>{loading ? <><i />Dolgozunk a címeken</> : <><WandSparkles aria-hidden="true" />5 címirány készítése<span>1 kredit</span></>}</button>
+        </footer>
+      </section>
 
-      {loading && (
-        <div className="card">
-          <LoadingScreen steps={LOADING_STEPS.titleStudio} />
-        </div>
-      )}
-
-      {fromPaidResult && variations && (
-        <div className="rounded-xl px-4 py-3 mb-3" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
-          <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>Mentett eredmény betöltve</p>
-          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Nem vontunk le új kreditet.</p>
-        </div>
-      )}
+      {error && <div className="wv-publish-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span><strong>A címcsomag most nem készíthető el.</strong>{error}</span></div>}
+      {loading && <div className="wv-publish-loading"><LoadingScreen steps={LOADING_STEPS.titleStudio} /></div>}
+      {fromPaidResult && variations && <div className="wv-publish-alert is-saved"><Check aria-hidden="true" /><span><strong>Mentett címcsomag betöltve.</strong>Nem vontunk le új kreditet.</span></div>}
 
       {variations && (
-        <div className="space-y-3">
-          {variations.map((v, i) => (
-            <div key={i} className="card-hover">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <h3 className="font-medium text-sm flex-1" style={{ color: '#F8FAFC' }}>{v.title}</h3>
-                <button
-                  onClick={() => saveTitle(v.title)}
-                  disabled={savedTitles.has(v.title)}
-                  className="text-xs px-3 py-1.5 rounded-lg whitespace-nowrap flex-shrink-0"
-                  style={{ background: savedTitles.has(v.title) ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.1)', border: `1px solid ${savedTitles.has(v.title) ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)'}`, color: savedTitles.has(v.title) ? '#22C55E' : '#3B82F6' }}
-                >
-                  {savedTitles.has(v.title) ? '✓ Mentve' : '📌 Mentés'}
-                </button>
-              </div>
-
-              <div className="space-y-1.5 mb-3">
-                <ScoreBar label="Kíváncsiság" value={v.curiosity_score} />
-                <ScoreBar label="Világosság" value={v.clarity_score} />
-                <ScoreBar label="AI-vonzerő" value={v.clickability_score} />
-                <ScoreBar label="Clickbait-kockázat" value={v.risk_score} />
-              </div>
-
-              <p className="text-xs mb-2" style={{ color: '#CBD5E1' }}>{v.reasoning}</p>
-
-              <div className="flex gap-1.5 flex-wrap">
-                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#121826', color: '#94A3B8' }}>{v.heuristics.length} karakter</span>
-                {v.heuristics.length_flag === 'too_long' && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>⚠️ Túl hosszú</span>
-                )}
-                {v.heuristics.length_flag === 'too_short' && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(245,158,11,0.1)', color: '#F59E0B' }}>Túl rövid</span>
-                )}
-                {v.heuristics.excessive_caps && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>⚠️ Túl sok nagybetű</span>
-                )}
-                {v.heuristics.clickbait_symbol_overuse && (
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)', color: '#EF4444' }}>⚠️ Túlzsúfolt írásjelek</span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
+        <section className="wv-publish-results" aria-labelledby="wv-title-results-title">
+          <header className="wv-publish-results-head"><div><span>02</span><div><small>Öt különböző döntés</small><h2 id="wv-title-results-title">Címirányok összehasonlítása</h2></div></div><span><Gauge aria-hidden="true" />AI-értékelés + objektív jelek</span></header>
+          <div className="wv-title-grid">
+            {variations.map((variation, index) => {
+              const saved = savedTitles.has(variation.title)
+              return (
+                <article key={variation.title} className={`${index === 0 ? 'is-lead ' : ''}${acceptedTitle === variation.title ? 'is-accepted' : ''}`.trim()}>
+                  <header><span>{String(index + 1).padStart(2, '0')}</span><div><small>{index === 0 ? 'Nyitó irány' : 'Alternatív irány'}</small><h3>{variation.title}</h3></div><button type="button" onClick={() => saveTitle(variation.title)} disabled={saved}>{saved ? <Check aria-hidden="true" /> : <Bookmark aria-hidden="true" />}<span>{saved ? 'Kiválasztva' : 'Kiválasztás'}</span></button></header>
+                  <div className="wv-title-score-grid">
+                    <ScoreBar label="Kíváncsiság" value={variation.curiosity_score} />
+                    <ScoreBar label="Világosság" value={variation.clarity_score} />
+                    <ScoreBar label="AI-vonzerő" value={variation.clickability_score} />
+                    <ScoreBar label="Túlígérés kockázata" value={variation.risk_score} />
+                  </div>
+                  <p>{variation.reasoning}</p>
+                  <footer>
+                    <span>{variation.heuristics.length} karakter</span>
+                    {variation.heuristics.length_flag === 'too_long' && <span className="is-risk">Túl hosszú</span>}
+                    {variation.heuristics.length_flag === 'too_short' && <span className="is-warn">Túl rövid</span>}
+                    {variation.heuristics.has_number && <span>Számot használ</span>}
+                    {variation.heuristics.has_question && <span>Kérdésforma</span>}
+                    {variation.heuristics.excessive_caps && <span className="is-risk">Túl sok nagybetű</span>}
+                    {variation.heuristics.clickbait_symbol_overuse && <span className="is-risk">Túl sok írásjel</span>}
+                  </footer>
+                </article>
+              )
+            })}
+          </div>
+        </section>
       )}
 
-      {!variations && !loading && (
-        <div className="card text-center py-12">
-          <p className="text-3xl mb-3">✏️</p>
-          <p style={{ color: '#CBD5E1' }}>Írd be a témát, és 5 különböző megközelítésű címet kapsz értékeléssel.</p>
-        </div>
-      )}
-    </div>
+      {!variations && !loading && <section className="wv-publish-empty"><span><Sparkles aria-hidden="true" /></span><small>A brief után</small><h2>Öt cím. Öt eltérő belépési pont.</h2><p>A rendszer külön mutatja a kíváncsiságot, a világosságot, a csomagolási vonzerőt és a túlígérés kockázatát.</p></section>}
+    </PublishKitFrame>
   )
 }

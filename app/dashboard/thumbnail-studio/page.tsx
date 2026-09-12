@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import PublishKitFrame from '@/components/publish-kit/PublishKitFrame'
+import { AlertTriangle, Bookmark, Check, Eye, Image, Info, Layers3, Sparkles, WandSparkles } from 'lucide-react'
 
 interface ThumbnailConcept {
   concept_label: string
@@ -27,6 +29,7 @@ const CLUTTER_LABELS: Record<string, { label: string; color: string }> = {
 
 export default function ThumbnailStudioPage() {
   const searchParams = useSearchParams()
+  const inheritedTitle = searchParams.get('existingTitle') || ''
   const [topic, setTopic] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -42,6 +45,11 @@ export default function ThumbnailStudioPage() {
     const paidResultId = searchParams.get('paidResultId')
     if (paidResultId) {
       loadPaidResult(paidResultId)
+      return
+    }
+    const incomingTopic = searchParams.get('topic')
+    if (incomingTopic) {
+      setTopic(incomingTopic)
       return
     }
     const saved = sessionStorage.getItem('willviral_thumbnail_studio_state')
@@ -142,98 +150,62 @@ export default function ThumbnailStudioPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {creditCheck && (
-        <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => setCreditCheck(null)} loading={loading} />
-      )}
+    <PublishKitFrame
+      active="thumbnail"
+      title="A vizuális ígéret, még a gyártás előtt."
+      description="Három valóban eltérő thumbnail-koncepció, hogy a kép ne díszítse, hanem azonnal érthetővé tegye a videó konfliktusát."
+      topic={topic}
+      existingTitle={inheritedTitle}
+    >
+      {creditCheck && <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => setCreditCheck(null)} loading={loading} />}
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🖼️ Thumbnail Studio</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>3 gyártható vizuális koncepció összehasonlításhoz — ez még nem képgenerálás vagy valódi YouTube A/B teszt.</p>
-      </div>
-
-      <div className="card mb-6 space-y-3">
-        <input
-          value={topic}
-          onChange={e => setTopic(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && runGenerate()}
-          placeholder="Miről szól a videó?"
-          className="w-full px-4 py-2.5 rounded-lg text-sm"
-          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
-          maxLength={300}
-        />
-        <button onClick={runGenerate} disabled={loading || !topic.trim()} className="btn-primary w-full">
-          {loading ? 'Generálás...' : 'Koncepciók generálása'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
-          <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+      <section className="wv-publish-composer" aria-labelledby="wv-thumbnail-brief-title">
+        <header>
+          <div><span>02</span><div><small>Vizuális brief</small><h2 id="wv-thumbnail-brief-title">Adj egyetlen tiszta fókuszt.</h2></div></div>
+          <aside><Image aria-hidden="true" /><span><small>Generálás ára</small><strong>1 kredit</strong></span></aside>
+        </header>
+        <div className="wv-publish-fields is-single">
+          <label className="is-primary"><span>Videó témája</span><input value={topic} onChange={event => setTopic(event.target.value)} onKeyDown={event => event.key === 'Enter' && runGenerate()} placeholder="Miről szól a videó?" maxLength={300} /><small>A koncepciók ugyanazt az ígéretet három eltérő vizuális nyelven bontják ki.</small></label>
         </div>
-      )}
+        <footer>
+          <div><Info aria-hidden="true" /><span><strong>Koncepció, nem generált kép</strong><small>Kompozíciót, szöveget és érzelmi irányt kapsz.</small></span></div>
+          <button type="button" onClick={runGenerate} disabled={loading || !topic.trim()}>{loading ? <><i />Épülnek a koncepciók</> : <><WandSparkles aria-hidden="true" />3 vizuális irány készítése<span>1 kredit</span></>}</button>
+        </footer>
+      </section>
 
-      {loading && (
-        <div className="card">
-          <LoadingScreen steps={LOADING_STEPS.thumbnailStudio} />
-        </div>
-      )}
-
-      {fromPaidResult && concepts && (
-        <div className="rounded-xl px-4 py-3 mb-3" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
-          <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>Mentett eredmény betöltve</p>
-          <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>Nem vontunk le új kreditet.</p>
-        </div>
-      )}
+      {error && <div className="wv-publish-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span><strong>A vizuális csomag most nem készíthető el.</strong>{error}</span></div>}
+      {loading && <div className="wv-publish-loading"><LoadingScreen steps={LOADING_STEPS.thumbnailStudio} /></div>}
+      {fromPaidResult && concepts && <div className="wv-publish-alert is-saved"><Check aria-hidden="true" /><span><strong>Mentett koncepciócsomag betöltve.</strong>Nem vontunk le új kreditet.</span></div>}
 
       {concepts && (
-        <div className="space-y-3">
-          {concepts.map((c, i) => (
-            <div key={i} className="card-hover">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <h3 className="font-medium text-sm flex-1" style={{ color: '#F8FAFC' }}>{c.concept_label}</h3>
-                <button
-                  onClick={() => saveConcept(c, i)}
-                  disabled={savedConcepts.has(i)}
-                  className="text-xs px-3 py-1.5 rounded-lg whitespace-nowrap flex-shrink-0"
-                  style={{ background: savedConcepts.has(i) ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.1)', border: `1px solid ${savedConcepts.has(i) ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)'}`, color: savedConcepts.has(i) ? '#22C55E' : '#3B82F6' }}
-                >
-                  {savedConcepts.has(i) ? '✓ Mentve' : '📌 Mentés'}
-                </button>
-              </div>
-
-              <p className="text-xs mb-2" style={{ color: '#CBD5E1' }}>{c.visual_description}</p>
-
-              <div className="rounded-lg px-3 py-2 mb-2" style={{ background: '#121826' }}>
-                <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>Thumbnail szöveg</p>
-                <p className="text-sm font-bold" style={{ color: '#F8FAFC' }}>{c.thumbnail_text}</p>
-                {!c.text_check.readable_at_small_size && (
-                  <p className="text-xs mt-1" style={{ color: '#F59E0B' }}>⚠️ Lehet, hogy túl hosszú kis méretben ({c.text_check.word_count} szó)</p>
-                )}
-              </div>
-
-              <p className="text-xs mb-1" style={{ color: '#94A3B8' }}><b>Kompozíció:</b> {c.composition_note}</p>
-              <p className="text-xs mb-3" style={{ color: '#94A3B8' }}><b>Érzelem/konfliktus:</b> {c.emotion_or_conflict}</p>
-
-              <div className="flex gap-2 items-center">
-                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#121826', color: '#CBD5E1' }}>
-                  AI kontraszt/figyelem: {c.contrast_attention_score}/100
-                </span>
-                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#121826', color: CLUTTER_LABELS[c.clutter_risk]?.color }}>
-                  {CLUTTER_LABELS[c.clutter_risk]?.label}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
+        <section className="wv-publish-results" aria-labelledby="wv-thumbnail-results-title">
+          <header className="wv-publish-results-head"><div><span>03</span><div><small>Vizuális irányok</small><h2 id="wv-thumbnail-results-title">Három különböző figyelemkapu</h2></div></div><span><Eye aria-hidden="true" />Kis méretre ellenőrizve</span></header>
+          <div className="wv-thumbnail-grid">
+            {concepts.map((concept, index) => {
+              const saved = savedConcepts.has(index)
+              return (
+                <article key={`${concept.concept_label}-${index}`}>
+                  <div className="wv-thumbnail-canvas" data-variant={String(index + 1)}>
+                    <span aria-hidden="true"><i /><i /><i /></span>
+                    <b>{concept.thumbnail_text}</b>
+                    <small>{String.fromCharCode(65 + index)}</small>
+                  </div>
+                  <header><div><small>Koncepció {String.fromCharCode(65 + index)}</small><h3>{concept.concept_label}</h3></div><button type="button" onClick={() => saveConcept(concept, index)} disabled={saved}>{saved ? <Check aria-hidden="true" /> : <Bookmark aria-hidden="true" />}<span>{saved ? 'Mentve' : 'Mentés'}</span></button></header>
+                  <p>{concept.visual_description}</p>
+                  <dl><div><dt><Layers3 aria-hidden="true" />Kompozíció</dt><dd>{concept.composition_note}</dd></div><div><dt><Sparkles aria-hidden="true" />Érzelem vagy konfliktus</dt><dd>{concept.emotion_or_conflict}</dd></div></dl>
+                  <footer>
+                    <span><strong>{concept.contrast_attention_score}</strong><small>AI kontraszt / figyelem</small></span>
+                    <span data-risk={concept.clutter_risk}><strong>{CLUTTER_LABELS[concept.clutter_risk]?.label}</strong><small>Zsúfoltsági kockázat</small></span>
+                    <span><strong>{concept.text_check.word_count} szó</strong><small>{concept.text_check.readable_at_small_size ? 'Kis méretben olvasható' : 'Rövidítés javasolt'}</small></span>
+                  </footer>
+                </article>
+              )
+            })}
+          </div>
+        </section>
       )}
 
-      {!concepts && !loading && (
-        <div className="card text-center py-12">
-          <p className="text-3xl mb-3">🖼️</p>
-          <p style={{ color: '#CBD5E1' }}>Írd be a témát, és 3 különböző thumbnail-koncepciót kapsz.</p>
-        </div>
-      )}
-    </div>
+      {!concepts && !loading && <section className="wv-publish-empty"><span><Image aria-hidden="true" /></span><small>A brief után</small><h2>Nem három színváltozat. Három vizuális gondolat.</h2><p>Mindegyik irány külön képi fókuszt, rövid feliratot, kompozíciós tervet és érzelmi konfliktust kap.</p></section>}
+    </PublishKitFrame>
   )
 }
