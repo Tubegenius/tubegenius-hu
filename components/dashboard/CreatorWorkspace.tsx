@@ -12,26 +12,51 @@ import {
   Flame,
   Link2,
   Plus,
+  Radar,
   ShieldCheck,
   Sparkles,
   X,
 } from 'lucide-react'
 import { CREATOR_LANE_PRESENTATION, type CreatorLane, type CreatorLaneStageId } from '@/lib/creator-lane-presentation'
+import type { CreatorOpportunity } from '@/lib/creator-opportunity-presentation'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 type StageId = CreatorLaneStageId
 type SourceKind = 'confirmed' | 'review'
 
-export default function CreatorWorkspace({ creatorLane = 'evidence' }: { creatorLane?: CreatorLane }) {
+interface CreatorWorkspaceProps {
+  creatorLane?: CreatorLane
+  starter?: CreatorOpportunity | null
+  discoverHref?: string
+}
+
+export default function CreatorWorkspace({ creatorLane: creatorLaneOverride, starter = null, discoverHref = '/dashboard/discover' }: CreatorWorkspaceProps) {
+  const { creatorLane: contextLane, setCreatorLane } = useCreatorOS()
+  const creatorLane = starter?.lane ?? creatorLaneOverride ?? contextLane
   const lane = CREATOR_LANE_PRESENTATION[creatorLane]
   const stages = lane.stages
-  const [activeStage, setActiveStage] = useState<StageId>('claims')
+  const [activeStage, setActiveStage] = useState<StageId>(starter ? 'research' : 'claims')
   const [sourceOpen, setSourceOpen] = useState(false)
   const [sourceKind, setSourceKind] = useState<SourceKind>('review')
   const [verified, setVerified] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [starterAccepted, setStarterAccepted] = useState(false)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const lastSourceButtonRef = useRef<HTMLButtonElement | null>(null)
   const publishReady = creatorLane === 'entertainment' || verified
+  const projectTitle = starter?.title ?? (creatorLane === 'evidence' ? 'Miért nem hűt minden városi fa ugyanannyit?' : 'A világ legrosszabb lakásnézője')
+  const starterStructure = creatorLane === 'evidence'
+    ? ['Megfigyelés', 'Bizonyítási irány', 'Nézői következmény']
+    : ['Belépés', 'Eszkaláció', 'Kifizetés']
+
+  useEffect(() => {
+    if (!starter) return
+    setCreatorLane(starter.lane)
+    setActiveStage('research')
+    setSourceOpen(false)
+    setVerified(false)
+    setStarterAccepted(false)
+  }, [starter, setCreatorLane])
 
   useEffect(() => {
     if (sourceOpen) closeButtonRef.current?.focus()
@@ -83,18 +108,24 @@ export default function CreatorWorkspace({ creatorLane = 'evidence' }: { creator
     }}>
       <header className="wv-page-heading">
         <div>
-          <span className="wv-eyebrow">Alkotás · aktív mintaprojekt</span>
-          <h1>{creatorLane === 'evidence' ? 'Miért nem hűt minden városi fa ugyanannyit?' : 'A világ legrosszabb lakásnézője'}</h1>
+          <span className="wv-eyebrow">Alkotás · {starter ? 'új' : 'aktív'} mintaprojekt</span>
+          <h1>{projectTitle}</h1>
         </div>
-        <span className="wv-heading-meta">Szemléltető munkatér<br />{lane.label} Lane</span>
+        <span className="wv-heading-meta">{starter ? 'Opportunity Briefből indítva' : 'Szemléltető munkatér'}<br />{lane.label} Lane</span>
       </header>
 
       <div className={`wv-workspace-layout${sourceOpen ? ' has-panel' : ''}`}>
         <section className="wv-workspace" aria-label="Projektműhely">
           <header className="wv-workspace-head">
             <div><strong>Projektműhely</strong><span>{creatorLane === 'evidence' ? 'A nézőnek szánt mondat és a mögötte álló bizonyíték együtt marad.' : 'Az élményígéret, a ritmus és a kifizetés együtt marad.'}</span></div>
-            <Link href="/dashboard" className="wv-workspace-back"><ArrowLeft aria-hidden="true" />Vissza a Mai irányhoz</Link>
+            <Link href={starter ? discoverHref : '/dashboard'} className="wv-workspace-back"><ArrowLeft aria-hidden="true" />{starter ? 'Vissza a Felfedezéshez' : 'Vissza a Mai irányhoz'}</Link>
           </header>
+
+          {starter && <div className="wv-project-inheritance">
+            <span className="wv-inheritance-icon"><Sparkles aria-hidden="true" /></span>
+            <div><span>Projektöröklés · szemléltető adapter</span><strong>A brief döntései veled jöttek.</strong><p>A nézői ígéret, az időzítés és a következő alkotói lépés nem veszett el az oldalváltásban.</p></div>
+            <em className={starterAccepted ? 'is-ready' : ''}>{starterAccepted ? 'Projektmag rögzítve' : 'Még nincs mentve'}</em>
+          </div>}
 
           <div className="wv-stage-tabs" role="tablist" aria-label="Alkotási szakaszok">
             {stages.map((stage, index) => (
@@ -119,7 +150,10 @@ export default function CreatorWorkspace({ creatorLane = 'evidence' }: { creator
           </div>
 
           <section id="wv-panel-research" role="tabpanel" aria-labelledby="wv-tab-research" hidden={activeStage !== 'research'} className="wv-workspace-panel">
-            {creatorLane === 'evidence' ? <>
+            {starter ? <>
+              <div className="wv-panel-intro"><div><span className="wv-eyebrow">Örökölt projektmag</span><h2>{creatorLane === 'evidence' ? 'Előbb rögzítsd, mit kell bizonyítani.' : 'Előbb rögzítsd, mit kell éreztetni.'}</h2><p>A brief irányt ad, de nem tesz úgy, mintha a kutatás vagy a kreatív kidolgozás már elkészült volna.</p></div><button type="button" className={`wv-primary-button${starterAccepted ? ' is-complete' : ''}`} aria-pressed={starterAccepted} onClick={() => { setStarterAccepted(true); setToast('A projektmag helyben rögzítve. Ez továbbra is szemléltető állapot.') }}><Check aria-hidden="true" />{starterAccepted ? 'Projektmag rögzítve' : 'Projektmag rögzítése'}</button></div>
+              <div className="wv-research-grid wv-starter-grid"><article><Radar aria-hidden="true" /><span><strong>Miért most?</strong><small>{starter.whyNow}</small></span></article><article><Sparkles aria-hidden="true" /><span><strong>Nézői ígéret</strong><small>{starter.audiencePromise}</small></span></article></div>
+            </> : creatorLane === 'evidence' ? <>
               <div className="wv-panel-intro"><div><span className="wv-eyebrow">Kutatási térkép</span><h2>A projektbe emelt bizonyítékok</h2><p>A kapcsolatok vizuálisan is megmaradnak az állítások mellett.</p></div><button type="button" className="wv-secondary-button" onClick={() => setToast('A minta nem kapcsolódik külső adatforráshoz.')}><Plus aria-hidden="true" />Forrás hozzáadása</button></div>
               <div className="wv-research-grid"><article><FileText aria-hidden="true" /><span><strong>Felületi hőmérséklet</strong><small>3 forrás · 2 megerősített kapcsolat</small></span></article><article><ShieldCheck aria-hidden="true" /><span><strong>Lombkorona és utcaszerkezet</strong><small>2 forrás · 1 ellenőrzés szükséges</small></span></article></div>
             </> : <>
@@ -129,7 +163,15 @@ export default function CreatorWorkspace({ creatorLane = 'evidence' }: { creator
           </section>
 
           <section id="wv-panel-claims" role="tabpanel" aria-labelledby="wv-tab-claims" hidden={activeStage !== 'claims'} className="wv-workspace-panel">
-            {creatorLane === 'evidence' ? <>
+            {starter ? <>
+              <div className="wv-panel-intro"><div><span className="wv-eyebrow">{creatorLane === 'evidence' ? 'Állításszerkezet' : 'Élményív'}</span><h2>{creatorLane === 'evidence' ? 'Három hely a bizonyítható gondolatmenetnek' : 'Három hely az emelkedő élménynek'}</h2><p>A szerkezet átjött a briefből; a tényleges tartalmat csak az alkotói kidolgozás töltheti ki.</p></div></div>
+              <div className={`wv-claim-list${creatorLane === 'entertainment' ? ' wv-experience-list' : ''}`}>
+                {starterStructure.map((label, index) => {
+                  const copy = [starter.audiencePromise, starter.whyNow, starter.nextMove][index]
+                  return <article className={`wv-claim${index === 1 ? ' is-warning' : ''}`} key={label}><i>{index + 1}</i><div><strong>{label}</strong><span>{copy}</span></div><em className={index === 0 && starterAccepted ? 'is-verified' : 'is-review'}>{index === 0 && starterAccepted ? 'Örökölt' : 'Kidolgozandó'}</em></article>
+                })}
+              </div>
+            </> : creatorLane === 'evidence' ? <>
               <div className="wv-panel-intro"><div><span className="wv-eyebrow">Állítástérkép</span><h2>Három mondat, három ellenőrizhető kapcsolat</h2><p>A bizonytalanság látható marad, de nem töri szét a munkafolyamatot.</p></div><button type="button" className="wv-secondary-button" onClick={() => setToast('Az új állítás szerkesztője a következő integrációs mélység része.')}><Plus aria-hidden="true" />Új állítás</button></div>
               <div className="wv-claim-list">
                 <article className="wv-claim"><i>1</i><div><strong>Nem a fák száma, hanem az árnyékolt felület aránya döntő.</strong><span>Két egymást erősítő forrás kapcsolódik.</span><button type="button" onClick={event => openSource('confirmed', event.currentTarget)}><Link2 aria-hidden="true" />Forráskapcsolat megnyitása</button></div><em className="is-verified">Ellenőrzött</em></article>
@@ -147,7 +189,10 @@ export default function CreatorWorkspace({ creatorLane = 'evidence' }: { creator
           </section>
 
           <section id="wv-panel-explanation" role="tabpanel" aria-labelledby="wv-tab-explanation" hidden={activeStage !== 'explanation'} className="wv-workspace-panel">
-            {creatorLane === 'evidence' ? <>
+            {starter ? <>
+              <div className="wv-panel-intro"><div><span className="wv-eyebrow">{creatorLane === 'evidence' ? 'Magyarázati váz' : 'Jelenetváz'}</span><h2>A briefből alkotói szerkezet lesz.</h2><p>Az örökölt döntések kapaszkodók; a kész videó hangját nem írják meg helyetted.</p></div><button type="button" className="wv-secondary-button" onClick={() => setToast('A részletes szerkesztés a következő frontendmélységben nyílik meg.')}><ArrowUpRight aria-hidden="true" />Részletes szerkesztés</button></div>
+              <div className={`wv-story-grid${creatorLane === 'entertainment' ? ' wv-scene-grid' : ''}`}><article><span className="wv-eyebrow">Nyitás alapja</span><strong>{starter.audiencePromise}</strong><p>{starter.tags.join(' · ')}</p></article><article><span className="wv-eyebrow">Következő döntés</span><strong>{starter.nextMove}</strong><p>A rendszer ezt a döntést viszi tovább, nem egy késznek állított szöveget.</p></article></div>
+            </> : creatorLane === 'evidence' ? <>
               <div className="wv-panel-intro"><div><span className="wv-eyebrow">Magyarázat és képsor</span><h2>A bizonyítékból nézőbarát gondolatmenet</h2><p>Előbb a tét, utána a mérés és csak ezután a részletek.</p></div><button type="button" className="wv-primary-button" onClick={() => setToast('A nyitás szerkesztési pontja működésre előkészítve.')}><span>Nyitás kidolgozása</span><ArrowUpRight aria-hidden="true" /></button></div>
               <div className="wv-story-grid"><article><span className="wv-eyebrow">Nyitás</span><strong>Ugyanaz az utca. Hat fok különbség.</strong><p>Az eredmény látszik, mielőtt a magyarázat elkezdődik.</p></article><article><span className="wv-eyebrow">Fordulópont</span><strong>Nem minden zöldfelület hűt ugyanúgy.</strong><p>A lombkorona és a burkolat együtt adja meg az okot.</p></article></div>
             </> : <>
@@ -157,8 +202,13 @@ export default function CreatorWorkspace({ creatorLane = 'evidence' }: { creator
           </section>
 
           <section id="wv-panel-publish" role="tabpanel" aria-labelledby="wv-tab-publish" hidden={activeStage !== 'publish'} className="wv-workspace-panel">
-            <div className="wv-panel-intro"><div><span className="wv-eyebrow">Publikálási ellenőrzés</span><h2>{creatorLane === 'evidence' ? 'A cím, a vizuális ígéret és a tényállítások együtt' : 'A nyitás, a ritmus és a kifizetés együtt'}</h2><p>{creatorLane === 'evidence' ? 'A felület megmutatja, pontosan mi tartja zárva a következő lépést.' : 'A kreatív kapu az élmény koherenciáját ellenőrzi; bizonyíték csak tényállításnál szükséges.'}</p></div><button type="button" className="wv-primary-button" disabled={!publishReady} onClick={() => setToast(creatorLane === 'evidence' ? 'A minta publikálási kapuja megnyílt.' : 'Az élményív készen áll a következő lépésre.')}><span>{creatorLane === 'evidence' ? (verified ? 'Ellenőrzés lezárása' : 'Még 1 forrás szükséges') : 'Élményív lezárása'}</span><Check aria-hidden="true" /></button></div>
-            {creatorLane === 'evidence' ? <div className="wv-publish-checks"><div><CheckCircle2 aria-hidden="true" /><span><strong>Címirány</strong><small>Érthető ígéret, a tartalommal összhangban</small></span></div><div className={verified ? '' : 'is-pending'}>{verified ? <CheckCircle2 aria-hidden="true" /> : <Link2 aria-hidden="true" />}<span><strong>Biztonsági kapu</strong><small>{verified ? '3/3 kulcsállítás ellenőrzött' : '2/3 kulcsállítás ellenőrzött'}</small></span></div></div> : <div className="wv-publish-checks wv-experience-checks"><div><CheckCircle2 aria-hidden="true" /><span><strong>Nyitási impulzus</strong><small>Az első három másodpercben megszületik a helyzet</small></span></div><div><CheckCircle2 aria-hidden="true" /><span><strong>Kifizetés</strong><small>A befejezés visszafordítja a karakter magabiztosságát</small></span></div></div>}
+            {starter ? <>
+              <div className="wv-panel-intro"><div><span className="wv-eyebrow">Publikálási ellenőrzés</span><h2>A projektmag még nem kész videó.</h2><p>A publikálás addig zárva marad, amíg a Lane saját alkotói és biztonsági kapui nem teljesülnek.</p></div><button type="button" className="wv-primary-button" disabled><span>Kidolgozás szükséges</span><Check aria-hidden="true" /></button></div>
+              <div className="wv-publish-checks"><div className={starterAccepted ? '' : 'is-pending'}>{starterAccepted ? <CheckCircle2 aria-hidden="true" /> : <Sparkles aria-hidden="true" />}<span><strong>Projektmag</strong><small>{starterAccepted ? 'A nézői ígéret és az irány rögzítve' : 'A projektmag még nincs rögzítve'}</small></span></div><div className="is-pending"><Link2 aria-hidden="true" /><span><strong>{creatorLane === 'evidence' ? 'Bizonyíték és magyarázat' : 'Élményív és jelenetritmus'}</strong><small>A részletes kidolgozás még hátravan</small></span></div></div>
+            </> : <>
+              <div className="wv-panel-intro"><div><span className="wv-eyebrow">Publikálási ellenőrzés</span><h2>{creatorLane === 'evidence' ? 'A cím, a vizuális ígéret és a tényállítások együtt' : 'A nyitás, a ritmus és a kifizetés együtt'}</h2><p>{creatorLane === 'evidence' ? 'A felület megmutatja, pontosan mi tartja zárva a következő lépést.' : 'A kreatív kapu az élmény koherenciáját ellenőrzi; bizonyíték csak tényállításnál szükséges.'}</p></div><button type="button" className="wv-primary-button" disabled={!publishReady} onClick={() => setToast(creatorLane === 'evidence' ? 'A minta publikálási kapuja megnyílt.' : 'Az élményív készen áll a következő lépésre.')}><span>{creatorLane === 'evidence' ? (verified ? 'Ellenőrzés lezárása' : 'Még 1 forrás szükséges') : 'Élményív lezárása'}</span><Check aria-hidden="true" /></button></div>
+              {creatorLane === 'evidence' ? <div className="wv-publish-checks"><div><CheckCircle2 aria-hidden="true" /><span><strong>Címirány</strong><small>Érthető ígéret, a tartalommal összhangban</small></span></div><div className={verified ? '' : 'is-pending'}>{verified ? <CheckCircle2 aria-hidden="true" /> : <Link2 aria-hidden="true" />}<span><strong>Biztonsági kapu</strong><small>{verified ? '3/3 kulcsállítás ellenőrzött' : '2/3 kulcsállítás ellenőrzött'}</small></span></div></div> : <div className="wv-publish-checks wv-experience-checks"><div><CheckCircle2 aria-hidden="true" /><span><strong>Nyitási impulzus</strong><small>Az első három másodpercben megszületik a helyzet</small></span></div><div><CheckCircle2 aria-hidden="true" /><span><strong>Kifizetés</strong><small>A befejezés visszafordítja a karakter magabiztosságát</small></span></div></div>}
+            </>}
           </section>
         </section>
 

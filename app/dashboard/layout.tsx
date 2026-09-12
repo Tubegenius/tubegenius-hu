@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import OnboardingGuard from '@/components/dashboard/OnboardingGuard'
 import DailySoftLimitGuard from '@/components/dashboard/DailySoftLimitGuard'
 import CreatorOSShell from '@/components/dashboard/CreatorOSShell'
+import { CreatorOSProvider } from '@/components/dashboard/CreatorOSContext'
 import './creator-os.css'
 
 export default async function DashboardLayout({
@@ -28,13 +29,13 @@ export default async function DashboardLayout({
   // layoutban self-redirect hurkot okozna a /dashboard/profile oldalon).
 
   return (
-    <>
+    <CreatorOSProvider>
       <DailySoftLimitGuard />
       <CreatorOSShell profile={profile} userEmail={user.email}>
         <OnboardingGuard onboardingCompleted={profile?.onboarding_completed === true}>
           {children}
         </OnboardingGuard>
       </CreatorOSShell>
-    </>
+    </CreatorOSProvider>
   )
 }

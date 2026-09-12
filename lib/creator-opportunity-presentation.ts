@@ -114,3 +114,13 @@ export const CREATOR_OPPORTUNITIES: Record<CreatorLane, readonly CreatorOpportun
     },
   ],
 }
+
+export function findCreatorOpportunity(id: string | null | undefined): CreatorOpportunity | null {
+  if (!id) return null
+  return [...CREATOR_OPPORTUNITIES.evidence, ...CREATOR_OPPORTUNITIES.entertainment]
+    .find(opportunity => opportunity.id === id) ?? null
+}
+
+export function creatorOpportunityStarterHref(opportunity: CreatorOpportunity, basePath = '/dashboard/create'): string {
+  return `${basePath}?starter=${encodeURIComponent(opportunity.id)}`
+}
