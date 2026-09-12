@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
@@ -45,6 +45,8 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
   const { creatorLane: contextLane } = useCreatorOS()
   const creatorLane = creatorLaneOverride ?? contextLane
   const menuRef = useRef<HTMLDivElement>(null)
+  const accountTriggerRef = useRef<HTMLButtonElement>(null)
+  const accountMenuRef = useRef<HTMLDivElement>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const activeSection = activeSectionOverride ?? creatorOSSectionForPath(pathname)
   const channelName = profile?.channel_name || userEmail?.split('@')[0] || 'Saját csatorna'
@@ -61,7 +63,10 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setMenuOpen(false)
+      if (event.key === 'Escape') {
+        setMenuOpen(false)
+        accountTriggerRef.current?.focus()
+      }
     }
 
     document.addEventListener('mousedown', handlePointerDown)
@@ -71,6 +76,29 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [menuOpen])
+
+  function focusMenuEdge(edge: 'first' | 'last') {
+    window.requestAnimationFrame(() => {
+      const items = accountMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]')
+      if (!items?.length) return
+      items[edge === 'first' ? 0 : items.length - 1].focus()
+    })
+  }
+
+  function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const items = Array.from(accountMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])
+    if (!items.length) return
+    event.preventDefault()
+    const currentIndex = items.indexOf(document.activeElement as HTMLElement)
+    if (event.key === 'Home') return items[0].focus()
+    if (event.key === 'End') return items[items.length - 1].focus()
+    const direction = event.key === 'ArrowDown' ? 1 : -1
+    const nextIndex = currentIndex < 0
+      ? (direction === 1 ? 0 : items.length - 1)
+      : (currentIndex + direction + items.length) % items.length
+    items[nextIndex].focus()
+  }
 
   async function handleLogout() {
     const supabase = createClient()
@@ -112,19 +140,27 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
             </span>
           </div>
           <button
+            ref={accountTriggerRef}
             type="button"
             className="wv-account-trigger"
             aria-label="Fiókmenü megnyitása"
             aria-expanded={menuOpen}
             aria-haspopup="menu"
+            aria-controls="wv-account-menu"
             onClick={() => setMenuOpen(open => !open)}
+            onKeyDown={event => {
+              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+              event.preventDefault()
+              setMenuOpen(true)
+              focusMenuEdge(event.key === 'ArrowDown' ? 'first' : 'last')
+            }}
           >
             <span>{initials}</span>
             {menuOpen ? <X aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
           </button>
 
           {menuOpen && (
-            <div className="wv-account-menu" role="menu" aria-label="Fiókműveletek">
+            <div ref={accountMenuRef} id="wv-account-menu" className="wv-account-menu" role="menu" aria-label="Fiókműveletek" onKeyDown={handleMenuKeyDown}>
               <div className="wv-account-summary">
                 <strong>{channelName}</strong>
                 <span>{userEmail}</span>
