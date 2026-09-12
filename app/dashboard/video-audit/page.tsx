@@ -1,125 +1,64 @@
-﻿'use client'
+'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
+import { Activity, ArrowLeft, ArrowRight, BarChart3, CheckCircle2, CircleAlert, Clock3, Compass, Facebook, Gauge, History, Instagram, Link2, Play, RotateCcw, ShieldCheck, Sparkles, Target, Youtube, Zap, type LucideIcon } from 'lucide-react'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
-import type { UsageCheckResult } from '@/lib/usage-protection'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { presentVideoAuditDecision, presentVideoAuditScore, videoAuditFormReadiness, videoAuditScoreTone, VIDEO_AUDIT_DIMENSIONS, VIDEO_AUDIT_LANE_COPY, VIDEO_AUDIT_PLATFORM_META } from '@/lib/creator-video-audit-presentation'
+import type { Platform } from '@/lib/video-audit-scoring'
+import type { UsageCheckResult } from '@/lib/usage-protection'
 
-type Platform = 'youtube_long' | 'youtube_shorts' | 'tiktok' | 'instagram_reels' | 'facebook_reels'
 type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
-
-const PLATFORM_LABELS: Record<Platform, string> = {
-  youtube_long: '▶ YouTube Long',
-  youtube_shorts: '▶ YouTube Shorts',
-  tiktok: '🎵 TikTok',
-  instagram_reels: '📸 Instagram Reels',
-  facebook_reels: '📘 Facebook Reels',
-}
-
-const DECISION_COLORS: Record<string, string> = {
-  'Folytatás': 'text-green-400 bg-green-400/10 border-green-400/20',
-  'Reupload': 'text-green-400 bg-green-400/10 border-green-400/20',
-  'Rehook': 'text-cyan-400 bg-cyan-400/10 border-cyan-400/20',
-  'Repackage': 'text-cyan-400 bg-cyan-400/10 border-cyan-400/20',
-  'Remix': 'text-amber-400 bg-amber-400/10 border-amber-400/20',
-  'Replatform': 'text-amber-400 bg-amber-400/10 border-amber-400/20',
-  'Abandon': 'text-red-400 bg-red-400/10 border-red-400/20',
-}
-
-const RISK_COLORS: Record<RiskLevel, string> = {
-  low: 'text-green-400',
-  medium: 'text-amber-400',
-  high: 'text-red-400',
-  critical: 'text-red-500',
-}
-
-const RISK_LABELS: Record<RiskLevel, string> = {
-  low: '● Alacsony kockázat',
-  medium: '● Közepes kockázat',
-  high: '● Magas kockázat',
-  critical: '● Kritikus',
-}
-
-function scoreColor(s: number) {
-  if (s >= 75) return 'text-green-400'
-  if (s >= 60) return 'text-amber-400'
-  return 'text-red-400'
-}
-
-function scoreBarColor(s: number) {
-  if (s >= 75) return 'bg-green-400'
-  if (s >= 60) return 'bg-amber-400'
-  return 'bg-red-400'
-}
-
+interface DimensionInterpretation { assessment?: string; reason?: string; suggested_fix?: string }
 interface AuditResult {
-  audit_id?: string
-  id?: string
-  platform: Platform
-  video_title: string
-  overall_score: number
-  overall_label: string
-  overall_meaning?: string
-  overall_risk?: RiskLevel
-  overall_action?: string
-  confidence: string
-  decision: string
-  weakest_dimension?: string
-  decision_reason?: string
-  final_scores: {
-    hook_strength: number
-    retention_potential: number
-    engagement_quality: number
-    platform_fit: number
-    packaging_quality: number
-  }
+  audit_id?: string; id?: string; platform: Platform; video_title: string; overall_score: number; overall_label: string
+  overall_meaning?: string; overall_risk?: RiskLevel; overall_action?: string; confidence: string; decision: string
+  weakest_dimension?: string; decision_reason?: string
+  final_scores: Record<(typeof VIDEO_AUDIT_DIMENSIONS)[number]['key'], number>
   claude_interpretation: {
-    hook_strength?: { assessment: string; reason: string; suggested_fix: string }
-    retention_potential?: { assessment: string; reason: string; suggested_fix: string }
-    engagement_quality?: { assessment: string; reason: string; suggested_fix: string }
-    platform_fit?: { assessment: string; reason: string; suggested_fix: string }
-    packaging_quality?: { assessment: string; reason: string; suggested_fix: string }
-    diagnosis?: string
-    new_hook_suggestion?: string
-    new_title_suggestion?: string
-    new_caption_suggestion?: string
-    hashtag_suggestions?: string[]
-    upload_time_suggestion?: string
-    platform_specific_tip?: string
+    hook_strength?: DimensionInterpretation; retention_potential?: DimensionInterpretation; engagement_quality?: DimensionInterpretation
+    platform_fit?: DimensionInterpretation; packaging_quality?: DimensionInterpretation; diagnosis?: string
+    new_hook_suggestion?: string; new_title_suggestion?: string; new_caption_suggestion?: string
+    hashtag_suggestions?: string[]; upload_time_suggestion?: string; platform_specific_tip?: string
   }
-  recommendations: {
-    new_hook?: string
-    new_title?: string
-    new_caption?: string
-    hashtags?: string[]
-    upload_time?: string
-    platform_tip?: string
-  }
+  recommendations: { new_hook?: string; new_title?: string; new_caption?: string; hashtags?: string[]; upload_time?: string; platform_tip?: string }
   diagnosis?: string
 }
+interface AuditHistoryItem { id: string; platform: Platform; video_title: string; overall_score: number; decision_label?: string; created_at: string }
+interface ManualData { topic: string; title: string; duration_seconds: number; views: number; likes: number; comments: number; shares: number; saves: number; hashtags: string; caption: string }
 
-interface AuditHistoryItem {
-  id: string
-  platform: Platform
-  video_title: string
-  overall_score: number
-  decision_label?: string
-  created_at: string
+const PLATFORMS = Object.keys(VIDEO_AUDIT_PLATFORM_META) as Platform[]
+const AUDIT_COST = 4
+
+function PlatformIcon({ platform }: { platform: Platform }) {
+  const icons: Record<Platform, LucideIcon> = { youtube_long: Youtube, youtube_shorts: Play, tiktok: Zap, instagram_reels: Instagram, facebook_reels: Facebook }
+  const Icon = icons[platform]
+  return <Icon aria-hidden="true" />
 }
 
-// Supabase DB sor -> AuditResult konvertálás
+function confidenceLabel(confidence: string): string {
+  if (confidence === 'high') return 'Magas bizonyosság'
+  if (confidence === 'low') return 'Alacsony bizonyosság'
+  return 'Közepes bizonyosság'
+}
+
+function riskLabel(risk?: RiskLevel): string | null {
+  if (!risk) return null
+  return { low: 'Alacsony kockázat', medium: 'Közepes kockázat', high: 'Magas kockázat', critical: 'Kritikus kockázat' }[risk]
+}
+
 function dbRowToResult(row: Record<string, unknown>): AuditResult {
   const finalScores = (row.final_scores as Record<string, number>) ?? {}
   const claudeInterp = (row.claude_interpretation as Record<string, unknown>) ?? {}
   const recommendations = (row.recommendations as Record<string, unknown>) ?? {}
   const overallScore = (row.overall_score as number) ?? 0
-
   let label = row.overall_label as string
   let meaning = ''
   let risk: RiskLevel = 'medium'
   let action = ''
-
   if (!label) {
     if (overallScore >= 90) { label = 'Kiváló'; meaning = 'Erős teljesítmény.'; risk = 'low'; action = 'Skálázd — készíts folytatást.' }
     else if (overallScore >= 75) { label = 'Jó'; meaning = 'Alapvetően működőképes.'; risk = 'low'; action = 'Publikálásra kész.' }
@@ -127,87 +66,127 @@ function dbRowToResult(row: Record<string, unknown>): AuditResult {
     else if (overallScore >= 40) { label = 'Gyenge'; meaning = 'Több fő elem gyenge.'; risk = 'high'; action = 'Jelentős átdolgozás kell.' }
     else { label = 'Kritikus'; meaning = 'Nem versenyképes jelenlegi formában.'; risk = 'critical'; action = 'Új téma vagy teljes újratervezés.' }
   }
-
   return {
-    audit_id: row.id as string,
-    platform: row.platform as Platform,
-    video_title: (row.video_title as string) ?? '',
-    overall_score: overallScore,
-    overall_label: label,
-    overall_meaning: meaning,
-    overall_risk: risk,
-    overall_action: action,
-    confidence: (row.confidence as string) ?? 'medium',
-    decision: (row.decision as string) ?? '',
-    weakest_dimension: '',
-    decision_reason: '',
-    final_scores: {
-      hook_strength: finalScores.hook_strength ?? 0,
-      retention_potential: finalScores.retention_potential ?? 0,
-      engagement_quality: finalScores.engagement_quality ?? 0,
-      platform_fit: finalScores.platform_fit ?? 0,
-      packaging_quality: finalScores.packaging_quality ?? 0,
-    },
+    audit_id: row.id as string, platform: row.platform as Platform, video_title: (row.video_title as string) ?? '', overall_score: overallScore,
+    overall_label: label, overall_meaning: meaning, overall_risk: risk, overall_action: action, confidence: (row.confidence as string) ?? 'medium',
+    decision: (row.decision as string) ?? '', weakest_dimension: (row.weakest_dimension as string) ?? '', decision_reason: (row.decision_reason as string) ?? '',
+    final_scores: { hook_strength: finalScores.hook_strength ?? 0, retention_potential: finalScores.retention_potential ?? 0, engagement_quality: finalScores.engagement_quality ?? 0, platform_fit: finalScores.platform_fit ?? 0, packaging_quality: finalScores.packaging_quality ?? 0 },
     claude_interpretation: claudeInterp as AuditResult['claude_interpretation'],
-    recommendations: {
-      new_hook: recommendations.new_hook as string,
-      new_title: recommendations.new_title as string,
-      new_caption: recommendations.new_caption as string,
-      hashtags: recommendations.hashtags as string[],
-      upload_time: recommendations.upload_time as string,
-      platform_tip: recommendations.platform_tip as string,
-    },
+    recommendations: { new_hook: recommendations.new_hook as string, new_title: recommendations.new_title as string, new_caption: recommendations.new_caption as string, hashtags: recommendations.hashtags as string[], upload_time: recommendations.upload_time as string, platform_tip: recommendations.platform_tip as string },
     diagnosis: (row.diagnosis as string) ?? '',
   }
 }
 
-const DIM_LABELS: Record<string, string> = {
-  hook_strength: 'Hook erőssége',
-  retention_potential: 'Retenció potenciál',
-  engagement_quality: 'Engagement minőség',
-  platform_fit: 'Platform illeszkedés',
-  packaging_quality: 'Csomagolás minősége',
+function AuditHistory({ audits, loading }: { audits: AuditHistoryItem[]; loading: boolean }) {
+  return (
+    <section className="wv-video-history" aria-labelledby="wv-video-history-title">
+      <header><div><span className="wv-eyebrow">Alkotói memória</span><h2 id="wv-video-history-title">Korábbi diagnózisok.</h2></div><Link href="/dashboard/memory">Teljes memória<ArrowRight aria-hidden="true" /></Link></header>
+      {loading ? <div className="wv-video-history-loading" aria-label="Audit-előzmények betöltése"><i /><i /><i /></div> : audits.length === 0 ? <div className="wv-video-history-empty"><History aria-hidden="true" /><div><strong>Az első diagnózisod itt válik emlékezetté.</strong><p>Az eredmények később a csatornamintát is építik.</p></div></div> : (
+        <div className="wv-video-history-grid">{audits.slice(0, 6).map((audit, index) => {
+          const score = presentVideoAuditScore(audit.overall_score)
+          return <Link key={audit.id} href={`/dashboard/video-audit?id=${audit.id}`} data-tone={videoAuditScoreTone(score)}><span>{String(index + 1).padStart(2, '0')}</span><div><small>{VIDEO_AUDIT_PLATFORM_META[audit.platform]?.shortLabel || audit.platform} · {new Date(audit.created_at).toLocaleDateString('hu-HU')}</small><strong>{audit.video_title || 'Névtelen audit'}</strong><em>{audit.decision_label || 'Diagnózis megnyitása'}</em></div><b>{score}</b></Link>
+        })}</div>
+      )}
+    </section>
+  )
 }
 
-const DIM_WEIGHTS: Record<string, string> = {
-  hook_strength: '25%',
-  retention_potential: '25%',
-  engagement_quality: '20%',
-  platform_fit: '15%',
-  packaging_quality: '15%',
+function AuditInput({ platform, videoUrl, manualData, loading, error, onPlatform, onVideoUrl, onManualData, onSubmit }: {
+  platform: Platform; videoUrl: string; manualData: ManualData; loading: boolean; error: string
+  onPlatform: (platform: Platform) => void; onVideoUrl: (value: string) => void; onManualData: (data: ManualData) => void; onSubmit: () => void
+}) {
+  const meta = VIDEO_AUDIT_PLATFORM_META[platform]
+  const readiness = videoAuditFormReadiness({ platform, videoUrl, topic: manualData.topic, title: manualData.title, durationSeconds: manualData.duration_seconds })
+  const isYouTube = meta.inputMode === 'url'
+  const metrics: Array<{ key: keyof ManualData; label: string }> = [{ key: 'views', label: 'Megtekintés' }, { key: 'likes', label: 'Like' }, { key: 'comments', label: 'Komment' }, { key: 'shares', label: 'Megosztás' }, { key: 'saves', label: 'Mentés' }, { key: 'duration_seconds', label: 'Hossz · mp' }]
+  return (
+    <>
+      <section className="wv-video-input-stage" aria-labelledby="wv-video-input-title">
+        <div className="wv-video-input-main">
+          <span className="wv-video-step"><Target aria-hidden="true" />01 · Forrás</span>
+          <div><span className="wv-eyebrow">Új videódiagnózis</span><h2 id="wv-video-input-title">Mit szeretnél megérteni?</h2><p>Válaszd ki a platformot, majd add meg az elérhető jeleket. A rendszer csak a kapott adatokból dolgozik.</p></div>
+          <div className="wv-video-platforms" role="group" aria-label="Platform kiválasztása">{PLATFORMS.map(item => <button key={item} type="button" aria-pressed={platform === item} onClick={() => onPlatform(item)}><PlatformIcon platform={item} /><span>{VIDEO_AUDIT_PLATFORM_META[item].shortLabel}</span><small>{VIDEO_AUDIT_PLATFORM_META[item].format}</small></button>)}</div>
+        </div>
+        <aside className="wv-video-protocol">
+          <span className="wv-video-step"><ShieldCheck aria-hidden="true" />Diagnosztikai protokoll</span><h3>Egy videó. Öt dimenzió. Egy következő döntés.</h3>
+          <ol><li><span>01</span><div><strong>Jelek rendezése</strong><small>A linkből vagy a megadott teljesítményadatokból.</small></div></li><li><span>02</span><div><strong>Dimenziók olvasása</strong><small>Hook, megtartás, aktivitás, platform és csomagolás.</small></div></li><li><span>03</span><div><strong>Alkotói mozdulat</strong><small>Mit tarts meg, és mit változtass meg először.</small></div></li></ol>
+          <p><Sparkles aria-hidden="true" /><span><strong>{AUDIT_COST} kredit</strong>A feldolgozás csak megerősítés után indul.</span></p>
+        </aside>
+      </section>
+      <section className="wv-video-source-console" data-mode={meta.inputMode}>
+        <header><div><span className="wv-eyebrow">{meta.label}</span><h2>{isYouTube ? 'Illeszd be a videó linkjét.' : 'Add meg a videó és a teljesítmény jeleit.'}</h2></div><span><Activity aria-hidden="true" />{isYouTube ? 'Publikus videóadat-forrás' : 'Kézzel megadott adatok'}</span></header>
+        {isYouTube ? <div className="wv-video-url-field"><Link2 aria-hidden="true" /><label htmlFor="video-audit-url"><span>YouTube-link</span><input id="video-audit-url" type="url" value={videoUrl} onChange={event => onVideoUrl(event.target.value)} placeholder="https://youtube.com/watch?v=..." autoComplete="url" /></label></div> : (
+          <div className="wv-video-manual-fields">
+            <label><span>Videó témája</span><input type="text" value={manualData.topic} onChange={event => onManualData({ ...manualData, topic: event.target.value })} placeholder="Például: fókusz és digitális zaj" /></label>
+            <label><span>Cím vagy caption</span><input type="text" value={manualData.title} onChange={event => onManualData({ ...manualData, title: event.target.value })} placeholder="A videó pontos címe" /></label>
+            <div className="wv-video-metric-fields">{metrics.map(metric => <label key={metric.key}><span>{metric.label}</span><input type="number" min="0" value={manualData[metric.key] as number} onChange={event => onManualData({ ...manualData, [metric.key]: Number.parseInt(event.target.value, 10) || 0 })} /></label>)}</div>
+            <label className="wv-video-wide-field"><span>Hashtagek · vesszővel</span><input type="text" value={manualData.hashtags} onChange={event => onManualData({ ...manualData, hashtags: event.target.value })} placeholder="#creator, #fókusz" /></label>
+          </div>
+        )}
+        {error && <div className="wv-video-alert" role="alert"><CircleAlert aria-hidden="true" /><span><strong>Az audit most nem indítható.</strong>{error}</span></div>}
+        <footer><p data-ready={readiness.ready || undefined}><CheckCircle2 aria-hidden="true" />{readiness.hint}</p><button type="button" className="wv-primary-action" disabled={loading || !readiness.ready} onClick={onSubmit}>{loading ? 'Elemzés folyamatban…' : `Diagnózis indítása · ${AUDIT_COST} kredit`}<ArrowRight aria-hidden="true" /></button></footer>
+      </section>
+    </>
+  )
 }
 
-function auditDecisionMeta(result: AuditResult) {
-  const decision = result.decision || 'Remix'
-  const weakest = result.weakest_dimension && result.weakest_dimension !== '-' ? result.weakest_dimension : null
-  const map: Record<string, { title: string; action: string; note: string; icon: string }> = {
-    'Folytatás': { title: 'Skálázd tovább', action: 'Készíts folytatást vagy hasonló verziót ugyanarra az ígéretre.', note: 'A videó szerkezete működik, ezért itt nem újratervezés, hanem ismétlés és variálás a cél.', icon: 'ti-trending-up' },
-    Reupload: { title: 'Újratöltés finomhangolással', action: 'Tartsd meg az alapötletet, de javíts címet, nyitást vagy csomagolást.', note: 'A videó nem rossz, inkább a belépési pontokon lehet még nyerni.', icon: 'ti-refresh' },
-    Rehook: { title: 'Új hook kell', action: 'Írd újra az első 3-5 másodpercet és kezdd erősebb konfliktussal vagy ígérettel.', note: 'A téma menthető, de a nézőnek hamarabb kell okot adni a maradásra.', icon: 'ti-fish-hook' },
-    Repackage: { title: 'Csomagold újra', action: 'Cserélj címet, thumbnail szöveget, captiont és első képi ígéretet.', note: 'A tartalom lehet jó, de a külső ígéret nem ad elég erős kattintási okot.', icon: 'ti-package' },
-    Remix: { title: 'Remix / újravágás', action: 'Rendezd át a struktúrát, húzd előre a legerősebb részt, és vágd ki a lassú bevezetést.', note: 'A videóban van menthető jel, de a tempó vagy a felépítés nem elég feszes.', icon: 'ti-cut' },
-    Replatform: { title: 'Más platformra való', action: 'Tartsd meg az ötletet, de alakítsd át a platform logikájára.', note: 'Nem feltétlen a téma rossz, hanem a forma és a platform illeszkedése gyenge.', icon: 'ti-arrows-exchange' },
-    Abandon: { title: 'Ne erre építs', action: 'Válassz új témát vagy teljesen más szöget, mielőtt újabb gyártási időt teszel bele.', note: 'A jelenlegi forma túl sok fő ponton gyenge, ezért nem ez a legjobb következő lépés.', icon: 'ti-alert-triangle' },
+function AuditResultView({ result, canStartNew, onStartNew }: { result: AuditResult; canStartNew: boolean; onStartNew: () => void }) {
+  const { creatorLane } = useCreatorOS()
+  const laneCopy = VIDEO_AUDIT_LANE_COPY[creatorLane]
+  const score = presentVideoAuditScore(result.overall_score)
+  const tone = videoAuditScoreTone(score)
+  const decision = presentVideoAuditDecision({ decision: result.decision, weakestDimension: result.weakest_dimension, reason: result.decision_reason, overallAction: result.overall_action, overallMeaning: result.overall_meaning })
+  const diagnosis = result.diagnosis || result.claude_interpretation?.diagnosis
+  const recommendations = {
+    hook: result.recommendations?.new_hook || result.claude_interpretation?.new_hook_suggestion,
+    title: result.recommendations?.new_title || result.claude_interpretation?.new_title_suggestion,
+    caption: result.recommendations?.new_caption || result.claude_interpretation?.new_caption_suggestion,
+    hashtags: result.recommendations?.hashtags || result.claude_interpretation?.hashtag_suggestions,
+    uploadTime: result.recommendations?.upload_time || result.claude_interpretation?.upload_time_suggestion,
+    platformTip: result.recommendations?.platform_tip || result.claude_interpretation?.platform_specific_tip,
   }
-  return {
-    ...(map[decision] || map.Remix),
-    weakest,
-    reason: result.decision_reason || result.overall_action || result.overall_meaning || 'A döntés a backend pontszámok és az audit dimenziók alapján készült.',
-  }
+  return (
+    <>
+      <header className="wv-page-heading wv-video-result-heading"><div><Link href="/dashboard/video-audit" className="wv-video-back"><ArrowLeft aria-hidden="true" />Új diagnózis</Link><span className="wv-eyebrow">Videódiagnózis · eredmény</span><h1>{result.video_title || 'Audit eredmény'}</h1></div><span className="wv-heading-meta">{VIDEO_AUDIT_PLATFORM_META[result.platform]?.label || result.platform}<br />{laneCopy.lens}</span></header>
+      <section className="wv-video-result-stage" data-tone={tone}>
+        <div className="wv-video-score-object"><span className="wv-eyebrow">Összesített auditpont</span><strong>{score}</strong><small>/100</small><i aria-hidden="true"><b style={{ '--video-score': `${score * 3.6}deg` } as React.CSSProperties} /></i><div><span>{result.overall_label}</span>{riskLabel(result.overall_risk) && <em>{riskLabel(result.overall_risk)}</em>}<small>{confidenceLabel(result.confidence)}</small></div></div>
+        <div className="wv-video-decision-card"><span className="wv-video-step"><Zap aria-hidden="true" />Következő döntés</span><div><small>{decision.decision}</small><h2>{decision.title}</h2><p>{decision.reason}</p></div><article><span>Első mozdulat</span><strong>{decision.action}</strong></article>{decision.weakest && <footer><Target aria-hidden="true" />Legnagyobb fejlesztési tér: <strong>{decision.weakest}</strong></footer>}</div>
+      </section>
+      <p className="wv-video-lane-intent"><Sparkles aria-hidden="true" /><span><strong>{laneCopy.headline}</strong>{laneCopy.support}</span></p>
+      <section className="wv-video-dimensions" aria-labelledby="wv-video-dimensions-title">
+        <header><div><span className="wv-eyebrow">Jeltérkép</span><h2 id="wv-video-dimensions-title">Öt dimenzió, prioritási sorrendben.</h2></div><span>A súlyok a meglévő auditmodellből érkeznek.</span></header>
+        <div>{VIDEO_AUDIT_DIMENSIONS.map((dimension, index) => {
+          const dimensionScore = presentVideoAuditScore(result.final_scores[dimension.key])
+          const interpretation = result.claude_interpretation?.[dimension.key] as DimensionInterpretation | undefined
+          const isWeakest = result.weakest_dimension === dimension.key || result.weakest_dimension === dimension.label
+          return <article key={dimension.key} data-tone={videoAuditScoreTone(dimensionScore)} data-weakest={isWeakest || undefined}><span>{String(index + 1).padStart(2, '0')}</span><div><header><strong>{dimension.label}</strong><small>{dimension.weight} súly</small></header><i><b style={{ width: `${dimensionScore}%` }} /></i>{interpretation?.reason && <p>{interpretation.reason}</p>}{interpretation?.suggested_fix && <em><ArrowRight aria-hidden="true" />{interpretation.suggested_fix}</em>}</div><b>{dimensionScore}</b></article>
+        })}</div>
+      </section>
+      {diagnosis && <section className="wv-video-diagnosis"><Gauge aria-hidden="true" /><div><span className="wv-eyebrow">Diagnózis</span><h2>Mit mond együtt az öt jel?</h2><p>{diagnosis}</p></div></section>}
+      <section className="wv-video-action-kit" aria-labelledby="wv-video-action-kit-title">
+        <header><div><span className="wv-eyebrow">Alkotói akciókészlet</span><h2 id="wv-video-action-kit-title">A következő verzió építőelemei.</h2></div><span><Sparkles aria-hidden="true" />Csak a kapott javaslatok jelennek meg</span></header>
+        <div className="wv-video-action-grid">
+          {recommendations.hook && <article className="is-primary"><span>01 · Új hook</span><h3>Az első mondat</h3><p>{recommendations.hook}</p></article>}
+          {recommendations.title && <article><span>02 · Új cím</span><h3>A külső ígéret</h3><p>{recommendations.title}</p></article>}
+          {recommendations.caption && <article><span>03 · Új caption</span><h3>A kontextus</h3><p>{recommendations.caption}</p></article>}
+          {(recommendations.platformTip || recommendations.uploadTime) && <article><span>04 · Platformmozdulat</span><h3>Publikálási fókusz</h3>{recommendations.platformTip && <p>{recommendations.platformTip}</p>}{recommendations.uploadTime && <small><Clock3 aria-hidden="true" />{recommendations.uploadTime}</small>}</article>}
+        </div>
+        {recommendations.hashtags && recommendations.hashtags.length > 0 && <div className="wv-video-hashtags"><span>Javasolt hashtagek</span><div>{recommendations.hashtags.map((hashtag, index) => <em key={`${hashtag}-${index}`}>{hashtag.startsWith('#') ? hashtag : `#${hashtag}`}</em>)}</div></div>}
+      </section>
+      <nav className="wv-video-next-rail" aria-label="A diagnózis következő lépései"><span><Activity aria-hidden="true" /><strong>Diagnózisból rendszer</strong></span><Link href="/dashboard/channel-audit"><BarChart3 aria-hidden="true" />Csatornaaudit</Link><Link href="/dashboard/discover"><Compass aria-hidden="true" />Felfedezés</Link><Link href="/dashboard/memory"><History aria-hidden="true" />Memória</Link>{canStartNew && <button type="button" onClick={onStartNew}><RotateCcw aria-hidden="true" />Új diagnózis</button>}</nav>
+    </>
+  )
 }
 
 export default function VideoAuditPage() {
   const searchParams = useSearchParams()
+  const { creatorLane } = useCreatorOS()
   const existingId = searchParams.get('id')
   const paidResultId = searchParams.get('paidResultId')
-
+  const laneCopy = VIDEO_AUDIT_LANE_COPY[creatorLane]
   const [platform, setPlatform] = useState<Platform>('youtube_long')
   const [videoUrl, setVideoUrl] = useState('')
-  const [manualData, setManualData] = useState({
-    topic: '', title: '', duration_seconds: 60,
-    views: 0, likes: 0, comments: 0, shares: 0, saves: 0,
-    hashtags: '', caption: '',
-  })
+  const [manualData, setManualData] = useState<ManualData>({ topic: '', title: '', duration_seconds: 60, views: 0, likes: 0, comments: 0, shares: 0, saves: 0, hashtags: '', caption: '' })
   const [loading, setLoading] = useState(false)
   const [loadingExisting, setLoadingExisting] = useState(false)
   const [result, setResult] = useState<AuditResult | null>(null)
@@ -217,475 +196,45 @@ export default function VideoAuditPage() {
   const [historyLoading, setHistoryLoading] = useState(true)
   const pendingActionRef = useRef<(() => void) | null>(null)
 
-  const isYouTube = platform === 'youtube_long' || platform === 'youtube_shorts'
-
+  useEffect(() => { fetch('/api/video-audits').then(response => response.json()).then(data => setAuditHistory(Array.isArray(data.audits) ? data.audits : [])).catch(() => setAuditHistory([])).finally(() => setHistoryLoading(false)) }, [])
   useEffect(() => {
-    fetch('/api/video-audits')
-      .then(r => r.json())
-      .then(data => setAuditHistory(Array.isArray(data.audits) ? data.audits : []))
-      .catch(() => setAuditHistory([]))
-      .finally(() => setHistoryLoading(false))
-  }, [])
+    if (paidResultId) { setLoadingExisting(true); fetch(`/api/video-audit?paidResultId=${paidResultId}`).then(response => response.json()).then(data => data.error ? setError(data.error) : setResult(data)).catch(() => setError('Hiba a mentett diagnózis betöltésekor.')).finally(() => setLoadingExisting(false)); return }
+    if (existingId) { setLoadingExisting(true); fetch(`/api/video-audit?id=${existingId}`).then(response => response.json()).then(data => data.error ? setError(data.error) : setResult(dbRowToResult(data))).catch(() => setError('Hiba a diagnózis betöltésekor.')).finally(() => setLoadingExisting(false)); return }
+    try { const saved = sessionStorage.getItem('willviral_video_audit_state'); if (saved) { const state = JSON.parse(saved); if (state.result) setResult(state.result); if (state.platform) setPlatform(state.platform); if (state.videoUrl) setVideoUrl(state.videoUrl) } } catch {}
+  }, [existingId, paidResultId])
 
-  // Visszanyitás: ha van ?id= (régi, video_audits tábla sor) vagy ?paidResultId=
-  // (a "Legutóbbi történeted" panelről érkező, perzisztens megvett eredmény)
-  // param, betöltjük a mentett auditot — kredit-igény és megerősítés nélkül.
-  useEffect(() => {
-    if (paidResultId) {
-      setLoadingExisting(true)
-      fetch(`/api/video-audit?paidResultId=${paidResultId}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.error) setError(data.error)
-          else setResult(data)
-        })
-        .catch(() => setError('Hiba a betöltés során'))
-        .finally(() => setLoadingExisting(false))
-      return
-    }
-    if (existingId) {
-      setLoadingExisting(true)
-      fetch(`/api/video-audit?id=${existingId}`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.error) {
-            setError(data.error)
-          } else {
-            setResult(dbRowToResult(data))
-          }
-        })
-        .catch(() => setError('Hiba a betöltés során'))
-        .finally(() => setLoadingExisting(false))
-      return
-    }
-    // Keresési előzmény visszaállítása böngésző vissza gombhoz
-    const saved = sessionStorage.getItem('willviral_video_audit_state')
-    if (saved) {
-      try {
-        const state = JSON.parse(saved)
-        if (state.result) setResult(state.result)
-        if (state.platform) setPlatform(state.platform)
-        if (state.videoUrl) setVideoUrl(state.videoUrl)
-      } catch {}
-    }
-  }, [existingId])
-
-  async function checkCreditsBeforeAction(cost: number, featureName: string, onConfirm: () => void) {
+  async function checkCreditsBeforeAction(onConfirm: () => void) {
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = credits.balance ?? 0
-
-      if (balance < cost) {
-        setCreditCheck({
-          feature: featureName,
-          cost,
-          currency: 'credit',
-          currentCredits: Math.round(balance),
-          remainingCreditsAfterRun: balance,
-          requiresConfirmation: true,
-          canRun: false,
-          reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
-        })
-        return
-      }
-
-      pendingActionRef.current = onConfirm
-      setCreditCheck({
-        feature: featureName,
-        cost,
-        currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
-        requiresConfirmation: true,
-        canRun: true,
-        message: `Ez a művelet ${cost} kreditbe kerül.`,
-      })
-    } catch {
-      onConfirm()
-    }
+      const response = await fetch('/api/credits'); const credits = await response.json(); const balance = Number(credits.balance ?? 0)
+      pendingActionRef.current = balance >= AUDIT_COST ? onConfirm : null
+      setCreditCheck({ feature: 'Video Audit', cost: AUDIT_COST, currency: 'credit', currentCredits: Math.round(balance), remainingCreditsAfterRun: balance >= AUDIT_COST ? Math.round(balance - AUDIT_COST) : Math.round(balance), requiresConfirmation: true, canRun: balance >= AUDIT_COST, reason: balance >= AUDIT_COST ? undefined : 'insufficient_credits', message: balance >= AUDIT_COST ? `A diagnózis ${AUDIT_COST} kreditbe kerül.` : `Nincs elég kredited. ${AUDIT_COST} kredit szükséges, neked ${Math.round(balance)} van.` })
+    } catch { setError('A kreditegyenleg most nem ellenőrizhető. Próbáld újra.') }
   }
 
   function handleRunAudit() {
-    checkCreditsBeforeAction(4, 'Video Audit', runAudit)
+    const readiness = videoAuditFormReadiness({ platform, videoUrl, topic: manualData.topic, title: manualData.title, durationSeconds: manualData.duration_seconds })
+    if (!readiness.ready) { setError(readiness.hint); return }
+    setError(''); void checkCreditsBeforeAction(runAudit)
   }
 
   async function runAudit() {
-    setLoading(true)
-    setError('')
-    setResult(null)
+    setLoading(true); setError(''); setResult(null)
     try {
-      const body = isYouTube
-        ? { platform, video_url: videoUrl }
-        : {
-            platform,
-            manual_data: {
-              ...manualData,
-              platform,
-              hashtags: manualData.hashtags.split(',').map((h: string) => h.trim()).filter(Boolean),
-            },
-          }
-      const res = await fetch('/api/video-audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Hiba történt')
-      setResult(data)
-
-      // Mentés sessionStorage-ba — böngésző vissza gomb támogatás
-      sessionStorage.setItem('willviral_video_audit_state', JSON.stringify({
-        result: data,
-        platform,
-        videoUrl,
-      }))
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Ismeretlen hiba')
-    } finally {
-      setLoading(false)
-    }
+      const isYouTube = VIDEO_AUDIT_PLATFORM_META[platform].inputMode === 'url'
+      const body = isYouTube ? { platform, video_url: videoUrl } : { platform, manual_data: { ...manualData, platform, hashtags: manualData.hashtags.split(',').map(hashtag => hashtag.trim()).filter(Boolean) } }
+      const response = await fetch('/api/video-audit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? 'A diagnózis nem készült el.')
+      setResult(data); try { sessionStorage.setItem('willviral_video_audit_state', JSON.stringify({ result: data, platform, videoUrl })) } catch {}
+    } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Ismeretlen hiba történt.') } finally { setLoading(false) }
   }
 
-  // Betöltés alatt
-  if (loadingExisting) {
-    return (
-      <div className="min-h-screen bg-[#080B12] flex items-center justify-center">
-        <div className="text-[#CBD5E1] text-sm">Audit betöltése...</div>
-      </div>
-    )
-  }
+  function startNewAudit() { setResult(null); setVideoUrl(''); setError(''); try { sessionStorage.removeItem('willviral_video_audit_state') } catch {}; window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
+  if (loadingExisting) return <div className="wv-destination wv-video-audit"><header className="wv-page-heading"><div><span className="wv-eyebrow">Videódiagnózis</span><h1>A mentett döntés visszatér.</h1></div></header><section className="wv-video-loading-existing"><LoadingScreen steps={LOADING_STEPS.videoAudit} /></section></div>
   return (
-    <div className="min-h-screen bg-[#080B12] text-white p-8 max-w-4xl mx-auto">
-
-      {/* Header */}
-      <div className="mb-8">
-        <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-2">Videódiagnózis</div>
-        <h1 className="text-3xl font-black tracking-tight text-white leading-tight mb-2">
-          {result ? result.video_title || 'Audit eredmény' : 'Elemezd a videódat'}
-        </h1>
-        <p className="text-[#CBD5E1] text-sm">
-          {result ? `${PLATFORM_LABELS[result.platform]} · ${result.overall_score}/100` : 'Tudd meg miért nem működött — és pontosan mit kell csinálni.'}
-        </p>
-      </div>
-
-      {/* Platform választó + form */}
-      {!result && (
-        <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6 mb-6">
-          <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-4">Platform</div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5 mb-6">
-            {(Object.keys(PLATFORM_LABELS) as Platform[]).map(p => (
-              <button
-                key={p}
-                onClick={() => setPlatform(p)}
-                className={`px-3 py-2 rounded-lg text-xs font-semibold border transition-all ${
-                  platform === p
-                    ? 'bg-[#3B82F6]/10 border-[#3B82F6]/40 text-[#3B82F6]'
-                    : 'border-white/[0.08] text-[#CBD5E1] hover:border-white/10 hover:text-white'
-                }`}
-              >
-                {PLATFORM_LABELS[p]}
-              </button>
-            ))}
-          </div>
-
-          {isYouTube ? (
-            <div>
-              <label className="text-xs font-semibold text-[#CBD5E1] mb-2 block">YouTube link</label>
-              <input
-                type="text"
-                value={videoUrl}
-                onChange={e => setVideoUrl(e.target.value)}
-                placeholder="https://youtube.com/watch?v=..."
-                className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] focus:border-[#3B82F6]/40 transition-colors"
-              />
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {[
-                { key: 'topic', label: 'Videó témája', placeholder: 'pl. Stressz és bélmikrobiom' },
-                { key: 'title', label: 'Cím / Caption', placeholder: 'A videó pontos címe' },
-              ].map(({ key, label, placeholder }) => (
-                <div key={key}>
-                  <label className="text-xs font-semibold text-[#CBD5E1] mb-2 block">{label}</label>
-                  <input
-                    type="text"
-                    value={(manualData as Record<string, unknown>)[key] as string}
-                    onChange={e => setManualData(d => ({ ...d, [key]: e.target.value }))}
-                    placeholder={placeholder}
-                    className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] focus:border-[#3B82F6]/40 transition-colors"
-                  />
-                </div>
-              ))}
-              {[
-                { key: 'views', label: 'Megtekintés' },
-                { key: 'likes', label: 'Like' },
-                { key: 'comments', label: 'Komment' },
-                { key: 'shares', label: 'Megosztás' },
-                { key: 'saves', label: 'Mentés' },
-                { key: 'duration_seconds', label: 'Hossz (másodperc)' },
-              ].map(({ key, label }) => (
-                <div key={key}>
-                  <label className="text-xs font-semibold text-[#CBD5E1] mb-2 block">{label}</label>
-                  <input
-                    type="number"
-                    value={(manualData as Record<string, unknown>)[key] as number}
-                    onChange={e => setManualData(d => ({ ...d, [key]: parseInt(e.target.value) || 0 }))}
-                    className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white focus:border-[#3B82F6]/40 transition-colors"
-                  />
-                </div>
-              ))}
-              <div>
-                <label className="text-xs font-semibold text-[#CBD5E1] mb-2 block">Hashtagek (vesszővel)</label>
-                <input
-                  type="text"
-                  value={manualData.hashtags}
-                  onChange={e => setManualData(d => ({ ...d, hashtags: e.target.value }))}
-                  placeholder="#egészség, #tudomány"
-                  className="w-full bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3 text-sm text-white placeholder-[#94A3B8] focus:border-[#3B82F6]/40 transition-colors"
-                />
-              </div>
-            </div>
-          )}
-
-          {error && (
-            <div className="mt-4 text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded-xl px-4 py-3">
-              {error}
-            </div>
-          )}
-
-          <button
-            onClick={handleRunAudit}
-            disabled={loading || (isYouTube ? !videoUrl : !manualData.topic)}
-            className="mt-6 w-full bg-[#3B82F6] text-black font-bold py-3 rounded-xl text-sm hover:bg-[#60A5FA] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Elemzés folyamatban... ⏳' : '🔍 Audit indítása — 4 kredit'}
-          </button>
-        </div>
-      )}
-
-      {loading && (
-        <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6 mt-6">
-          <LoadingScreen steps={LOADING_STEPS.videoAudit} />
-        </div>
-      )}
-
-      {!result && !loading && (
-        <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6 mt-6">
-          <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-4">Korábbi auditok</div>
-          {historyLoading ? (
-            <p className="text-sm text-[#94A3B8]">Audit-előzmények betöltése...</p>
-          ) : auditHistory.length === 0 ? (
-            <p className="text-sm text-[#94A3B8]">Még nincs elmentett Videódiagnózisod.</p>
-          ) : (
-            <div className="space-y-2">
-              {auditHistory.map(audit => (
-                <a
-                  key={audit.id}
-                  href={`/dashboard/video-audit?id=${audit.id}`}
-                  className="block rounded-xl bg-[#121826] border border-white/[0.08] px-4 py-3 hover:border-[#3B82F6]/40 transition-colors"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-white truncate">{audit.video_title || 'Névtelen audit'}</p>
-                    <span className={`text-sm font-black flex-shrink-0 ${scoreColor(audit.overall_score)}`}>{audit.overall_score}/100</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 mt-1 text-xs text-[#94A3B8]">
-                    <span>{PLATFORM_LABELS[audit.platform] || audit.platform}</span>
-                    <span>{new Date(audit.created_at).toLocaleDateString('hu-HU')}</span>
-                  </div>
-                </a>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* RESULT */}
-      {result && !loading && (
-        <div className="space-y-6">
-
-          {/* Overall Score Badge */}
-          <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6">
-            <div className="flex items-start gap-6">
-              <div className="flex-shrink-0">
-                <div className={`text-6xl font-black tracking-tighter leading-none ${scoreColor(result.overall_score)}`}>
-                  {result.overall_score}
-                </div>
-                <div className="text-xs text-[#94A3B8] mt-1">/100</div>
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-2 flex-wrap">
-                  <span className={`text-lg font-bold ${scoreColor(result.overall_score)}`}>{result.overall_label}</span>
-                  {result.overall_risk && (
-                    <span className={`text-xs font-semibold ${RISK_COLORS[result.overall_risk]}`}>
-                      {RISK_LABELS[result.overall_risk]}
-                    </span>
-                  )}
-                  <span className="text-xs text-[#94A3B8]">
-                    {result.confidence === 'high' ? '🟢 Magas' : result.confidence === 'medium' ? '🟡 Közepes' : '🔴 Alacsony'} bizonyosság
-                  </span>
-                </div>
-                {result.overall_meaning && (
-                  <p className="text-[#CBD5E1] text-sm mb-3">{result.overall_meaning}</p>
-                )}
-                {result.overall_action && (
-                  <div className={`inline-block text-sm font-semibold px-3 py-2 rounded-lg border ${DECISION_COLORS[result.decision] ?? 'text-white border-white/10'}`}>
-                    → {result.overall_action}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {(result.diagnosis || result.claude_interpretation?.diagnosis) && (
-              <div className="mt-4 pt-4 border-t border-white/[0.08]">
-                <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-2">Diagnózis</div>
-                <p className="text-sm text-[#CBD5E1]">{result.diagnosis || result.claude_interpretation?.diagnosis}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Decision Block */}
-          {result.decision && (() => {
-            const decision = auditDecisionMeta(result)
-            return (
-              <div className={`rounded-2xl p-5 border ${DECISION_COLORS[result.decision] ?? 'border-white/10 bg-white/5'}`}>
-                <div className="flex items-start gap-4">
-                  <div className="w-11 h-11 rounded-xl bg-white/5 flex items-center justify-center flex-shrink-0">
-                    <i className={`ti ${decision.icon}`} style={{ fontSize: '22px' }} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-semibold uppercase tracking-widest mb-1 opacity-70">Audit döntés</div>
-                    <div className="text-xl font-black mb-1">{result.decision}: {decision.title}</div>
-                    <p className="text-sm opacity-85 mb-3">{decision.reason}</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="rounded-xl p-3 bg-black/15 border border-white/10">
-                        <div className="text-[11px] uppercase tracking-widest opacity-60 mb-1">Első lépés</div>
-                        <p className="text-sm font-medium">{decision.action}</p>
-                      </div>
-                      <div className="rounded-xl p-3 bg-black/15 border border-white/10">
-                        <div className="text-[11px] uppercase tracking-widest opacity-60 mb-1">Miért ez?</div>
-                        <p className="text-sm">{decision.weakest ? `Leggyengébb pont: ${decision.weakest}. ` : ''}{decision.note}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
-
-          {/* 5 Dimenzió */}
-          <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6">
-            <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-4">5 dimenzió részletesen</div>
-            <div className="space-y-5">
-              {(Object.keys(DIM_LABELS) as (keyof typeof DIM_LABELS)[]).map(dim => {
-                const score = result.final_scores[dim as keyof typeof result.final_scores]
-                const interp = result.claude_interpretation?.[dim as keyof typeof result.claude_interpretation] as { assessment?: string; reason?: string; suggested_fix?: string } | undefined
-                return (
-                  <div key={dim}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-white">{DIM_LABELS[dim]}</span>
-                        <span className="text-xs text-[#94A3B8]">{DIM_WEIGHTS[dim]}</span>
-                      </div>
-                      <span className={`text-lg font-black ${scoreColor(score)}`}>{score}</span>
-                    </div>
-                    <div className="h-1.5 bg-[#121826] rounded-full overflow-hidden mb-2">
-                      <div
-                        className={`h-full rounded-full ${scoreBarColor(score)}`}
-                        style={{ width: `${score}%` }}
-                      />
-                    </div>
-                    {interp && (
-                      <div className="text-xs text-[#CBD5E1] space-y-1">
-                        {interp.reason && <p>{interp.reason}</p>}
-                        {interp.suggested_fix && (
-                          <p className="text-[#3B82F6]">→ {interp.suggested_fix}</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Javaslatok */}
-          <div className="bg-[#0F1420] border border-white/[0.08] rounded-2xl p-6">
-            <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-widest mb-4">Konkrét javaslatok</div>
-            <div className="space-y-4">
-              {result.recommendations?.new_hook && (
-                <div>
-                  <div className="text-xs font-semibold text-[#3B82F6] mb-1">Új hook javaslat</div>
-                  <p className="text-sm text-white bg-[#121826] border border-[#3B82F6]/20 rounded-xl px-4 py-3">
-                    {result.recommendations.new_hook}
-                  </p>
-                </div>
-              )}
-              {result.recommendations?.new_title && (
-                <div>
-                  <div className="text-xs font-semibold text-[#CBD5E1] mb-1">Új cím javaslat</div>
-                  <p className="text-sm text-white bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3">
-                    {result.recommendations.new_title}
-                  </p>
-                </div>
-              )}
-              {result.recommendations?.new_caption && (
-                <div>
-                  <div className="text-xs font-semibold text-[#CBD5E1] mb-1">Új caption javaslat</div>
-                  <p className="text-sm text-white bg-[#121826] border border-white/[0.08] rounded-xl px-4 py-3">
-                    {result.recommendations.new_caption}
-                  </p>
-                </div>
-              )}
-              {result.recommendations?.upload_time && (
-                <div>
-                  <div className="text-xs font-semibold text-[#CBD5E1] mb-1">Feltöltési idő</div>
-                  <p className="text-sm text-[#CBD5E1]">{result.recommendations.upload_time}</p>
-                </div>
-              )}
-              {result.recommendations?.platform_tip && (
-                <div>
-                  <div className="text-xs font-semibold text-[#CBD5E1] mb-1">Platform-specifikus tipp</div>
-                  <p className="text-sm text-[#CBD5E1]">{result.recommendations.platform_tip}</p>
-                </div>
-              )}
-              {result.recommendations?.hashtags && result.recommendations.hashtags.length > 0 && (
-                <div>
-                  <div className="text-xs font-semibold text-[#CBD5E1] mb-2">Hashtag javaslatok</div>
-                  <div className="flex flex-wrap gap-2">
-                    {result.recommendations.hashtags.map((h, i) => (
-                      <span key={i} className="text-xs px-2 py-1 rounded-full bg-[#121826] border border-white/[0.08] text-[#CBD5E1]">
-                        {h.startsWith('#') ? h : `#${h}`}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Új audit gomb */}
-          {!existingId && (
-            <button
-              onClick={() => { setResult(null); setVideoUrl('') }}
-              className="w-full py-3 rounded-xl border border-white/[0.08] text-[#CBD5E1] text-sm font-semibold hover:bg-[#0F1420] hover:text-white transition-all"
-            >
-              + Új audit indítása
-            </button>
-          )}
-        </div>
-      )}
-
-      {creditCheck && (
-        <CreditConfirmModal
-          check={creditCheck}
-          onConfirm={() => { const action = pendingActionRef.current; setCreditCheck(null); pendingActionRef.current = null; action?.() }}
-          onCancel={() => { setCreditCheck(null); pendingActionRef.current = null }}
-          loading={loading}
-        />
-      )}
+    <div className="wv-destination wv-video-audit" data-creator-lane={creatorLane}>
+      {creditCheck && <CreditConfirmModal check={creditCheck} onConfirm={() => { const action = pendingActionRef.current; setCreditCheck(null); pendingActionRef.current = null; action?.() }} onCancel={() => { setCreditCheck(null); pendingActionRef.current = null }} loading={loading} />}
+      {result && !loading ? <AuditResultView result={result} canStartNew={!existingId && !paidResultId} onStartNew={startNewAudit} /> : <><header className="wv-page-heading"><div><span className="wv-eyebrow">Videódiagnózis</span><h1>Egy videóból legyen következő döntés.</h1></div><span className="wv-heading-meta">{laneCopy.lens}<br />alkotói döntéstámogatás</span></header><AuditInput platform={platform} videoUrl={videoUrl} manualData={manualData} loading={loading} error={error} onPlatform={setPlatform} onVideoUrl={setVideoUrl} onManualData={setManualData} onSubmit={handleRunAudit} />{loading && <section className="wv-video-analysis-progress"><LoadingScreen steps={LOADING_STEPS.videoAudit} /></section>}{!loading && <AuditHistory audits={auditHistory} loading={historyLoading} />}</>}
     </div>
   )
 }
