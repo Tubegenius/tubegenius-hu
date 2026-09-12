@@ -4,21 +4,37 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import Link from 'next/link'
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowUpRight,
+  BookOpen,
   Check,
   CheckCircle2,
   Clapperboard,
+  Eye,
   FileText,
   Flame,
   Link2,
+  MessageCircle,
+  PlaySquare,
   Plus,
   Radar,
+  Rocket,
+  Share2,
   ShieldCheck,
+  Smartphone,
   Sparkles,
+  Target,
   X,
 } from 'lucide-react'
 import { CREATOR_LANE_PRESENTATION, type CreatorLane, type CreatorLaneStageId } from '@/lib/creator-lane-presentation'
 import type { CreatorOpportunity } from '@/lib/creator-opportunity-presentation'
+import {
+  buildCreatorStudioHandoffHref,
+  CREATOR_STUDIO_FORMATS,
+  CREATOR_STUDIO_GOALS,
+  type CreatorStudioFormatId,
+  type CreatorStudioGoalId,
+} from '@/lib/creator-studio-presentation'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 type StageId = CreatorLaneStageId
@@ -32,26 +48,34 @@ interface CreatorWorkspaceProps {
 
 export default function CreatorWorkspace({ creatorLane: creatorLaneOverride, starter = null, discoverHref = '/dashboard/discover' }: CreatorWorkspaceProps) {
   const { creatorLane: contextLane, setCreatorLane } = useCreatorOS()
-  const creatorLane = starter?.lane ?? creatorLaneOverride ?? contextLane
+  const [creatorLane, setProjectLane] = useState<CreatorLane>(starter?.lane ?? creatorLaneOverride ?? contextLane)
   const lane = CREATOR_LANE_PRESENTATION[creatorLane]
   const stages = lane.stages
-  const [activeStage, setActiveStage] = useState<StageId>(starter ? 'research' : 'claims')
+  const [activeStage, setActiveStage] = useState<StageId>('research')
   const [sourceOpen, setSourceOpen] = useState(false)
   const [sourceKind, setSourceKind] = useState<SourceKind>('review')
   const [verified, setVerified] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [starterAccepted, setStarterAccepted] = useState(false)
+  const [draftTitle, setDraftTitle] = useState(starter?.title ?? '')
+  const [format, setFormat] = useState<CreatorStudioFormatId>(starter?.tags.includes('Rövid videó') ? 'short' : 'long')
+  const [goal, setGoal] = useState<CreatorStudioGoalId>('views')
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const lastSourceButtonRef = useRef<HTMLButtonElement | null>(null)
   const publishReady = creatorLane === 'entertainment' || verified
-  const projectTitle = starter?.title ?? (creatorLane === 'evidence' ? 'Miért nem hűt minden városi fa ugyanannyit?' : 'A világ legrosszabb lakásnézője')
+  const projectTitle = draftTitle.trim() || 'Új alkotói projekt'
+  const selectedFormat = CREATOR_STUDIO_FORMATS[format]
+  const handoffHref = buildCreatorStudioHandoffHref({ title: draftTitle, lane: creatorLane, format, goal })
   const starterStructure = creatorLane === 'evidence'
     ? ['Megfigyelés', 'Bizonyítási irány', 'Nézői következmény']
     : ['Belépés', 'Eszkaláció', 'Kifizetés']
 
   useEffect(() => {
     if (!starter) return
+    setProjectLane(starter.lane)
     setCreatorLane(starter.lane)
+    setDraftTitle(starter.title)
+    setFormat(starter.tags.includes('Rövid videó') ? 'short' : 'long')
     setActiveStage('research')
     setSourceOpen(false)
     setVerified(false)
@@ -85,6 +109,23 @@ export default function CreatorWorkspace({ creatorLane: creatorLaneOverride, sta
     setToast('A forrás ellenőrzött. A projekt megmaradt a fókuszban.')
   }
 
+  function selectLane(nextLane: CreatorLane) {
+    setProjectLane(nextLane)
+    setCreatorLane(nextLane)
+    setSourceOpen(false)
+  }
+
+  function rememberStudioHandoff() {
+    if (!handoffHref) return
+    sessionStorage.setItem('willviral_creator_studio_handoff', JSON.stringify({
+      title: draftTitle.trim(),
+      lane: creatorLane,
+      format,
+      goal,
+      starterId: starter?.id ?? null,
+    }))
+  }
+
   function handleStageKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number) {
     const lastIndex = stages.length - 1
     let nextIndex: number | null = null
@@ -108,11 +149,112 @@ export default function CreatorWorkspace({ creatorLane: creatorLaneOverride, sta
     }}>
       <header className="wv-page-heading">
         <div>
-          <span className="wv-eyebrow">Alkotás · {starter ? 'új' : 'aktív'} mintaprojekt</span>
+          <span className="wv-eyebrow">Alkotás · Creator Studio</span>
           <h1>{projectTitle}</h1>
         </div>
-        <span className="wv-heading-meta">{starter ? 'Opportunity Briefből indítva' : 'Szemléltető munkatér'}<br />{lane.label} Lane</span>
+        <span className="wv-heading-meta">{starter ? 'Opportunity Briefből indítva' : 'Új projekt'}<br />{lane.label} Lane</span>
       </header>
+
+      <section className="wv-studio-launch" aria-labelledby="wv-studio-launch-title">
+        <div className="wv-studio-launch-main">
+          <header>
+            <span className="wv-eyebrow"><Rocket aria-hidden="true" /> Új projekt indítása</span>
+            <h2 id="wv-studio-launch-title">Adj irányt. A rendszer továbbviszi.</h2>
+            <p>A Lane a projekt alkotói logikája. A formátum és a cél közvetlenül átkerül a Gyártási csomagba.</p>
+          </header>
+
+          <label className="wv-studio-title-field">
+            <span>Projekt témája vagy munkacíme</span>
+            <input
+              value={draftTitle}
+              onChange={event => setDraftTitle(event.target.value)}
+              placeholder="Például: Miért nézzük újra ugyanazokat a videókat?"
+              maxLength={180}
+            />
+            <small>{draftTitle.trim().length}/180 · ezt a témát kapja meg a gyártási folyamat</small>
+          </label>
+
+          <div className="wv-studio-choice-block">
+            <div className="wv-studio-choice-heading"><span>01</span><div><strong>Creator Lane</strong><small>Projektenként választott alkotói gondolkodás</small></div></div>
+            <div className="wv-studio-lane-grid">
+              <button type="button" aria-pressed={creatorLane === 'evidence'} onClick={() => selectLane('evidence')}>
+                <span><ShieldCheck aria-hidden="true" /> Bizonyítékvezérelt</span>
+                <strong>Kutatásból, állításokból és érthető magyarázatból épít.</strong>
+                <small>Tények · oktatás · elemzés · dokumentarista tartalom</small>
+              </button>
+              <button type="button" aria-pressed={creatorLane === 'entertainment'} onClick={() => selectLane('entertainment')}>
+                <span><Sparkles aria-hidden="true" /> Élményvezérelt</span>
+                <strong>Nyitásból, jelenetritmusból és kifizetésből épít.</strong>
+                <small>Humor · karakter · történet · szórakoztatás</small>
+              </button>
+            </div>
+          </div>
+
+          <div className="wv-studio-config-grid">
+            <div className="wv-studio-choice-block">
+              <div className="wv-studio-choice-heading"><span>02</span><div><strong>Formátum</strong><small>A gyártási mélységet is meghatározza</small></div></div>
+              <div className="wv-studio-format-grid">
+                {(Object.entries(CREATOR_STUDIO_FORMATS) as [CreatorStudioFormatId, typeof CREATOR_STUDIO_FORMATS[CreatorStudioFormatId]][]).map(([id, item]) => (
+                  <button type="button" key={id} aria-pressed={format === id} onClick={() => setFormat(id)}>
+                    {id === 'short' ? <Smartphone aria-hidden="true" /> : <PlaySquare aria-hidden="true" />}
+                    <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+                    <b>{item.creditCost} kredit</b>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="wv-studio-choice-block">
+              <div className="wv-studio-choice-heading"><span>03</span><div><strong>Elsődleges cél</strong><small>A csomag kreatív fókusza</small></div></div>
+              <div className="wv-studio-goal-grid">
+                {(Object.entries(CREATOR_STUDIO_GOALS) as [CreatorStudioGoalId, string][]).map(([id, label]) => {
+                  const Icon = id === 'views' ? Eye : id === 'comments' ? MessageCircle : Share2
+                  return <button type="button" key={id} aria-pressed={goal === id} onClick={() => setGoal(id)}><Icon aria-hidden="true" /><span>{label}</span></button>
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="wv-studio-context-row">
+            <Target aria-hidden="true" />
+            <span><strong>{starter ? 'Opportunity Brief kapcsolva' : 'Saját ötletből indul'}</strong><small>{starter ? `${starter.horizon} időablak · ${starter.channelFit} csatornailleszkedés` : 'A projekt a Creator Profile jelenlegi csatornakörnyezetében nyílik meg.'}</small></span>
+            <div><Link href={discoverHref}><Radar aria-hidden="true" />Lehetőség választása</Link><Link href="/dashboard/memory"><BookOpen aria-hidden="true" />Memória megnyitása</Link></div>
+          </div>
+        </div>
+
+        <aside className="wv-studio-launch-summary">
+          <div className="wv-studio-launch-orbit" aria-hidden="true"><i /><span /><Rocket /></div>
+          <span className="wv-eyebrow">Indítási összegzés</span>
+          <h3>{draftTitle.trim() || 'A projekt címe még hiányzik'}</h3>
+          <ol className="wv-studio-launch-path" aria-label="Projektindítási útvonal">
+            <li className={draftTitle.trim() ? 'is-ready' : 'is-pending'}><i>01</i><span><strong>Projektmag</strong><small>{draftTitle.trim() ? 'A munkacím rögzítve' : 'Munkacím szükséges'}</small></span></li>
+            <li className="is-ready"><i>02</i><span><strong>Lane-logika</strong><small>{lane.label} döntési rend</small></span></li>
+            <li className="is-ready"><i>03</i><span><strong>Gyártási forma</strong><small>{selectedFormat.detail}</small></span></li>
+            <li><i>04</i><span><strong>Beállítás-ellenőrzés</strong><small>A következő képernyőn történik</small></span></li>
+          </ol>
+          <dl>
+            <div><dt>Alkotói logika</dt><dd>{lane.label}</dd></div>
+            <div><dt>Gyártási forma</dt><dd>{selectedFormat.label}</dd></div>
+            <div><dt>Elsődleges cél</dt><dd>{CREATOR_STUDIO_GOALS[goal]}</dd></div>
+            <div><dt>Indítási költség</dt><dd>{selectedFormat.creditCost} kredit</dd></div>
+          </dl>
+          <Link
+            href={handoffHref ?? '#'}
+            className={`wv-studio-launch-action${handoffHref ? '' : ' is-disabled'}`}
+            aria-disabled={!handoffHref}
+            onClick={event => {
+              if (!handoffHref) event.preventDefault()
+              else rememberStudioHandoff()
+            }}
+          >
+            <span>{handoffHref ? 'Tovább a Gyártási csomagba' : 'Adj címet a projektnek'}</span>
+            <ArrowRight aria-hidden="true" />
+          </Link>
+          <p>A generálás nem ezen a gombon történik. A következő képernyőn még ellenőrizheted a teljes beállítást.</p>
+        </aside>
+      </section>
+
+      <div className="wv-studio-workspace-label"><span>Projektváz és alkotói kapuk</span><p>Az alábbi munkatér szemlélteti, hogyan különül el a két Lane kidolgozási logikája.</p></div>
 
       <div className={`wv-workspace-layout${sourceOpen ? ' has-panel' : ''}`}>
         <section className="wv-workspace" aria-label="Projektműhely">
