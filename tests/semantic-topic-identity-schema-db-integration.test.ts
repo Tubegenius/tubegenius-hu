@@ -549,7 +549,15 @@ describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_
     })
 
     it('a nonexistent semantic_topic_id is rejected (FK)', () => {
-      const err = insertMembershipExpectError(membershipRow('00000000-0000-0000-0000-000000000000', evidenceA))
+      // Fresh, locally-scoped evidence rather than the shared evidenceA --
+      // another test in this same describe block (the "only one active
+      // membership per evidence" scenario) legitimately leaves a real,
+      // persisting active membership on evidenceA, which would otherwise
+      // make THIS insert attempt fail on that unique constraint instead of
+      // the FK violation this test means to exercise, whenever that other
+      // test happens to run first (e.g. under --sequence.shuffle.tests).
+      const localEvidence = insertFixtureEvidence(sourceId, runId, `sti-fixture-nonexistenttopic-${Date.now()}`)
+      const err = insertMembershipExpectError(membershipRow('00000000-0000-0000-0000-000000000000', localEvidence))
       expect(err).toMatch(/violates foreign key constraint/i)
     })
 
@@ -769,7 +777,10 @@ describeIfLocalDb('Semantic Topic Identity v0 S1 — semantic_topics / semantic_
     })
 
     it('the 071 run_shadow_topic_scoring function body hash is unchanged', () => {
-      const out = dockerPsql(`select md5(prosrc) from pg_proc where proname='run_shadow_topic_scoring';`).trim()
+      // CRLF-normalized, matching every other function-body hash check in
+      // this codebase -- the canonical contract is the LF-normalized body,
+      // independent of the checkout's line-ending convention.
+      const out = dockerPsql(`select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc where proname='run_shadow_topic_scoring';`).trim()
       expect(out).toBe('75e1ff9653b362191e62b213ea06237a')
     })
 

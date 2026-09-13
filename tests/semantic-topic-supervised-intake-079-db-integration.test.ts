@@ -7,7 +7,17 @@
 // none by design). supervised_intake_control.enabled is explicitly reset to
 // false at the end of every describe block, and the whole suite asserts it
 // stayed false throughout.
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+// Every test in this file does real docker-exec/psql round-trips (multi-
+// step lifecycle/crash/reconciliation scenarios); measured durations for
+// the heaviest ones were 5.1s-7.4s against the tight 5000ms Vitest default
+// -- 20000ms gives ~2.7x headroom while still catching a genuine hang,
+// matching the convention other heavy DB-integration files in this repo
+// already use. hookTimeout is set higher (30000ms) because
+// normalizeRpcLineEndings() (see below) does up to 2 docker-exec round-
+// trips per RPC (24 total, worst case) inside beforeAll, comfortably ahead
+// of vitest's separate 10000ms hookTimeout default.
+vi.setConfig({ testTimeout: 20000, hookTimeout: 30000 })
 
 import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -53,7 +63,14 @@ function dockerPsqlAsync(sql: string): Promise<{ ok: boolean; out: string }> {
 }
 
 function runMigration(migrationPath: string): { out: string; threw: boolean } {
-  const sql = readFileSync(migrationPath, 'utf8')
+  // CRLF-normalized before piping over stdin -- a CRLF-checked-out
+  // migration file (e.g. Windows with core.autocrlf=true) piped verbatim
+  // would recreate functions with \r\n embedded in their stored body,
+  // which 079's own internal drift-guard (using the un-normalized
+  // pg_get_functiondef(oid) as its hash basis) then flags as changed --
+  // an artifact of this test's stdin transport, not of the committed
+  // migration file or its DB contract.
+  const sql = readFileSync(migrationPath, 'utf8').replace(/\r\n/g, '\n')
   try {
     const out = execSync(`docker exec -i ${CONTAINER} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`, { input: sql, encoding: 'utf8' })
     return { out, threw: false }
@@ -89,6 +106,35 @@ function ensureFullyApplied() {
   if (tables !== String(TABLE_NAMES.length) || rpcs !== String(RPC_NAMES.length)) {
     const r = runMigration(MIGRATION_079_PATH)
     if (r.threw) throw new Error(`ensureFullyApplied: 079 failed -- ${r.out}`)
+  }
+}
+
+// 079's own internal drift-guards hash each RPC via the un-normalized
+// md5(pg_get_functiondef(oid)) (unlike every later migration in this repo,
+// which correctly CRLF-normalizes first) -- on a Windows checkout
+// (core.autocrlf=true), the ON-DISK migration file has CRLF line endings,
+// and `supabase db reset`'s own migration-application path stores that
+// CRLF verbatim into pg_proc.prosrc for a fresh CREATE. That means, on such
+// a checkout, EVERY 079 RPC's stored body already differs from 079's own
+// pinned (LF-based) hash constants immediately after a plain `db reset` --
+// before this suite (or any reapply) ever runs. This is a pre-existing
+// property of the migration file's own internal hash basis (off-limits to
+// change here), not a state-isolation bug in this test suite and not a
+// functional/behavioral difference (Postgres executes \r\n and \n
+// identically) -- so it is corrected here, once, purely at the literal
+// stored-source-text level, before any idempotency/drift-guard scenario
+// runs, exactly mirroring what a checkout with LF line endings would have
+// had from the start. Direct UPDATE of pg_proc.prosrc is not permitted
+// (even as the `postgres` role), so each function is instead re-issued as
+// an ordinary CREATE OR REPLACE FUNCTION DDL statement: pg_get_functiondef
+// returns each function's complete, self-contained, re-runnable
+// definition (signature, language, security, body -- everything), which is
+// then CRLF-normalized in JS before being sent back as plain DDL.
+function normalizeRpcLineEndings() {
+  for (const name of RPC_NAMES) {
+    const def = dockerPsql(`select pg_get_functiondef(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='${name}';`)
+    if (!def.includes('\r\n')) continue
+    dockerPsql(def.replace(/\r\n/g, '\n'))
   }
 }
 
@@ -184,6 +230,7 @@ function cleanupMarker() {
 describeIfLocalDb('Semantic Topic Identity v0 -- Supervised Production Candidate Intake RPCs (079, real local DB)', () => {
   beforeAll(() => {
     ensureFullyApplied()
+    normalizeRpcLineEndings()
     cleanupMarker()
   })
 

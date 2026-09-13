@@ -39,7 +39,14 @@
 // directly with hardcoded, confirmed-local well-known keys) was used
 // instead. See docs/architecture/semantic-topic-identity-v0-contract.md
 // SS36 for the full writeup.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+// This file's scenarios each run a full multi-step review lifecycle (seed
+// creation, decision, execution, then a second ATTACH_EXISTING pass) through
+// the real server-only service layer -- measured duration for the heaviest
+// scenario was 5.0s against the tight 5000ms Vitest default -- 20000ms gives
+// ~4x headroom while still catching a genuine hang, matching the convention
+// other heavy DB-integration/E2E files in this repo already use.
+vi.setConfig({ testTimeout: 20000 })
 import { createClient } from '@supabase/supabase-js'
 import { execSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -155,6 +162,14 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- minimal reviewer UI b
     const { recordDecision, getReview } = await import('@/lib/semantic-topic/human-review-reviewer')
     const { extractionRunId } = createExtractionFixture()
 
+    // Baseline BEFORE this test's own action -- other scenarios in this
+    // file (e.g. scenario E) legitimately create their own MARKER-prefixed
+    // topics as fixtures, so this test's own assertion must be "no NEW
+    // topic from this decision" (a before/after delta), not "zero topics
+    // globally," which would spuriously fail whenever those other
+    // scenarios happen to run first (e.g. under --sequence.shuffle.tests).
+    const topicCountBefore = Number(dockerPsql(`select count(*) from semantic_topics where canonical_label like '${MARKER}%';`).trim())
+
     const created = await createReviewRequest({ extractionRunId, idempotencyKey: `${MARKER}-b-create-${extractionRunId}` }, adminClient as any)
     expect(created.outcome).toBe('success')
     if (created.outcome !== 'success') return
@@ -175,10 +190,10 @@ describeIfLocalStack('Human-Reviewed Candidate Workflow -- minimal reviewer UI b
     expect(detail.request.status).toBe('rejected')
     expect(detail.request.decision?.rejectionReason).toBe('insufficient_evidence')
 
-    const topicCount = dockerPsql(`select count(*) from semantic_topics where canonical_label like '${MARKER}%';`).trim()
+    const topicCountAfter = Number(dockerPsql(`select count(*) from semantic_topics where canonical_label like '${MARKER}%';`).trim())
     const membershipCount = dockerPsql(`select count(*) from semantic_topic_membership where signal_evidence_id in (select signal_evidence_id from topic_extraction_runs where id='${extractionRunId}');`).trim()
     const decisionCount = dockerPsql(`select count(*) from topic_assignment_decisions where extraction_run_id='${extractionRunId}';`).trim()
-    expect(topicCount).toBe('0')
+    expect(topicCountAfter).toBe(topicCountBefore) // no NEW topic from this rejection
     expect(membershipCount).toBe('0')
     expect(decisionCount).toBe('1') // exactly the QUARANTINE decision, never zero, never two
 

@@ -59,15 +59,34 @@ function rawInput(overrides: Record<string, unknown> = {}) {
 // exercise every config-error/mode path.
 const ORIGINAL_FILE_ANTHROPIC_AUTH_SCOPE_MODE = process.env.ANTHROPIC_AUTH_SCOPE_MODE
 const ORIGINAL_FILE_ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID
+// runDryRun()'s own REQUIRED_ENV_VARS presence check (NEXT_PUBLIC_SUPABASE_URL,
+// SUPABASE_SERVICE_ROLE_KEY) is exercised by exactly two tests below (the
+// ones asserting envVarsPresent/never-logs-the-value), which happen to SET
+// these two vars as a side effect and never restore them -- every OTHER
+// test in this file that calls runDryRun was implicitly relying on that
+// leak (via written test order) to observe them as present, since neither
+// var is otherwise part of this process's real environment for a mocked,
+// zero-DB-mutation dry-run. That's a latent order dependency (only ever
+// masked by tests happening to run in file order) -- exposed by
+// --sequence.shuffle.tests, not a new one. Explicit, restored per-test
+// defaults here make every test in this file independent of that order.
+const ORIGINAL_FILE_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+const ORIGINAL_FILE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 beforeEach(() => {
   process.env.ANTHROPIC_AUTH_SCOPE_MODE = 'workspace_scoped'
   delete process.env.ANTHROPIC_WORKSPACE_ID
+  process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost:1'
+  process.env.SUPABASE_SERVICE_ROLE_KEY = 'dummy'
 })
 afterAll(() => {
   if (ORIGINAL_FILE_ANTHROPIC_AUTH_SCOPE_MODE === undefined) delete process.env.ANTHROPIC_AUTH_SCOPE_MODE
   else process.env.ANTHROPIC_AUTH_SCOPE_MODE = ORIGINAL_FILE_ANTHROPIC_AUTH_SCOPE_MODE
   if (ORIGINAL_FILE_ANTHROPIC_WORKSPACE_ID === undefined) delete process.env.ANTHROPIC_WORKSPACE_ID
   else process.env.ANTHROPIC_WORKSPACE_ID = ORIGINAL_FILE_ANTHROPIC_WORKSPACE_ID
+  if (ORIGINAL_FILE_SUPABASE_URL === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL
+  else process.env.NEXT_PUBLIC_SUPABASE_URL = ORIGINAL_FILE_SUPABASE_URL
+  if (ORIGINAL_FILE_SERVICE_ROLE_KEY === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY
+  else process.env.SUPABASE_SERVICE_ROLE_KEY = ORIGINAL_FILE_SERVICE_ROLE_KEY
 })
 
 // ===========================================================================
@@ -992,8 +1011,11 @@ describe('log redaction', () => {
 // table mutation, production adapter wires the canonical runShadowExtraction.
 // ===========================================================================
 describe('static source guarantees', () => {
-  const runnerSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/supervised-intake-runner.ts'), 'utf8')
-  const cliSource = readFileSync(join(process.cwd(), 'scripts/supervised-intake-runner.ts'), 'utf8')
+  // Normalized to LF regardless of the checkout's line-ending convention --
+  // the \n-anchored regex assertions below must not depend on whether the
+  // working tree has CRLF (e.g. a Windows checkout with core.autocrlf=true).
+  const runnerSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/supervised-intake-runner.ts'), 'utf8').replace(/\r\n/g, '\n')
+  const cliSource = readFileSync(join(process.cwd(), 'scripts/supervised-intake-runner.ts'), 'utf8').replace(/\r\n/g, '\n')
 
   it('decideItemOutcome never calls .includes( or tests a regex against a message/text field for branching', () => {
     const decideFnMatch = runnerSource.match(/export function decideItemOutcome[\s\S]*?\n}\n/)
@@ -1067,7 +1089,7 @@ describe('static source guarantees', () => {
   // structurally cannot leak a request ID, an extraction/evidence UUID, a
   // payload/label/span, a free-text message, or a raw RPC response.
   describe('human-review observability -- no raw env dump, UUID, secret, payload, or error message in the logging path', () => {
-    const hookSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/human-review-extraction-hook.ts'), 'utf8')
+    const hookSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/human-review-extraction-hook.ts'), 'utf8').replace(/\r\n/g, '\n')
 
     it('the "extraction outcome decided" log call never passes extraction.humanReview directly -- only through summarizeHumanReviewForLog(...)', () => {
       const callSite = runnerSource.match(/const humanReviewLogField[\s\S]*?log\.log\(\{[\s\S]*?\}\)/)
@@ -1187,7 +1209,7 @@ describe('checkCumulativeDailyCapacity', () => {
     // accounting is entirely a function of supervised_intake_attempts row
     // creation (one per claim, regardless of the later extraction outcome),
     // never of this runner's own cache/outcome bookkeeping.
-    const runnerSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/supervised-intake-runner.ts'), 'utf8')
+    const runnerSource = readFileSync(join(process.cwd(), 'lib/semantic-topic/supervised-intake-runner.ts'), 'utf8').replace(/\r\n/g, '\n')
     const fnMatch = runnerSource.match(/export async function checkCumulativeDailyCapacity[\s\S]*?\n}\n/)
     expect(fnMatch).not.toBeNull()
     if (fnMatch) {

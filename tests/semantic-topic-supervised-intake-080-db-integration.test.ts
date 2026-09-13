@@ -18,7 +18,14 @@
 // fix).
 import { execFile, execSync } from 'node:child_process'
 import { promisify } from 'node:util'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+// Every test in this file does real docker-exec/psql round-trips (multiple
+// RPC calls per test: claim, update, authorize retry, recover, etc.);
+// measured durations for the heaviest recovery scenarios were 5.3s-5.9s
+// against the tight 5000ms Vitest default -- 20000ms gives ~3.5x headroom
+// while still catching a genuine hang, matching the convention other heavy
+// DB-integration files in this repo already use.
+vi.setConfig({ testTimeout: 20000 })
 
 const execFileAsync = promisify(execFile)
 
@@ -163,7 +170,14 @@ describeIfLocalDb('080 -- Supervised Intake Stopped-Batch Pending-Item Recovery 
     const m = nextMarker()
     const ev1 = createEvidence(`${m}-a`)
     const ev2 = createEvidence(`${m}-b`)
-    enableControl(2, 1, m) // room for exactly 1 attempt today
+    // max_daily_claimed_items is a real UTC-day CUMULATIVE cap across every
+    // test in this suite run, not a per-test budget (see the "daily-limit
+    // is NOT racy" test below for the same pattern) -- a hardcoded `1` would
+    // already be exhausted by attempts other tests created earlier today
+    // whenever this test doesn't happen to run first, making the very first
+    // claim below spuriously return 'batch_stopped' instead of 'claimed'.
+    const alreadyToday = Number(dockerPsql(`select count(*) from supervised_intake_attempts where created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC';`).trim())
+    enableControl(2, alreadyToday + 1, m) // room for exactly 1 more attempt today
     const { batchId } = createBatch([ev1, ev2], m)
 
     const first = claim(batchId, `${m}-1`)

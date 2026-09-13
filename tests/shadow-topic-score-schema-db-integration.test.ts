@@ -190,7 +190,13 @@ describeIfLocalDb('Shadow Topic v0 S1 — signal_score_runs / signal_cluster_sco
   // ------------------------------------------------------------
   describe('069 migration re-run behavior', () => {
     it('re-running 069 against an already-migrated DB is an exact no-op (no DDL/DCL, no error)', () => {
-      const migrationSql = readFileSync(join(process.cwd(), 'supabase/migrations/069_shadow_topic_score_schema.sql'), 'utf8')
+      // CRLF-normalized before piping over stdin -- a CRLF-checked-out
+      // migration file (e.g. Windows with core.autocrlf=true) piped
+      // verbatim would recreate functions with \r\n embedded in their
+      // stored body, which the migration's OWN internal drift-guard then
+      // (correctly) flags as changed -- an artifact of this test's stdin
+      // transport, not of the committed migration file or its DB contract.
+      const migrationSql = readFileSync(join(process.cwd(), 'supabase/migrations/069_shadow_topic_score_schema.sql'), 'utf8').replace(/\r\n/g, '\n')
       // NOTICE messages are on stderr — redirect into stdout (2>&1) so the
       // "already exists and matches exactly" text is visible to execSync's
       // captured output.
@@ -205,7 +211,9 @@ describeIfLocalDb('Shadow Topic v0 S1 — signal_score_runs / signal_cluster_sco
 
     it('drift-fail-fast: an unauthorized column addition makes a 069 re-run fail closed, and reverting restores a clean idempotent re-run', () => {
       dockerPsql('ALTER TABLE public.signal_cluster_scores ADD COLUMN sts_drift_probe TEXT;')
-      const migrationSql = readFileSync(join(process.cwd(), 'supabase/migrations/069_shadow_topic_score_schema.sql'), 'utf8')
+      // CRLF-normalized before piping over stdin -- see the sibling no-op
+      // test's comment above for why.
+      const migrationSql = readFileSync(join(process.cwd(), 'supabase/migrations/069_shadow_topic_score_schema.sql'), 'utf8').replace(/\r\n/g, '\n')
       let threw = false
       try {
         execSync(

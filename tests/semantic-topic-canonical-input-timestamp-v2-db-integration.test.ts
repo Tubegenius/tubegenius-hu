@@ -4,7 +4,16 @@
 // server-side canonical enforcement, TS/SQL cross-contract, concurrency,
 // and snapshot-only reproducibility / v1-immutability proof. Same
 // skip-not-fail pattern as the 072-075 suites.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+// Every test in this file does real docker-exec/psql round-trips (schema
+// reapply, tamper-then-restore); measured durations for the heaviest ones
+// (dual-function hash-gate mixed-state/tampered-body cases) were 5.9s-6.5s
+// against the tight 5000ms Vitest default -- 20000ms gives ~3x headroom
+// while still catching a genuine hang, matching the convention other heavy
+// DB-integration files in this repo already use (e.g. shadow-topic-score-
+// schema-db-integration.test.ts's 30000ms, this file's own lighter weight
+// justifying a smaller value).
+vi.setConfig({ testTimeout: 20000 })
 import { execSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -74,7 +83,9 @@ function dockerPsqlExpectError(sql: string): string {
 }
 
 function runFile(path: string): { out: string; threw: boolean } {
-  const sql = readFileSync(path, 'utf8')
+  // CRLF-normalized before piping over stdin -- see the equivalent
+  // 079/069-file comments elsewhere in this test suite for why.
+  const sql = readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
   try {
     const out = execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1', {
       input: sql,
@@ -263,7 +274,13 @@ function canonicalInputFor(publishedAtIso: string): string {
 // Migration 076 -- dual-function hash-gate, both-legacy/both-corrected/
 // mixed/unknown, single transaction, second-run no-op.
 // ============================================================
-describeIfLocalDb('migration 076 -- dual-function (record_topic_extraction_run + reserve_ai_provider_units) hash-gate', () => {
+// {shuffle: false} (not describeIfLocalDb's plain describe) -- these tests
+// are an intentional, stateful narrative, each one's precondition being the
+// PREVIOUS test's own committed state transition (legacy -> corrected ->
+// mixed -> ...), not independent cases -- unlike an accidental ordering
+// leak, pinning this block to written order under --sequence.shuffle.tests
+// is correct, not a workaround.
+;(stackAvailable ? describe : describe.skip)('migration 076 -- dual-function (record_topic_extraction_run + reserve_ai_provider_units) hash-gate', { shuffle: false }, () => {
   beforeAll(() => ensureBothLegacy())
 
   it('REPLACE branch: both legacy -> both corrected v2, byte-exact, in one transaction', () => {

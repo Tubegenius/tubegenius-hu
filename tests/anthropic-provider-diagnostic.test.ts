@@ -15,7 +15,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 const execFileAsync = promisify(execFile)
 const REPO_ROOT = process.cwd()
 const CLI_ENTRY = join(REPO_ROOT, 'scripts', 'anthropic-provider-diagnostic.ts')
-const cliSourceRaw = readFileSync(CLI_ENTRY, 'utf8')
+// Normalized to LF regardless of the checkout's line-ending convention --
+// this file's own \n-anchored regex assertions below must not depend on
+// whether the working tree has CRLF (e.g. a Windows checkout with
+// core.autocrlf=true) or LF line endings.
+const cliSourceRaw = readFileSync(CLI_ENTRY, 'utf8').replace(/\r\n/g, '\n')
 // Comment-stripped view for source-policy assertions -- this file's own
 // explanatory comments legitimately mention "dotenv-style file" and
 // "supervised-intake-runner.ts" (as prose, not an import), which would
