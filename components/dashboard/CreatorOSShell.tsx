@@ -11,6 +11,7 @@ import {
   CreditCard,
   LogOut,
   Settings,
+  ShieldCheck,
   Sparkles,
   Sun,
   UserRound,
@@ -167,6 +168,7 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
               </div>
               <Link href="/dashboard/profile" role="menuitem"><UserRound aria-hidden="true" />Profil és csatorna</Link>
               <Link href="/dashboard/credits" role="menuitem"><CreditCard aria-hidden="true" />Kreditek és számlázás</Link>
+              <Link href="/dashboard/semantic-topic-lifecycle-reviews" role="menuitem"><ShieldCheck aria-hidden="true" />Lifecycle reviewer</Link>
               <Link href="/dashboard/profile" role="menuitem"><Settings aria-hidden="true" />Beállítások</Link>
               <button type="button" role="menuitem" onClick={handleLogout}><LogOut aria-hidden="true" />Kijelentkezés</button>
             </div>

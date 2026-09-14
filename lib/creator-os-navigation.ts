@@ -58,6 +58,7 @@ export const CREATOR_OS_NAV_ITEMS: readonly CreatorOSNavItem[] = [
       '/dashboard/viral-score',
       '/dashboard/seo-optimizer',
       '/dashboard/video-audit',
+      '/dashboard/semantic-topic-lifecycle-reviews',
     ],
   },
 ] as const
