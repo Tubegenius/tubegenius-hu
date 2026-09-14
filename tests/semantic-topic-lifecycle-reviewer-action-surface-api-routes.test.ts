@@ -5,7 +5,7 @@
 // idiom: dynamic import of the route's exported handler + a real Request,
 // vi.mock on the underlying action-wrapper module (never a real DB call
 // here -- that's the DB-integration test's job).
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -28,8 +28,22 @@ vi.mock('@/lib/semantic-topic/lifecycle-review-actions', () => ({
 const FAKE_USER = { id: 'c5e4da64-7e23-4e56-9620-6cdcafb395d5' }
 const FAKE_REQUEST_ID = 'd0000000-0000-4000-8000-000000000001'
 
+// The Origin/CSRF guard runs before auth on both routes -- every test in
+// this file (old and new) now needs a passing Origin by default so the
+// pre-existing 25 tests keep exercising exactly what they did before this
+// gate, while the guard itself is exercised for real (not mocked) in
+// PRODUCTION mode, matching real runtime behavior. Origin-specific
+// rejection scenarios explicitly override `origin` per-call below.
+const TRUSTED_ORIGIN = 'https://tubegenius-hu.vercel.app'
+
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.stubEnv('NODE_ENV', 'production')
+  process.env.NEXT_PUBLIC_APP_URL = TRUSTED_ORIGIN
+})
+afterEach(() => {
+  vi.unstubAllEnvs()
+  delete process.env.NEXT_PUBLIC_APP_URL
 })
 
 function unauth() {
@@ -57,15 +71,28 @@ const VALID_CANCEL_BODY = {
   idempotencyKey: 'client-key-2',
 }
 
-async function callDecision(id: string, body: unknown, contentType = 'application/json') {
+// origin: undefined -> default TRUSTED_ORIGIN (existing tests need no
+// change); null -> omit the Origin header entirely; a string -> send that
+// exact value. secFetchSite, when given, sets Sec-Fetch-Site.
+type OriginOverrides = { origin?: string | null; secFetchSite?: string }
+
+function buildHeaders(contentType: string, overrides: OriginOverrides): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': contentType }
+  const origin = overrides.origin === undefined ? TRUSTED_ORIGIN : overrides.origin
+  if (origin !== null) headers.origin = origin
+  if (overrides.secFetchSite) headers['sec-fetch-site'] = overrides.secFetchSite
+  return headers
+}
+
+async function callDecision(id: string, body: unknown, contentType = 'application/json', overrides: OriginOverrides = {}) {
   const { POST } = await import('@/app/api/admin/semantic-topic-lifecycle-reviews/[id]/decision/route')
-  const init: RequestInit = { method: 'POST', headers: { 'content-type': contentType } }
+  const init: RequestInit = { method: 'POST', headers: buildHeaders(contentType, overrides) }
   if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body)
   return POST(new Request(`http://localhost/api/admin/semantic-topic-lifecycle-reviews/${id}/decision`, init), { params: Promise.resolve({ id }) })
 }
-async function callCancel(id: string, body: unknown, contentType = 'application/json') {
+async function callCancel(id: string, body: unknown, contentType = 'application/json', overrides: OriginOverrides = {}) {
   const { POST } = await import('@/app/api/admin/semantic-topic-lifecycle-reviews/[id]/cancel/route')
-  const init: RequestInit = { method: 'POST', headers: { 'content-type': contentType } }
+  const init: RequestInit = { method: 'POST', headers: buildHeaders(contentType, overrides) }
   if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body)
   return POST(new Request(`http://localhost/api/admin/semantic-topic-lifecycle-reviews/${id}/cancel`, init), { params: Promise.resolve({ id }) })
 }
@@ -100,16 +127,10 @@ describe('malformed route id -> 422 before any body parsing or wrapper call', ()
   })
 })
 
-describe('malformed / wrong-content-type body -> 422', () => {
+describe('malformed JSON body -> 422 (Content-Type itself was valid, only the payload is broken)', () => {
   it('decision: invalid JSON', async () => {
     authed()
     const res = await callDecision(FAKE_REQUEST_ID, '{not valid json')
-    expect(res.status).toBe(422)
-    expect(recordLifecycleDecision).not.toHaveBeenCalled()
-  })
-  it('decision: wrong content-type', async () => {
-    authed()
-    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'text/plain')
     expect(res.status).toBe(422)
     expect(recordLifecycleDecision).not.toHaveBeenCalled()
   })
@@ -119,10 +140,21 @@ describe('malformed / wrong-content-type body -> 422', () => {
     expect(res.status).toBe(422)
     expect(cancelLifecycleReview).not.toHaveBeenCalled()
   })
+})
+
+describe('wrong content-type -> 415 (rejected by the origin/CSRF guard, before auth or readJsonBody ever run)', () => {
+  it('decision: wrong content-type', async () => {
+    authed()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'text/plain')
+    expect(res.status).toBe(415)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(recordLifecycleDecision).not.toHaveBeenCalled()
+  })
   it('cancel: wrong content-type', async () => {
     authed()
     const res = await callCancel(FAKE_REQUEST_ID, VALID_CANCEL_BODY, 'text/plain')
-    expect(res.status).toBe(422)
+    expect(res.status).toBe(415)
+    expect(getUserMock).not.toHaveBeenCalled()
     expect(cancelLifecycleReview).not.toHaveBeenCalled()
   })
 })
@@ -413,5 +445,93 @@ describe('static safety checks (source-level, no execution)', () => {
     expect(detailRouteSrc).toMatch(/getLifecycleReview/)
     expect(listRouteSrc).not.toMatch(/createAdminClient/)
     expect(detailRouteSrc).not.toMatch(/createAdminClient/)
+  })
+
+  it('both routes import checkOriginGuard/originGuardFailureToResponse from the same shared module', () => {
+    for (const file of routeFiles) {
+      const src = readFileSync(join(repoRoot, file), 'utf8')
+      expect(src, file).toMatch(/from '@\/lib\/http-origin-guard'/)
+      expect(src, file).toMatch(/checkOriginGuard/)
+    }
+  })
+})
+
+describe('Origin/CSRF guard integration -- runs before auth and before any RPC call', () => {
+  it('decision: correct production same-origin request reaches auth normally (implicit in every other test above; this makes it explicit)', async () => {
+    authed()
+    recordLifecycleDecision.mockResolvedValue({ outcome: 'success', result: { outcomeKind: 'approved', reviewRequestId: FAKE_REQUEST_ID, status: 'approved' } })
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY)
+    expect(res.status).toBe(200)
+    expect(getUserMock).toHaveBeenCalled()
+  })
+
+  it('decision: a foreign Origin -> 403, neither auth.getUser() nor the RPC wrapper is ever called', async () => {
+    authed()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'application/json', { origin: 'https://attacker.example' })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(recordLifecycleDecision).not.toHaveBeenCalled()
+  })
+
+  it('cancel: a foreign Origin -> 403, neither auth.getUser() nor the RPC wrapper is ever called', async () => {
+    authed()
+    const res = await callCancel(FAKE_REQUEST_ID, VALID_CANCEL_BODY, 'application/json', { origin: 'https://attacker.example' })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(cancelLifecycleReview).not.toHaveBeenCalled()
+  })
+
+  it('decision: a missing Origin header -> 403 in production, auth/RPC never called', async () => {
+    authed()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'application/json', { origin: null })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(recordLifecycleDecision).not.toHaveBeenCalled()
+  })
+
+  it('cancel: a missing Origin header -> 403 in production, auth/RPC never called', async () => {
+    authed()
+    const res = await callCancel(FAKE_REQUEST_ID, VALID_CANCEL_BODY, 'application/json', { origin: null })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(cancelLifecycleReview).not.toHaveBeenCalled()
+  })
+
+  it('decision: a subdomain-deception Origin -> 403 (no suffix matching at the route layer either)', async () => {
+    authed()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'application/json', { origin: 'https://tubegenius-hu.vercel.app.attacker.tld' })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+  })
+
+  it('decision: Sec-Fetch-Site: cross-site -> 403 even with a correct Origin, auth/RPC never called', async () => {
+    authed()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'application/json', { secFetchSite: 'cross-site' })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(recordLifecycleDecision).not.toHaveBeenCalled()
+  })
+
+  it('cancel: Sec-Fetch-Site: cross-site -> 403 even with a correct Origin, auth/RPC never called', async () => {
+    authed()
+    const res = await callCancel(FAKE_REQUEST_ID, VALID_CANCEL_BODY, 'application/json', { secFetchSite: 'cross-site' })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
+    expect(cancelLifecycleReview).not.toHaveBeenCalled()
+  })
+
+  it('a guard rejection response carries Cache-Control: no-store and never echoes the raw Origin value', async () => {
+    authed()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'application/json', { origin: 'https://attacker.example' })
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    const body = await res.json()
+    expect(JSON.stringify(body)).not.toMatch(/attacker/)
+  })
+
+  it('an unauthenticated request with a foreign Origin still gets the guard 403, not the auth 401 (guard runs strictly first)', async () => {
+    unauth()
+    const res = await callDecision(FAKE_REQUEST_ID, VALID_DECISION_BODY, 'application/json', { origin: 'https://attacker.example' })
+    expect(res.status).toBe(403)
+    expect(getUserMock).not.toHaveBeenCalled()
   })
 })

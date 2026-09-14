@@ -11,6 +11,7 @@ import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { cancelLifecycleReview } from '@/lib/semantic-topic/lifecycle-review-actions'
 import { lifecycleActionFailureToResponse } from '@/lib/semantic-topic/lifecycle-review-http-mapping'
 import { jsonNoStore, readJsonBody } from '@/lib/semantic-topic/human-review-http-mapping'
+import { checkOriginGuard, originGuardFailureToResponse } from '@/lib/http-origin-guard'
 import { isPlainRecord } from '@/lib/api-input-validation'
 import {
   isUuid,
@@ -72,6 +73,12 @@ function parseCancelBody(body: unknown): ParseResult {
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  // Same-origin/CSRF guard runs FIRST -- before auth.getUser() and before
+  // any RPC call -- so a cross-origin or otherwise disallowed request never
+  // reaches session validation or the database at all.
+  const originGuard = checkOriginGuard(request)
+  if (!originGuard.ok) return originGuardFailureToResponse(originGuard.failure)
+
   const { id } = await params
   const supabase = createServerSupabaseClient()
   const {
