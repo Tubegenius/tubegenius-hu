@@ -3,6 +3,7 @@ import type {
   LifecyclePaginationCursor,
   LifecycleRequestStatus,
   LifecycleReviewListItem,
+  LifecycleStaleReasonCode,
   LifecycleStatusFilter,
   LifecycleTargetStatus,
 } from '@/lib/semantic-topic/lifecycle-review-types'
@@ -52,6 +53,16 @@ export const LIFECYCLE_STATUS_PRESENTATION: Record<LifecycleRequestStatus, {
   cancelled: { label: 'Visszavont', tone: 'muted' },
   executed: { label: 'Végrehajtott', tone: 'lime' },
   stale: { label: 'Elavult', tone: 'amber' },
+}
+
+const LIFECYCLE_STALE_REASON_LABELS: Record<LifecycleStaleReasonCode, string> = {
+  TOPIC_STATE_CHANGED: 'A téma állapota megváltozott',
+  TOPIC_VERSION_CHANGED: 'A téma verziója megváltozott',
+  EVIDENCE_VECTOR_CHANGED: 'A bizonyítéki összkép megváltozott',
+  INSUFFICIENT_ELIGIBLE_SOURCE_IDENTITIES: 'Nincs elég elfogadható forrásazonosság',
+  EVIDENCE_IDENTITY_INCOMPLETE: 'Hiányos a bizonyítékok azonossági képe',
+  SOURCE_IDENTITY_UNKNOWN: 'Ismeretlen forrásazonosság található',
+  ASSIGNMENT_REASON_BREAKDOWN_INCOMPLETE: 'Hiányos a hozzárendelés indoklása',
 }
 
 const REQUEST_STATUSES = new Set<LifecycleRequestStatus>([
@@ -115,6 +126,10 @@ export function formatLifecycleState(status: LifecycleFromStatus | LifecycleTarg
   if (status === 'coherent') return 'Koherens'
   if (status === 'ambiguous') return 'Nem egyértelmű'
   return 'Megerősítés alatt'
+}
+
+export function formatLifecycleStaleReason(reason: LifecycleStaleReasonCode): string {
+  return LIFECYCLE_STALE_REASON_LABELS[reason]
 }
 
 export function formatLifecycleDate(value: string): string {

@@ -28,6 +28,7 @@ import {
   deriveLifecycleCursor,
   filterLifecycleTransitions,
   formatLifecycleDate,
+  formatLifecycleStaleReason,
   formatLifecycleState,
   lifecycleListError,
   mergeLifecyclePages,
@@ -37,6 +38,8 @@ import {
 } from '@/lib/lifecycle-review-presentation'
 
 type QueueStatus = 'loading' | 'ready' | 'error' | 'unauthenticated' | 'forbidden'
+
+const PRIMARY_STATUS_FILTERS: readonly LifecycleStatusFilter[] = ['actionable', 'requested', 'history']
 
 interface QueueError {
   kind: 'not_found' | 'invalid' | 'server' | 'network'
@@ -105,7 +108,7 @@ function QueueStatePanel({
       ? 'Az aktív reviewer jogosultságot a szerver ellenőrzi. Kérj hozzáférést a platform gazdájától.'
       : empty
         ? hasTransitionFilter
-          ? 'Módosítsd a transition-szűrőket, vagy tölts be további elemeket.'
+          ? 'Módosítsd az állapotváltási szűrőket, vagy tölts be további elemeket.'
           : 'Nincs a kiválasztott státuszhoz tartozó lifecycle kérelem. Az új kérelmek itt fognak megjelenni.'
         : error?.message || 'Váratlan hiba történt a lista betöltése közben.'
 
@@ -144,6 +147,9 @@ export function LifecycleReviewQueueView({
     [fromFilter, items, targetFilter],
   )
   const hasTransitionFilter = fromFilter !== 'all' || targetFilter !== 'all'
+  const primaryStatusOptions = LIFECYCLE_STATUS_FILTER_OPTIONS.filter(option => PRIMARY_STATUS_FILTERS.includes(option.value))
+  const secondaryStatusOptions = LIFECYCLE_STATUS_FILTER_OPTIONS.filter(option => !PRIMARY_STATUS_FILTERS.includes(option.value))
+  const secondaryStatusSelected = secondaryStatusOptions.some(option => option.value === statusFilter)
 
   return (
     <div className="wv-lifecycle-page">
@@ -154,7 +160,7 @@ export function LifecycleReviewQueueView({
         </div>
         <aside aria-label="Felület állapota">
           <span aria-hidden="true" />
-          <div><small>Reviewer surface</small><strong>Read-only · Milestone 1</strong></div>
+          <div><small>Biztonságos ellenőrzés</small><strong>Olvasási mód · nincs automatikus művelet</strong></div>
         </aside>
       </header>
 
@@ -162,13 +168,13 @@ export function LifecycleReviewQueueView({
         <header>
           <div>
             <Filter aria-hidden="true" />
-            <span><small>Queue control</small><strong id="lifecycle-filter-title">Fókuszált döntési sor</strong></span>
+            <span><small>Döntési fókusz</small><strong id="lifecycle-filter-title">Fókuszált felülvizsgálati sor</strong></span>
           </div>
-          <p>A státusz a teljes szerveroldali listát, a transition a már betöltött elemeket szűri.</p>
+          <p>A státusz a teljes szerveroldali listát, az állapotváltás a már betöltött kérelmeket szűri.</p>
         </header>
 
         <div className="wv-lifecycle-status-tabs" role="group" aria-label="Kérelem státusza">
-          {LIFECYCLE_STATUS_FILTER_OPTIONS.map(option => (
+          {primaryStatusOptions.map(option => (
             <button
               key={option.value}
               type="button"
@@ -179,6 +185,19 @@ export function LifecycleReviewQueueView({
               {option.label}
             </button>
           ))}
+          <label className={secondaryStatusSelected ? 'wv-lifecycle-status-more is-active' : 'wv-lifecycle-status-more'}>
+            <span>Más státusz</span>
+            <select
+              aria-label="További kérelemstátuszok"
+              value={secondaryStatusSelected ? statusFilter : ''}
+              onChange={event => {
+                if (event.target.value) onStatusFilterChange(event.target.value as LifecycleStatusFilter)
+              }}
+            >
+              <option value="">Válassz státuszt</option>
+              {secondaryStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
         </div>
 
         <div className="wv-lifecycle-transition-filters">
@@ -216,7 +235,7 @@ export function LifecycleReviewQueueView({
       {status === 'ready' && visibleItems.length > 0 ? (
         <section className="wv-lifecycle-results" aria-labelledby="lifecycle-results-title">
           <header>
-            <div><small>Decision queue</small><h2 id="lifecycle-results-title">Lifecycle kérelmek</h2></div>
+            <div><small>Felülvizsgálati sor</small><h2 id="lifecycle-results-title">Lifecycle kérelmek</h2></div>
             <span>{visibleItems.length} látható</span>
           </header>
           <div className="wv-lifecycle-list">
@@ -242,7 +261,13 @@ export function LifecycleReviewQueueView({
                     <div><dt><Clock3 aria-hidden="true" /> Kérve</dt><dd>{formatLifecycleDate(item.requestedAt)}</dd></div>
                     <div><dt>Lejárat</dt><dd>{formatLifecycleDate(item.expiresAt)}</dd></div>
                   </dl>
-                  {item.staleReasonCode ? <p className="wv-lifecycle-stale-note">Stale jelzés · {item.staleReasonCode}</p> : null}
+                  {item.staleReasonCode ? (
+                    <p className="wv-lifecycle-stale-note">
+                      <span>Elavulási jelzés</span>
+                      <strong>{formatLifecycleStaleReason(item.staleReasonCode)}</strong>
+                      <code aria-label={`Technikai kód: ${item.staleReasonCode}`}>{item.staleReasonCode}</code>
+                    </p>
+                  ) : null}
                 </article>
               )
             })}

@@ -9,6 +9,7 @@ import {
   buildLifecycleReviewListUrl,
   deriveLifecycleCursor,
   filterLifecycleTransitions,
+  formatLifecycleStaleReason,
   lifecycleListError,
   mergeLifecyclePages,
   parseLifecycleReviewListResponse,
@@ -95,6 +96,11 @@ describe('Lifecycle Reviewer frontend Milestone 1 presentation contract', () => 
     expect(lifecycleListError(500).kind).toBe('server')
   })
 
+  it('presents stale reasons in human language while preserving the closed code', () => {
+    expect(formatLifecycleStaleReason('EVIDENCE_VECTOR_CHANGED')).toBe('A bizonyítéki összkép megváltozott')
+    expect(formatLifecycleStaleReason('SOURCE_IDENTITY_UNKNOWN')).toBe('Ismeretlen forrásazonosság található')
+  })
+
   it('registers the lifecycle route under the existing Growth navigation section', () => {
     expect(creatorOSSectionForPath('/dashboard/semantic-topic-lifecycle-reviews')).toBe('growth')
   })
@@ -124,5 +130,11 @@ describe('Lifecycle Reviewer frontend Milestone 1 security boundary', () => {
     const css = readFileSync(join(process.cwd(), 'app', 'dashboard', 'creator-os.css'), 'utf8')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('.wv-lifecycle-card,')
+  })
+
+  it('does not expose internal milestone or English working labels in the product UI', () => {
+    expect(queueSource).not.toMatch(/Milestone 1|Reviewer surface|Queue control|Decision queue|transition-szűrő/)
+    expect(queueSource).toContain('Olvasási mód · nincs automatikus művelet')
+    expect(queueSource).toContain('További kérelemstátuszok')
   })
 })
