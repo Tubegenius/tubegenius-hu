@@ -26,6 +26,7 @@ import type {
   LifecycleReviewDetail,
   LifecycleStalenessSignals,
 } from '@/lib/semantic-topic/lifecycle-review-types'
+import LifecycleReviewDecisionPanel from '@/components/semantic-topic-lifecycle-reviews/LifecycleReviewDecisionPanel'
 import {
   LIFECYCLE_STATUS_PRESENTATION,
   formatLifecycleDate,
@@ -52,6 +53,7 @@ interface LifecycleReviewDetailViewProps {
   status: DetailStatus
   error: LifecycleDetailError | { kind: 'network'; message: string } | null
   onRetry: () => void
+  onRefresh: () => void
 }
 
 const STALENESS_SIGNAL_LABELS: Record<keyof LifecycleStalenessSignals, string> = {
@@ -208,7 +210,7 @@ function ExistingOutcome({ request }: { request: LifecycleReviewDetail }) {
   )
 }
 
-export function LifecycleReviewDetailView({ request, status, error, onRetry }: LifecycleReviewDetailViewProps) {
+export function LifecycleReviewDetailView({ request, status, error, onRetry, onRefresh }: LifecycleReviewDetailViewProps) {
   if (status === 'loading') return <DetailSkeleton />
   if (status !== 'ready' || !request) return <DetailStatePanel status={status} error={error} onRetry={onRetry} />
 
@@ -288,6 +290,8 @@ export function LifecycleReviewDetailView({ request, status, error, onRetry }: L
         </div>
       </section>
 
+      {request.requestStatus === 'requested' ? <LifecycleReviewDecisionPanel request={request} onRefresh={onRefresh} /> : null}
+
       <ExistingOutcome request={request} />
 
       <section className="wv-lifecycle-timeline" aria-labelledby="lifecycle-timeline-title">
@@ -356,5 +360,6 @@ export default function LifecycleReviewDetail({ reviewRequestId }: { reviewReque
     return () => controller.abort()
   }, [load, reloadVersion])
 
-  return <LifecycleReviewDetailView request={request} status={status} error={error} onRetry={() => setReloadVersion(value => value + 1)} />
+  const refresh = () => setReloadVersion(value => value + 1)
+  return <LifecycleReviewDetailView request={request} status={status} error={error} onRetry={refresh} onRefresh={refresh} />
 }
