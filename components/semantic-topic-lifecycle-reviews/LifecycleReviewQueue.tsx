@@ -115,7 +115,7 @@ function QueueStatePanel({
   return (
     <section className={`wv-lifecycle-state is-${status}`} role={status === 'error' ? 'alert' : 'status'}>
       <span aria-hidden="true"><Icon /></span>
-      <small>{empty ? 'Reviewer queue' : 'Biztonságos hozzáférés'}</small>
+      <small>{empty ? 'Felülvizsgálati sor' : 'Biztonságos hozzáférés'}</small>
       <h2>{title}</h2>
       <p>{description}</p>
       {unauthenticated ? (
@@ -242,7 +242,13 @@ export function LifecycleReviewQueueView({
             {visibleItems.map((item, index) => {
               const statusPresentation = LIFECYCLE_STATUS_PRESENTATION[item.requestStatus]
               return (
-                <article key={item.reviewRequestId} className="wv-lifecycle-card" style={{ animationDelay: `${Math.min(index, 5) * 45}ms` }}>
+                <Link
+                  key={item.reviewRequestId}
+                  href={`/dashboard/semantic-topic-lifecycle-reviews/${item.reviewRequestId}`}
+                  className="wv-lifecycle-card"
+                  style={{ animationDelay: `${Math.min(index, 5) * 45}ms` }}
+                  aria-label={`${item.topicCanonicalLabel} lifecycle kérelmének megnyitása`}
+                >
                   <div className="wv-lifecycle-card-index" aria-hidden="true">{String(index + 1).padStart(2, '0')}</div>
                   <div className="wv-lifecycle-card-main">
                     <header>
@@ -250,7 +256,7 @@ export function LifecycleReviewQueueView({
                       <span>Generáció {item.generation}</span>
                     </header>
                     <h3>{item.topicCanonicalLabel}</h3>
-                    <p title={item.semanticTopicId}>Topic · {item.semanticTopicId}</p>
+                    <p title={item.semanticTopicId}>Téma · {item.semanticTopicId}</p>
                   </div>
                   <div className="wv-lifecycle-transition" aria-label={`${formatLifecycleState(item.fromStatus)} állapotból ${formatLifecycleState(item.targetStatus)} állapotba`}>
                     <span><small>Innen</small><strong>{formatLifecycleState(item.fromStatus)}</strong></span>
@@ -268,7 +274,7 @@ export function LifecycleReviewQueueView({
                       <code aria-label={`Technikai kód: ${item.staleReasonCode}`}>{item.staleReasonCode}</code>
                     </p>
                   ) : null}
-                </article>
+                </Link>
               )
             })}
           </div>
