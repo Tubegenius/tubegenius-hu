@@ -22,11 +22,13 @@ import {
   X,
 } from 'lucide-react'
 import type {
+  LifecycleCancelActionResult,
   LifecycleEvidenceVector,
   LifecycleReviewDetail,
   LifecycleStalenessSignals,
 } from '@/lib/semantic-topic/lifecycle-review-types'
 import LifecycleReviewDecisionPanel from '@/components/semantic-topic-lifecycle-reviews/LifecycleReviewDecisionPanel'
+import LifecycleReviewCancelPanel from '@/components/semantic-topic-lifecycle-reviews/LifecycleReviewCancelPanel'
 import {
   LIFECYCLE_STATUS_PRESENTATION,
   formatLifecycleDate,
@@ -54,6 +56,8 @@ interface LifecycleReviewDetailViewProps {
   error: LifecycleDetailError | { kind: 'network'; message: string } | null
   onRetry: () => void
   onRefresh: () => void
+  onCancelled: (result: LifecycleCancelActionResult) => void
+  actionNotice: string | null
 }
 
 const STALENESS_SIGNAL_LABELS: Record<keyof LifecycleStalenessSignals, string> = {
@@ -210,7 +214,7 @@ function ExistingOutcome({ request }: { request: LifecycleReviewDetail }) {
   )
 }
 
-export function LifecycleReviewDetailView({ request, status, error, onRetry, onRefresh }: LifecycleReviewDetailViewProps) {
+export function LifecycleReviewDetailView({ request, status, error, onRetry, onRefresh, onCancelled, actionNotice }: LifecycleReviewDetailViewProps) {
   if (status === 'loading') return <DetailSkeleton />
   if (status !== 'ready' || !request) return <DetailStatePanel status={status} error={error} onRetry={onRetry} />
 
@@ -220,6 +224,8 @@ export function LifecycleReviewDetailView({ request, status, error, onRetry, onR
   return (
     <div className="wv-lifecycle-detail-page">
       <Link href="/dashboard/semantic-topic-lifecycle-reviews" className="wv-lifecycle-back-link"><ArrowLeft aria-hidden="true" /> Vissza a kérelmekhez</Link>
+
+      {actionNotice ? <section className="wv-lifecycle-action-notice" role="status" aria-live="polite"><CheckCircle2 aria-hidden="true" /><span><small>Szerverállapot frissítve</small><strong>{actionNotice}</strong></span></section> : null}
 
       <header className="wv-lifecycle-detail-hero">
         <div>
@@ -294,6 +300,8 @@ export function LifecycleReviewDetailView({ request, status, error, onRetry, onR
 
       <ExistingOutcome request={request} />
 
+      <LifecycleReviewCancelPanel request={request} onCancelled={onCancelled} />
+
       <section className="wv-lifecycle-timeline" aria-labelledby="lifecycle-timeline-title">
         <header><small>Audit-idővonal</small><h2 id="lifecycle-timeline-title">A kérelem története</h2></header>
         {request.transitionHistory.length ? (
@@ -316,6 +324,9 @@ export default function LifecycleReviewDetail({ reviewRequestId }: { reviewReque
   const [status, setStatus] = useState<DetailStatus>('loading')
   const [error, setError] = useState<LifecycleReviewDetailViewProps['error']>(null)
   const [reloadVersion, setReloadVersion] = useState(0)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
+
+  useEffect(() => setActionNotice(null), [reviewRequestId])
 
   const load = useCallback(async (signal: AbortSignal) => {
     setStatus('loading')
@@ -361,5 +372,9 @@ export default function LifecycleReviewDetail({ reviewRequestId }: { reviewReque
   }, [load, reloadVersion])
 
   const refresh = () => setReloadVersion(value => value + 1)
-  return <LifecycleReviewDetailView request={request} status={status} error={error} onRetry={refresh} onRefresh={refresh} />
+  const handleCancelled = (result: LifecycleCancelActionResult) => {
+    setActionNotice(result.outcomeKind === 'replayed' ? 'A korábbi visszavonás szerveroldali eredménye visszaigazolva.' : 'A kérelem visszavonva; a részletnézet a szerver válaszából újratöltve.')
+    refresh()
+  }
+  return <LifecycleReviewDetailView request={request} status={status} error={error} onRetry={refresh} onRefresh={refresh} onCancelled={handleCancelled} actionNotice={actionNotice} />
 }
