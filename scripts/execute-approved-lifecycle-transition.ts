@@ -38,24 +38,19 @@ const MINIMUM_NODE_MAJOR_VERSION = 24
 
 register('./ts-alias-loader.mjs', import.meta.url)
 
+type ExecutorFlag = '--dry-run' | '--apply' | '--review-request-id' | '--confirm-production-project-ref'
+
+const EXECUTOR_FLAG_SCHEMA: Record<ExecutorFlag, 'boolean' | 'value'> = {
+  '--dry-run': 'boolean',
+  '--apply': 'boolean',
+  '--review-request-id': 'value',
+  '--confirm-production-project-ref': 'value',
+}
+
 interface Cli {
   reviewRequestId: string | null
   apply: boolean
   confirmProductionProjectRef: string | null
-  help: boolean
-}
-
-function parseArgs(argv: string[]): Cli {
-  const cli: Cli = { reviewRequestId: null, apply: false, confirmProductionProjectRef: null, help: false }
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--help' || arg === '-h') cli.help = true
-    else if (arg === '--dry-run') cli.apply = false
-    else if (arg === '--apply') cli.apply = true
-    else if (arg === '--review-request-id') cli.reviewRequestId = argv[++i] ?? null
-    else if (arg === '--confirm-production-project-ref') cli.confirmProductionProjectRef = argv[++i] ?? null
-  }
-  return cli
 }
 
 function printHelp() {
@@ -85,8 +80,12 @@ key, or credential -- only short, redacted previews.
 }
 
 async function main(): Promise<number> {
-  const cli = parseArgs(process.argv.slice(2))
-  if (cli.help) {
+  const rawArgs = process.argv.slice(2)
+
+  // --help/-h always wins, regardless of anything else on the command
+  // line -- checked BEFORE strict argument validation, matching this
+  // CLI's established behavior.
+  if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
     printHelp()
     return 0
   }
@@ -94,12 +93,30 @@ async function main(): Promise<number> {
   // Every real-application import happens here, AFTER register() above.
   const { redactForDisplay, resolveProjectIdentity, projectGuardPasses } = await import('../lib/semantic-topic/operator-cli-security')
   const support = await import('../lib/semantic-topic/execute-approved-lifecycle-transition-cli-support')
+  const { parseStrictArgs } = await import('../lib/semantic-topic/strict-cli-args')
 
   const log = (level: 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => {
     const safeFields = fields ? (redactForDisplay(fields) as Record<string, unknown>) : undefined
     const line = JSON.stringify({ ts: new Date().toISOString(), level, message, ...safeFields })
     if (level === 'error') console.error(line)
     else console.log(line)
+  }
+
+  // Strict argument validation -- BEFORE any environment read, Supabase
+  // client construction, project guard, interactive prompt, or DB call.
+  const parsed = parseStrictArgs<ExecutorFlag>(rawArgs, EXECUTOR_FLAG_SCHEMA)
+  if (!parsed.ok) {
+    log('error', 'invalid command-line arguments', { reasonCode: parsed.reason })
+    return support.LIFECYCLE_EXECUTOR_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
+  }
+  if (parsed.booleans.has('--dry-run') && parsed.booleans.has('--apply')) {
+    log('error', '--dry-run and --apply cannot both be given', { reasonCode: 'INVALID_ARGUMENTS' })
+    return support.LIFECYCLE_EXECUTOR_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
+  }
+  const cli: Cli = {
+    reviewRequestId: parsed.values['--review-request-id'] ?? null,
+    apply: parsed.booleans.has('--apply'),
+    confirmProductionProjectRef: parsed.values['--confirm-production-project-ref'] ?? null,
   }
 
   if (!support.isValidReviewRequestId(cli.reviewRequestId)) {

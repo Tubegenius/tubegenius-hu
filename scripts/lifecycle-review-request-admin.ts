@@ -38,28 +38,23 @@ const MINIMUM_NODE_MAJOR_VERSION = 24
 
 register('./ts-alias-loader.mjs', import.meta.url)
 
+type RequestAdminFlag = '--dry-run' | '--apply' | '--semantic-topic-id' | '--target-status' | '--operator-reference' | '--confirm-production-project-ref'
+
+const REQUEST_ADMIN_FLAG_SCHEMA: Record<RequestAdminFlag, 'boolean' | 'value'> = {
+  '--dry-run': 'boolean',
+  '--apply': 'boolean',
+  '--semantic-topic-id': 'value',
+  '--target-status': 'value',
+  '--operator-reference': 'value',
+  '--confirm-production-project-ref': 'value',
+}
+
 interface Cli {
   semanticTopicId: string | null
   targetStatus: string | null
   operatorReference: string | null
   apply: boolean
   confirmProductionProjectRef: string | null
-  help: boolean
-}
-
-function parseArgs(argv: string[]): Cli {
-  const cli: Cli = { semanticTopicId: null, targetStatus: null, operatorReference: null, apply: false, confirmProductionProjectRef: null, help: false }
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
-    if (arg === '--help' || arg === '-h') cli.help = true
-    else if (arg === '--dry-run') cli.apply = false
-    else if (arg === '--apply') cli.apply = true
-    else if (arg === '--semantic-topic-id') cli.semanticTopicId = argv[++i] ?? null
-    else if (arg === '--target-status') cli.targetStatus = argv[++i] ?? null
-    else if (arg === '--operator-reference') cli.operatorReference = argv[++i] ?? null
-    else if (arg === '--confirm-production-project-ref') cli.confirmProductionProjectRef = argv[++i] ?? null
-  }
-  return cli
 }
 
 function printHelp() {
@@ -88,8 +83,13 @@ UUID, idempotency key, or credential -- only short, redacted previews.
 }
 
 async function main(): Promise<number> {
-  const cli = parseArgs(process.argv.slice(2))
-  if (cli.help) {
+  const rawArgs = process.argv.slice(2)
+
+  // --help/-h always wins, regardless of anything else on the command
+  // line -- checked BEFORE strict argument validation, matching this
+  // CLI's established behavior (a malformed invocation should never
+  // prevent an operator from getting help).
+  if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
     printHelp()
     return 0
   }
@@ -97,12 +97,37 @@ async function main(): Promise<number> {
   // Every real-application import happens here, AFTER register() above.
   const { redactForDisplay, resolveProjectIdentity, projectGuardPasses } = await import('../lib/semantic-topic/operator-cli-security')
   const support = await import('../lib/semantic-topic/lifecycle-request-admin-cli-support')
+  const { parseStrictArgs } = await import('../lib/semantic-topic/strict-cli-args')
 
   const log = (level: 'info' | 'warn' | 'error', message: string, fields?: Record<string, unknown>) => {
     const safeFields = fields ? (redactForDisplay(fields) as Record<string, unknown>) : undefined
     const line = JSON.stringify({ ts: new Date().toISOString(), level, message, ...safeFields })
     if (level === 'error') console.error(line)
     else console.log(line)
+  }
+
+  // Strict argument validation -- BEFORE any environment read, Supabase
+  // client construction, project guard, interactive prompt, or DB call.
+  // Rejects an unknown flag, an unexpected positional argument, a
+  // repeated flag, an unsupported --flag=value form, a missing value for
+  // a value-flag, and a boolean flag followed by an unconsumed value --
+  // all under the same closed INVALID_ARGUMENTS reason, never echoing
+  // the raw argv.
+  const parsed = parseStrictArgs<RequestAdminFlag>(rawArgs, REQUEST_ADMIN_FLAG_SCHEMA)
+  if (!parsed.ok) {
+    log('error', 'invalid command-line arguments', { reasonCode: parsed.reason })
+    return support.LIFECYCLE_REQUEST_ADMIN_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
+  }
+  if (parsed.booleans.has('--dry-run') && parsed.booleans.has('--apply')) {
+    log('error', '--dry-run and --apply cannot both be given', { reasonCode: 'INVALID_ARGUMENTS' })
+    return support.LIFECYCLE_REQUEST_ADMIN_EXIT_CODE.VALIDATION_OR_CONFIG_ERROR
+  }
+  const cli: Cli = {
+    semanticTopicId: parsed.values['--semantic-topic-id'] ?? null,
+    targetStatus: parsed.values['--target-status'] ?? null,
+    operatorReference: parsed.values['--operator-reference'] ?? null,
+    apply: parsed.booleans.has('--apply'),
+    confirmProductionProjectRef: parsed.values['--confirm-production-project-ref'] ?? null,
   }
 
   if (!support.isValidSemanticTopicId(cli.semanticTopicId)) {

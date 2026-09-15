@@ -156,4 +156,74 @@ describeIfLocalDb('PFM Lifecycle Operator CLI v1 -- request-creation CLI subproc
     expect(result.exitCode).toBe(2)
     expect(result.stdout + result.stderr).toContain('required environment variable')
   })
+
+  describe('strict argument validation', () => {
+    // Uses the real fixture topicId (outer beforeAll) so the regression
+    // test at the bottom actually reaches a successful dry-run preview --
+    // it doesn't matter for the rejection tests above it, since strict
+    // validation fails before any topic lookup is ever attempted.
+    function validArgs(): string[] {
+      return ['--semantic-topic-id', topicId, '--target-status', 'coherent', '--operator-reference', 'op-strict-args']
+    }
+
+  function assertRejectedBeforeAnyWork(result: { exitCode: number; stdout: string; stderr: string }) {
+    expect(result.exitCode).not.toBe(0)
+    const combined = result.stdout + result.stderr
+    expect(combined).toMatch(/INVALID_ARGUMENTS/)
+    // Never reaches env-check, guard, prompt, or the outcome logger.
+    expect(combined).not.toMatch(/required environment variable/)
+    expect(combined).not.toMatch(/production apply guard passed/)
+    expect(combined).not.toMatch(/Type YES to continue/)
+    expect(combined).not.toMatch(/request-creation outcome/)
+  }
+
+  it('an unknown flag is rejected before any environment read', async () => {
+    const result = await runCli([...validArgs(), '--totally-made-up-flag'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('a typo of --apply (--aply) is rejected, never silently ignored', async () => {
+    const result = await runCli([...validArgs(), '--aply'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('an unexpected positional argument is rejected', async () => {
+    const result = await runCli([...validArgs(), 'stray-positional-value'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('a duplicated scalar flag is rejected', async () => {
+    const result = await runCli([...validArgs(), '--semantic-topic-id', '11111111-0000-4000-8000-000000000000'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('--dry-run and --apply together are rejected', async () => {
+    const result = await runCli([...validArgs(), '--dry-run', '--apply'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('a value-flag with no following value is rejected', async () => {
+    const result = await runCli(['--semantic-topic-id', '--target-status', 'coherent', '--operator-reference', 'op-strict-args'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('the unsupported --flag=value form is rejected even for a real flag name', async () => {
+    const result = await runCli(['--semantic-topic-id=00000000-0000-4000-8000-000000000000', '--target-status', 'coherent', '--operator-reference', 'op-strict-args'], BASE_ENV)
+    assertRejectedBeforeAnyWork(result)
+  })
+
+  it('zero DB rows are touched by any of the rejected invocations above', async () => {
+    const before = dockerPsql(`select count(*) from semantic_topic_lifecycle_review_requests;`).trim()
+    await runCli([...validArgs(), '--rogue-flag'], BASE_ENV)
+    await runCli([...validArgs(), 'stray'], BASE_ENV)
+    await runCli([...validArgs(), '--dry-run', '--apply'], BASE_ENV)
+    expect(dockerPsql(`select count(*) from semantic_topic_lifecycle_review_requests;`).trim()).toBe(before)
+  })
+
+    it('regression: the correct, documented argument set still parses and reaches the dry-run preview', async () => {
+      const result = await runCli(validArgs(), BASE_ENV)
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/"kind":"dry_run"/)
+    })
+  })
 })

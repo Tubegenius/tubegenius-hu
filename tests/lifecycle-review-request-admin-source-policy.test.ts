@@ -77,8 +77,8 @@ describe('scripts/lifecycle-review-request-admin.ts CLI boundary', () => {
   it('never calls .rpc( directly -- all RPC access goes through the support module', () => {
     expect(cliSrc).not.toMatch(/\.rpc\(/)
   })
-  it('defaults to dry-run: --apply flips it, and the RPC-calling wrapper is invoked with dryRun: !cli.apply', () => {
-    expect(cliSrc).toMatch(/apply:\s*false/)
+  it('defaults to dry-run: apply is derived from the parsed --apply boolean, and the RPC-calling wrapper is invoked with dryRun: !cli.apply', () => {
+    expect(cliSrc).toMatch(/apply:\s*parsed\.booleans\.has\('--apply'\)/)
     expect(cliSrc).toMatch(/dryRun:\s*!cli\.apply/)
   })
   it('requires --confirm-production-project-ref and resolves it via the shared operator-cli-security guard before constructing the admin client', () => {
@@ -107,11 +107,30 @@ describe('scripts/lifecycle-review-request-admin.ts CLI boundary', () => {
   it('never accepts a free-form --idempotency-key flag', () => {
     expect(cliSrc).not.toMatch(/'--idempotency-key'/)
   })
-  it('accepts exactly the documented flags -- no more, no fewer', () => {
-    const flagMatches = [...cliSrc.matchAll(/arg === '(--[a-z-]+)'/g)].map((m) => m[1])
-    expect(new Set(flagMatches)).toEqual(
-      new Set(['--help', '--dry-run', '--apply', '--semantic-topic-id', '--target-status', '--operator-reference', '--confirm-production-project-ref']),
-    )
+  it('accepts exactly the documented flags -- no more, no fewer (schema keys + the separately-handled --help)', () => {
+    const schemaBlockMatch = cliSrc.match(/REQUEST_ADMIN_FLAG_SCHEMA:[\s\S]*?\{([\s\S]*?)\}/)
+    expect(schemaBlockMatch).not.toBeNull()
+    const schemaFlags = schemaBlockMatch ? [...schemaBlockMatch[1].matchAll(/'(--[a-z-]+)':/g)].map((m) => m[1]) : []
+    expect(new Set(schemaFlags)).toEqual(new Set(['--dry-run', '--apply', '--semantic-topic-id', '--target-status', '--operator-reference', '--confirm-production-project-ref']))
+    expect(cliSrc).toMatch(/rawArgs\.includes\('--help'\)/)
+  })
+  it('validates arguments via the shared strict parser, before any environment read, client construction, guard, or prompt', () => {
+    expect(cliSrc).toMatch(/=\s*await\s+import\(\s*['"]\.\.\/lib\/semantic-topic\/strict-cli-args['"]\s*\)/)
+    expect(cliSrc).toMatch(/parseStrictArgs</)
+    const strictParseIndex = cliSrc.indexOf('parseStrictArgs<')
+    const envReadIndex = cliSrc.indexOf('missingEnvVars')
+    const guardIndex = cliSrc.indexOf('projectGuardPasses(')
+    const promptIndex = cliSrc.indexOf('rl.question(')
+    expect(strictParseIndex).toBeGreaterThan(0)
+    expect(envReadIndex).toBeGreaterThan(strictParseIndex)
+    expect(guardIndex).toBeGreaterThan(strictParseIndex)
+    expect(promptIndex).toBeGreaterThan(strictParseIndex)
+  })
+  it('rejects --dry-run and --apply given together, before any RPC-bound validation', () => {
+    expect(cliSrc).toMatch(/parsed\.booleans\.has\('--dry-run'\)\s*&&\s*parsed\.booleans\.has\('--apply'\)/)
+  })
+  it('never re-implements the parsing loop itself -- no local `while` or `for` scan over argv outside the shared parser module', () => {
+    expect(cliSrc).not.toMatch(/for\s*\(\s*let i = 0; i < argv\.length/)
   })
 })
 
