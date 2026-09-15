@@ -1,5 +1,6 @@
-<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <rect width="512" height="512" rx="72" fill="#101210"/>
-  <path d="M60 108 L150 390 L244 168 L322 322 L452 70" fill="none" stroke="#F2F0E8" stroke-width="44" stroke-linecap="square" stroke-linejoin="miter"/>
-  <path d="M322 322 L452 70" fill="none" stroke="#49CAD2" stroke-width="44" stroke-linecap="square" stroke-linejoin="miter"/>
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+  <title id="title">WillViral</title>
+  <rect width="100" height="100" rx="20" fill="#20241F"/>
+  <path d="M12 31 L30 73 L49 49 L64 65 L89 22" fill="none" stroke="#C8F135" stroke-width="10" stroke-linecap="square" stroke-linejoin="round"/>
+  <path d="M82.5 33.2 L89 22" fill="none" stroke="#49CAD2" stroke-width="10" stroke-linecap="square"/>
 </svg>
