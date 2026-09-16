@@ -18,6 +18,7 @@ import type {
   LifecycleReviewListItem,
   LifecycleStatusFilter,
 } from '@/lib/semantic-topic/lifecycle-review-types'
+import { requestLifecycleJson } from '@/lib/lifecycle-review-client'
 import {
   LIFECYCLE_FROM_STATUS_OPTIONS,
   LIFECYCLE_LIST_PAGE_SIZE,
@@ -326,14 +327,12 @@ export default function LifecycleReviewQueue() {
     setError(null)
 
     try {
-      const response = await fetch(buildLifecycleReviewListUrl(filter, LIFECYCLE_LIST_PAGE_SIZE, cursor), {
+      const response = await requestLifecycleJson(buildLifecycleReviewListUrl(filter, LIFECYCLE_LIST_PAGE_SIZE, cursor), {
         method: 'GET',
         headers: { Accept: 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
         signal,
       })
-      const payload: unknown = await response.json().catch(() => null)
+      const payload = response.payload
       if (filter !== activeStatusFilterRef.current) return
       if (!response.ok) {
         const serverMessage = payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string'

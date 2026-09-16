@@ -133,13 +133,15 @@ describe('Lifecycle Reviewer frontend Milestone 3 submission safety', () => {
     'utf8',
   )
   const css = readFileSync(join(process.cwd(), 'app', 'dashboard', 'creator-os.css'), 'utf8')
+  const client = readFileSync(join(process.cwd(), 'lib', 'lifecycle-review-client.ts'), 'utf8')
 
   it('posts JSON to the existing same-origin route without setting Origin', () => {
     expect(component).toContain("method: 'POST'")
     expect(component).toContain("'Content-Type': 'application/json'")
-    expect(component).toContain("credentials: 'same-origin'")
-    expect(component).not.toMatch(/['"]Origin['"]\s*:/)
-    expect(component.match(/await fetch\(/g)).toHaveLength(1)
+    expect(component).toContain('requestLifecycleJson')
+    expect(client).toContain("credentials: 'same-origin'")
+    expect(`${component}\n${client}`).not.toMatch(/['"]Origin['"]\s*:/)
+    expect(client.match(/await fetcher\(/g)).toHaveLength(1)
   })
 
   it('blocks parallel submission and retains one idempotency key across manual retry', () => {
@@ -165,6 +167,14 @@ describe('Lifecycle Reviewer frontend Milestone 3 submission safety', () => {
   it('only exposes the decision UI for actionable requested records', () => {
     expect(detail).toContain("request.requestStatus === 'requested'")
     expect(component).not.toMatch(/\/cancel/)
+  })
+
+  it('refreshes detail from the server after a verified decision response', () => {
+    expect(component).toContain('parsed.reviewRequestId !== request.reviewRequestId')
+    expect(component).toContain('onDecided(parsed)')
+    expect(component).not.toMatch(/setRequest|requestStatus\s*=(?!=)/)
+    expect(detail).toContain('const handleDecided')
+    expect(detail).toMatch(/setActionNotice[\s\S]*refresh\(\)/)
   })
 
   it('declares responsive, focus and reduced-motion treatment', () => {

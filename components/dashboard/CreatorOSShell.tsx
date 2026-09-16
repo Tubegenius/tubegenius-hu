@@ -23,6 +23,7 @@ import Logo from '@/components/brand/Logo'
 import { CREATOR_OS_NAV_ITEMS, creatorOSSectionForPath, type CreatorOSSectionId } from '@/lib/creator-os-navigation'
 import { CREATOR_LANE_PRESENTATION, type CreatorLane } from '@/lib/creator-lane-presentation'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
+import { fetchLifecycleReviewerCapability } from '@/lib/lifecycle-review-capability-client'
 
 interface CreatorOSShellProps {
   children: ReactNode
@@ -49,12 +50,22 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
   const accountMenuRef = useRef<HTMLDivElement>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [canReviewSemanticTopicLifecycle, setCanReviewSemanticTopicLifecycle] = useState(false)
   const activeSection = activeSectionOverride ?? creatorOSSectionForPath(pathname)
   const channelName = profile?.channel_name || userEmail?.split('@')[0] || 'Saját csatorna'
   const initials = channelName.slice(0, 2).toUpperCase()
   const laneLabel = CREATOR_LANE_PRESENTATION[creatorLane].label
 
   useEffect(() => setMenuOpen(false), [pathname])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setCanReviewSemanticTopicLifecycle(false)
+    void fetchLifecycleReviewerCapability(controller.signal).then(canReview => {
+      if (!controller.signal.aborted && canReview) setCanReviewSemanticTopicLifecycle(true)
+    })
+    return () => controller.abort()
+  }, [])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -168,7 +179,9 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
               </div>
               <Link href="/dashboard/profile" role="menuitem"><UserRound aria-hidden="true" />Profil és csatorna</Link>
               <Link href="/dashboard/credits" role="menuitem"><CreditCard aria-hidden="true" />Kreditek és számlázás</Link>
-              <Link href="/dashboard/semantic-topic-lifecycle-reviews" role="menuitem"><ShieldCheck aria-hidden="true" />Lifecycle reviewer</Link>
+              {canReviewSemanticTopicLifecycle ? (
+                <Link href="/dashboard/semantic-topic-lifecycle-reviews" role="menuitem"><ShieldCheck aria-hidden="true" />Lifecycle reviewer</Link>
+              ) : null}
               <Link href="/dashboard/profile" role="menuitem"><Settings aria-hidden="true" />Beállítások</Link>
               <button type="button" role="menuitem" onClick={handleLogout}><LogOut aria-hidden="true" />Kijelentkezés</button>
             </div>

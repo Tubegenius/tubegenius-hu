@@ -111,6 +111,7 @@ describe('Lifecycle Reviewer frontend Milestone 1 security boundary', () => {
     join(process.cwd(), 'components', 'semantic-topic-lifecycle-reviews', 'LifecycleReviewQueue.tsx'),
     'utf8',
   )
+  const clientSource = readFileSync(join(process.cwd(), 'lib', 'lifecycle-review-client.ts'), 'utf8')
 
   it('uses only the lifecycle list GET surface and contains no write request', () => {
     expect(queueSource).toContain("method: 'GET'")
@@ -120,8 +121,9 @@ describe('Lifecycle Reviewer frontend Milestone 1 security boundary', () => {
   })
 
   it('uses same-origin session fetch without manually setting Origin', () => {
-    expect(queueSource).toContain("credentials: 'same-origin'")
-    expect(queueSource).not.toMatch(/['"]Origin['"]\s*:/)
+    expect(queueSource).toContain('requestLifecycleJson')
+    expect(clientSource).toContain("credentials: 'same-origin'")
+    expect(`${queueSource}\n${clientSource}`).not.toMatch(/['"]Origin['"]\s*:/)
   })
 
   it('keeps native keyboard controls and declares reduced-motion styling', () => {

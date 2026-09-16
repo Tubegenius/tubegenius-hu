@@ -87,13 +87,15 @@ describe('Lifecycle Reviewer frontend Milestone 4A interaction safety', () => {
     'utf8',
   )
   const css = readFileSync(join(process.cwd(), 'app', 'dashboard', 'creator-os.css'), 'utf8')
+  const client = readFileSync(join(process.cwd(), 'lib', 'lifecycle-review-client.ts'), 'utf8')
 
   it('posts JSON only to the existing same-origin cancel endpoint', () => {
     expect(component).toContain("method: 'POST'")
     expect(component).toContain("'Content-Type': 'application/json'")
-    expect(component).toContain("credentials: 'same-origin'")
-    expect(component).not.toMatch(/['"]Origin['"]\s*:/)
-    expect(component.match(/await fetch\(/g)).toHaveLength(1)
+    expect(component).toContain('requestLifecycleJson')
+    expect(client).toContain("credentials: 'same-origin'")
+    expect(`${component}\n${client}`).not.toMatch(/['"]Origin['"]\s*:/)
+    expect(client.match(/await fetcher\(/g)).toHaveLength(1)
     expect(component).not.toMatch(/\/decision/)
   })
 

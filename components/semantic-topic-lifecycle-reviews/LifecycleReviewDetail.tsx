@@ -23,12 +23,14 @@ import {
 } from 'lucide-react'
 import type {
   LifecycleCancelActionResult,
+  LifecycleDecisionActionResult,
   LifecycleEvidenceVector,
   LifecycleReviewDetail,
   LifecycleStalenessSignals,
 } from '@/lib/semantic-topic/lifecycle-review-types'
 import LifecycleReviewDecisionPanel from '@/components/semantic-topic-lifecycle-reviews/LifecycleReviewDecisionPanel'
 import LifecycleReviewCancelPanel from '@/components/semantic-topic-lifecycle-reviews/LifecycleReviewCancelPanel'
+import { requestLifecycleJson } from '@/lib/lifecycle-review-client'
 import {
   LIFECYCLE_STATUS_PRESENTATION,
   formatLifecycleDate,
@@ -55,7 +57,7 @@ interface LifecycleReviewDetailViewProps {
   status: DetailStatus
   error: LifecycleDetailError | { kind: 'network'; message: string } | null
   onRetry: () => void
-  onRefresh: () => void
+  onDecided: (result: LifecycleDecisionActionResult) => void
   onCancelled: (result: LifecycleCancelActionResult) => void
   actionNotice: string | null
 }
@@ -214,7 +216,7 @@ function ExistingOutcome({ request }: { request: LifecycleReviewDetail }) {
   )
 }
 
-export function LifecycleReviewDetailView({ request, status, error, onRetry, onRefresh, onCancelled, actionNotice }: LifecycleReviewDetailViewProps) {
+export function LifecycleReviewDetailView({ request, status, error, onRetry, onDecided, onCancelled, actionNotice }: LifecycleReviewDetailViewProps) {
   if (status === 'loading') return <DetailSkeleton />
   if (status !== 'ready' || !request) return <DetailStatePanel status={status} error={error} onRetry={onRetry} />
 
@@ -296,7 +298,7 @@ export function LifecycleReviewDetailView({ request, status, error, onRetry, onR
         </div>
       </section>
 
-      {request.requestStatus === 'requested' ? <LifecycleReviewDecisionPanel request={request} onRefresh={onRefresh} /> : null}
+      {request.requestStatus === 'requested' ? <LifecycleReviewDecisionPanel request={request} onDecided={onDecided} /> : null}
 
       <ExistingOutcome request={request} />
 
@@ -333,14 +335,12 @@ export default function LifecycleReviewDetail({ reviewRequestId }: { reviewReque
     setRequest(null)
     setError(null)
     try {
-      const response = await fetch(buildLifecycleReviewDetailUrl(reviewRequestId), {
+      const response = await requestLifecycleJson(buildLifecycleReviewDetailUrl(reviewRequestId), {
         method: 'GET',
         headers: { Accept: 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
         signal,
       })
-      const payload: unknown = await response.json().catch(() => null)
+      const payload = response.payload
       if (!response.ok) {
         const serverMessage = payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string'
           ? (payload as { error: string }).error
@@ -372,9 +372,13 @@ export default function LifecycleReviewDetail({ reviewRequestId }: { reviewReque
   }, [load, reloadVersion])
 
   const refresh = () => setReloadVersion(value => value + 1)
+  const handleDecided = (result: LifecycleDecisionActionResult) => {
+    setActionNotice(result.outcomeKind === 'replayed' ? 'A korábbi döntés szerveroldali eredménye visszaigazolva.' : 'A döntés rögzítve; a részletnézet a szerver állapotából újratöltve.')
+    refresh()
+  }
   const handleCancelled = (result: LifecycleCancelActionResult) => {
     setActionNotice(result.outcomeKind === 'replayed' ? 'A korábbi visszavonás szerveroldali eredménye visszaigazolva.' : 'A kérelem visszavonva; a részletnézet a szerver válaszából újratöltve.')
     refresh()
   }
-  return <LifecycleReviewDetailView request={request} status={status} error={error} onRetry={refresh} onRefresh={refresh} onCancelled={handleCancelled} actionNotice={actionNotice} />
+  return <LifecycleReviewDetailView request={request} status={status} error={error} onRetry={refresh} onDecided={handleDecided} onCancelled={handleCancelled} actionNotice={actionNotice} />
 }
