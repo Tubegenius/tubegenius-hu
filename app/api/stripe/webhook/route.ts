@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { stripe, PLANS, TOPUPS, PlanKey, TopupKey } from '@/lib/stripe'
+import { getStripeClient, StripeConfigurationError, PLANS, TOPUPS, PlanKey, TopupKey } from '@/lib/stripe'
 import { createAdminClient } from '@/lib/supabase-server'
 import Stripe from 'stripe'
 import {
@@ -30,7 +30,22 @@ export async function POST(req: NextRequest) {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
 
     if (webhookSecret && sig) {
-      event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret)
+      // The Stripe secret key and the webhook signing secret are two
+      // separate configuration values -- validated separately. A missing
+      // Stripe secret key is a server misconfiguration (redacted, stable
+      // 5xx), never the same "Invalid signature" 400 a genuinely bad/
+      // tampered payload gets from the catch below.
+      let client: Stripe
+      try {
+        client = getStripeClient()
+      } catch (configErr) {
+        if (configErr instanceof StripeConfigurationError) {
+          console.error('Stripe webhook: Stripe secret key is not configured')
+          return NextResponse.json({ error: 'Webhook not configured' }, { status: 500 })
+        }
+        throw configErr
+      }
+      event = client.webhooks.constructEvent(rawBody, sig, webhookSecret)
     } else if (process.env.NODE_ENV !== 'production') {
       // Dev mode: skip verification — csak fejlesztéskor engedett. Élesben, ha
       // a secret/header hiányzik, korábban ez ellenőrizetlen payloadot fogadott
@@ -175,7 +190,14 @@ export async function POST(req: NextRequest) {
         let resolvedUserId = userRow?.user_id as string | undefined
         let resolvedPlan = userRow?.plan as PlanKey | undefined
         if (!resolvedUserId || !resolvedPlan) {
-          const subscription = await stripe.subscriptions.retrieve(invoiceSubscription as string)
+          // Reached only when the DB lookup by subscription id missed (rare
+          // fallback) -- getStripeClient() is memoized, so this is cheap
+          // whether or not the signature-verification branch above already
+          // resolved a client (e.g. in dev-bypass mode, which never does).
+          // A missing key here is caught by this handler's own outer
+          // try/catch below, which already produces a redacted, stable 500
+          // and marks the event 'failed' for investigation.
+          const subscription = await getStripeClient().subscriptions.retrieve(invoiceSubscription as string)
           resolvedUserId = subscription.metadata?.user_id
           resolvedPlan = subscription.metadata?.plan as PlanKey | undefined
         }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
-import { stripe, TOPUPS, TopupKey } from '@/lib/stripe'
+import { getStripeClient, requirePriceId, resolveCanonicalAppOrigin, TOPUPS, TopupKey } from '@/lib/stripe'
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,6 +17,13 @@ export async function POST(req: NextRequest) {
     }
 
     const topupConfig = TOPUPS[pkg as TopupKey]
+    // Config validated (this package's price id, the app origin, and the
+    // Stripe client itself) BEFORE any DB or Stripe call -- an unrelated
+    // package's missing price id never blocks this request.
+    const priceId = requirePriceId(topupConfig.priceId, pkg)
+    const appOrigin = resolveCanonicalAppOrigin()
+    const stripe = getStripeClient()
+
     const admin = createAdminClient()
 
     const { data: creditRow, error: creditReadError } = await admin
@@ -38,9 +45,9 @@ export async function POST(req: NextRequest) {
       // ugyanezen megjegyzese: kizarja a delayed fizetesi modokat, amiket
       // a webhook jelenleg nem kezel kulon async esemenykent.
       payment_method_types: ['card'],
-      line_items: [{ price: topupConfig.priceId, quantity: 1 }],
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?success=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?canceled=true`,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${appOrigin}/dashboard/credits?success=true`,
+      cancel_url: `${appOrigin}/dashboard/credits?canceled=true`,
       metadata: { user_id: user.id, package: pkg },
     })
 

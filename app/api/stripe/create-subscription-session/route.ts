@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
-import { stripe, PLANS, PlanKey } from '@/lib/stripe'
+import { getStripeClient, requirePriceId, resolveCanonicalAppOrigin, PLANS, PlanKey } from '@/lib/stripe'
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,6 +17,13 @@ export async function POST(req: NextRequest) {
     }
 
     const planConfig = PLANS[plan as PlanKey]
+    // Config validated (this plan's price id, the app origin, and the
+    // Stripe client itself) BEFORE any DB or Stripe call -- an unrelated
+    // plan's missing price id never blocks this request.
+    const priceId = requirePriceId(planConfig.priceId, plan)
+    const appOrigin = resolveCanonicalAppOrigin()
+    const stripe = getStripeClient()
+
     const admin = createAdminClient()
 
     // Get or create stripe customer
@@ -61,9 +68,9 @@ export async function POST(req: NextRequest) {
       // completed-elnek es csak kesobb, kulon async_payment_succeeded
       // esemennyel fizetodnenek ki — ezt a webhook jelenleg nem kezeli.
       payment_method_types: ['card'],
-      line_items: [{ price: planConfig.priceId, quantity: 1 }],
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?success=true`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits?canceled=true`,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${appOrigin}/dashboard/credits?success=true`,
+      cancel_url: `${appOrigin}/dashboard/credits?canceled=true`,
       metadata: { user_id: user.id, plan },
       subscription_data: { metadata: { user_id: user.id, plan } },
     })

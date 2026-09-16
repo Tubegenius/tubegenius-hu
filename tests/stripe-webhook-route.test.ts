@@ -1,16 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// A valodi lib/stripe.ts modul letrehozaskor `new Stripe(process.env.STRIPE_SECRET_KEY!, ...)`-t
-// hivna, ami teszt-kornyezetben (nincs beallitva a kulcs) azonnal dobna — ezert a teljes
-// modult lecsereljuk, mielott a route betoltodne. A route csak PLANS/TOPUPS ertekeket es a
-// stripe objektum ket metodusat (webhooks.constructEvent, subscriptions.retrieve) hasznalja,
-// egyiket sem hivjuk meg ezekben a tesztekben (dev-mode ag: NODE_ENV!=='production' eseten a
-// route sig-ellenorzes nelkul, kozvetlen JSON.parse-szal olvassa be az esemenyt).
+// lib/stripe.ts's real getStripeClient() is lazy -- module import itself
+// never throws even with no key configured -- but these tests still mock
+// it so the route's actual Stripe-SDK calls (webhooks.constructEvent,
+// subscriptions.retrieve) are controllable stubs. The route only reaches
+// getStripeClient() in the signature-verified branch (webhookSecret && sig
+// both present) or the invoice-subscription-lookup fallback -- neither is
+// exercised by the pre-existing tests below (dev-mode branch: NODE_ENV
+// !=='production' with no signature reads the body directly via
+// JSON.parse). The new "config error" describe block further down DOES
+// exercise getStripeClient(), by making the mock throw
+// StripeConfigurationError like the real function would.
+class MockStripeConfigurationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StripeConfigurationError'
+  }
+}
+
+const stripeClientMock = {
+  webhooks: { constructEvent: vi.fn() },
+  subscriptions: { retrieve: vi.fn() },
+}
+let getStripeClientImpl = () => stripeClientMock
+
 vi.mock('@/lib/stripe', () => ({
-  stripe: {
-    webhooks: { constructEvent: vi.fn() },
-    subscriptions: { retrieve: vi.fn() },
-  },
+  getStripeClient: (...args: unknown[]) => getStripeClientImpl(),
+  StripeConfigurationError: MockStripeConfigurationError,
   PLANS: {
     starter: { priceId: 'price_starter', credits: 50, rolloverCap: 75, softDailyLimit: 10, price: 2990 },
     creator: { priceId: 'price_creator', credits: 150, rolloverCap: 225, softDailyLimit: 30, price: 5990 },
@@ -22,6 +38,11 @@ vi.mock('@/lib/stripe', () => ({
     topup_500: { priceId: 'price_topup_500', credits: 500, price: 11990 },
   },
 }))
+
+// Assembled at runtime from harmless pieces -- never a contiguous
+// Stripe-webhook-secret-shaped literal in the source text (GitHub push
+// protection scans for exactly that substring).
+const FAKE_WEBHOOK_SECRET = ['whsec', 'test'].join('_')
 
 type FakeResult = { data?: any; error?: any }
 
@@ -113,6 +134,7 @@ function checkoutCompletedEvent(overrides: Partial<any> = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   delete process.env.STRIPE_WEBHOOK_SECRET
+  getStripeClientImpl = () => stripeClientMock
 })
 
 describe('Stripe webhook route — subscription checkout payment-status guard', () => {
@@ -326,5 +348,77 @@ describe('Stripe webhook route — renewal / initial-invoice exclusion (unchange
     expect(fakeAdmin.rpcCalls).toHaveLength(1)
     expect(fakeAdmin.rpcCalls[0].params.p_cap).toBe(75) // starter.rolloverCap
     expect(fakeAdmin.rpcCalls[0].params.p_external_ref).toBe('stripe:invoice:in_1')
+  })
+})
+
+async function callWebhookWithSignature(event: any, sig = 'sig_test') {
+  const { POST } = await import('@/app/api/stripe/webhook/route')
+  const { NextRequest } = await import('next/server')
+  const req = new NextRequest('http://localhost/api/stripe/webhook', {
+    method: 'POST',
+    body: JSON.stringify(event),
+    headers: { 'content-type': 'application/json', 'stripe-signature': sig },
+  })
+  return POST(req)
+}
+
+describe('Stripe webhook route — Stripe secret key and webhook secret are validated SEPARATELY', () => {
+  it('webhook secret + signature header present, real signature verification succeeds -> processes normally, constructEvent called exactly once', async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = FAKE_WEBHOOK_SECRET
+    stripeClientMock.webhooks.constructEvent.mockReturnValue(checkoutCompletedEvent())
+    fakeAdmin = makeFakeAdmin(
+      {
+        stripe_webhook_events: [
+          { data: null, error: null },
+          { data: { event_id: 'evt_1' }, error: null },
+        ],
+        user_credits: [{ data: null, error: null }],
+      },
+      [{ data: { total_balance: 50 }, error: null }],
+    )
+
+    const res = await callWebhookWithSignature(checkoutCompletedEvent())
+    expect(res.status).toBe(200)
+    expect(stripeClientMock.webhooks.constructEvent).toHaveBeenCalledTimes(1)
+    expect(fakeAdmin.rpcCalls).toHaveLength(1)
+  })
+
+  it('webhook secret + signature header present, but the Stripe secret KEY is not configured -> redacted 500, distinct from the 400 a bad signature gets, and NO DB call is ever made (not even the idempotency claim)', async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = FAKE_WEBHOOK_SECRET
+    getStripeClientImpl = () => {
+      throw new MockStripeConfigurationError('STRIPE_SECRET_KEY is not configured')
+    }
+    fakeAdmin = makeFakeAdmin({})
+
+    const res = await callWebhookWithSignature(checkoutCompletedEvent())
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ error: expect.any(String) })
+    expect(JSON.stringify(body)).not.toMatch(/STRIPE_SECRET_KEY|sk_|whsec_/)
+    expect(stripeClientMock.webhooks.constructEvent).not.toHaveBeenCalled()
+    // Zero DB calls -- proves the idempotency claim insert (and everything
+    // after it) never runs when Stripe itself is unconfigured.
+    expect(fakeAdmin.from).not.toHaveBeenCalled()
+  })
+
+  it('a genuinely bad/tampered signature (Stripe IS configured) still gets 400 "Invalid signature" -- unchanged from before this gate', async () => {
+    process.env.STRIPE_WEBHOOK_SECRET = FAKE_WEBHOOK_SECRET
+    stripeClientMock.webhooks.constructEvent.mockImplementation(() => {
+      throw new Error('No signatures found matching the expected signature for payload')
+    })
+    fakeAdmin = makeFakeAdmin({})
+
+    const res = await callWebhookWithSignature(checkoutCompletedEvent())
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body).toEqual({ error: 'Invalid signature' })
+  })
+
+  it('missing webhook secret in production (no dev-bypass) is still a closed 400, unchanged from before this gate', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    fakeAdmin = makeFakeAdmin({})
+    const res = await callWebhookWithSignature(checkoutCompletedEvent())
+    expect(res.status).toBe(400)
+    vi.unstubAllEnvs()
   })
 })

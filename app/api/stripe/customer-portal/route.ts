@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
-import { stripe } from '@/lib/stripe'
+import { getStripeClient, resolveCanonicalAppOrigin } from '@/lib/stripe'
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,6 +9,11 @@ export async function POST(req: NextRequest) {
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    // Config validated (and the Stripe client constructed) BEFORE any DB
+    // call -- this route needs nothing else from lib/stripe (no price ids).
+    const appOrigin = resolveCanonicalAppOrigin()
+    const stripe = getStripeClient()
 
     const admin = createAdminClient()
     const { data: creditRow, error: creditReadError } = await admin
@@ -24,7 +29,7 @@ export async function POST(req: NextRequest) {
 
     const session = await stripe.billingPortal.sessions.create({
       customer: creditRow.stripe_customer_id,
-      return_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/credits`,
+      return_url: `${appOrigin}/dashboard/credits`,
     })
 
     return NextResponse.json({ url: session.url })
