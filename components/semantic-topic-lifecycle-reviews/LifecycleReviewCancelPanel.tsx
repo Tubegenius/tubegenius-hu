@@ -9,6 +9,7 @@ import {
   type LifecycleReviewDetail,
 } from '@/lib/semantic-topic/lifecycle-review-types'
 import { formatLifecycleCancelReason } from '@/lib/lifecycle-review-detail-presentation'
+import { requestLifecycleJson } from '@/lib/lifecycle-review-client'
 import {
   buildLifecycleCancelBody,
   buildLifecycleCancelUrl,
@@ -156,14 +157,12 @@ export default function LifecycleReviewCancelPanel({ request, onCancelled }: Lif
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const response = await fetch(buildLifecycleCancelUrl(request.reviewRequestId), {
+      const response = await requestLifecycleJson(buildLifecycleCancelUrl(request.reviewRequestId), {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
         body: JSON.stringify(body),
       })
-      const payload: unknown = await response.json().catch(() => null)
+      const payload = response.payload
       if (!response.ok) {
         const serverMessage = payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string'
           ? (payload as { error: string }).error

@@ -17,8 +17,9 @@ import type {
   LifecycleReasonCode,
   LifecycleReviewDetail,
 } from '@/lib/semantic-topic/lifecycle-review-types'
-import { LIFECYCLE_STATUS_PRESENTATION, formatLifecycleState } from '@/lib/lifecycle-review-presentation'
+import { formatLifecycleState } from '@/lib/lifecycle-review-presentation'
 import { formatLifecycleReasonCode } from '@/lib/lifecycle-review-detail-presentation'
+import { requestLifecycleJson } from '@/lib/lifecycle-review-client'
 import {
   LIFECYCLE_CHECKLIST,
   buildLifecycleDecisionBody,
@@ -38,19 +39,12 @@ import {
 
 interface LifecycleReviewDecisionPanelProps {
   request: LifecycleReviewDetail
-  onRefresh: () => void
+  onDecided: (result: LifecycleDecisionActionResult) => void
 }
 
 function checklistValueLabel(value: boolean | null): string {
   if (value === null) return 'Nem vizsgált'
   return value ? 'Megerősítve' : 'Nem teljesül'
-}
-
-function resultStatusLabel(value: string): string {
-  if (value in LIFECYCLE_STATUS_PRESENTATION) {
-    return LIFECYCLE_STATUS_PRESENTATION[value as keyof typeof LIFECYCLE_STATUS_PRESENTATION].label
-  }
-  return value.replaceAll('_', ' ')
 }
 
 function DecisionConfirmation({
@@ -150,13 +144,12 @@ function DecisionConfirmation({
   )
 }
 
-export default function LifecycleReviewDecisionPanel({ request, onRefresh }: LifecycleReviewDecisionPanelProps) {
+export default function LifecycleReviewDecisionPanel({ request, onDecided }: LifecycleReviewDecisionPanelProps) {
   const [draft, setDraft] = useState<LifecycleDecisionDraft>(createLifecycleDecisionDraft)
   const [validation, setValidation] = useState<LifecycleDecisionValidation | null>(null)
   const [confirmationOpen, setConfirmationOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<LifecycleDecisionSubmitError | null>(null)
-  const [result, setResult] = useState<LifecycleDecisionActionResult | null>(null)
   const attemptKeyRef = useRef<string | null>(null)
   const submittingRef = useRef(false)
   const reviewButtonRef = useRef<HTMLButtonElement>(null)
@@ -219,14 +212,12 @@ export default function LifecycleReviewDecisionPanel({ request, onRefresh }: Lif
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const response = await fetch(buildLifecycleDecisionUrl(request.reviewRequestId), {
+      const response = await requestLifecycleJson(buildLifecycleDecisionUrl(request.reviewRequestId), {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        cache: 'no-store',
         body: JSON.stringify(body),
       })
-      const payload: unknown = await response.json().catch(() => null)
+      const payload = response.payload
       if (!response.ok) {
         const serverMessage = payload && typeof payload === 'object' && typeof (payload as { error?: unknown }).error === 'string'
           ? (payload as { error: string }).error
@@ -239,24 +230,14 @@ export default function LifecycleReviewDecisionPanel({ request, onRefresh }: Lif
         setSubmitError({ kind: 'server', message: 'A szerver válasza nem felel meg a döntési szerződésnek. Automatikus újrapróbálás nem indult.' })
         return
       }
-      setResult(parsed)
       setConfirmationOpen(false)
+      onDecided(parsed)
     } catch {
       setSubmitError({ kind: 'network', message: 'A hálózati kapcsolat megszakadt. Automatikus újrapróbálás nem indult; ugyanazzal a beküldési kulccsal kézzel újrapróbálhatod.' })
     } finally {
       submittingRef.current = false
       setSubmitting(false)
     }
-  }
-
-  if (result) {
-    return (
-      <section className="wv-lifecycle-decision-success" role="status" aria-live="polite">
-        <span aria-hidden="true"><CheckCircle2 /></span>
-        <div><small>Döntés rögzítve</small><h2>{result.outcomeKind === 'replayed' ? 'A korábbi beküldés biztonságosan visszaigazolva.' : 'A felülvizsgálói döntés sikeresen rögzítve.'}</h2><p>A szerver állapota: {resultStatusLabel(result.status)}. A végrehajtás ettől külön életciklus-művelet.</p></div>
-        <button type="button" className="wv-secondary-action" onClick={onRefresh}>Részletnézet frissítése</button>
-      </section>
-    )
   }
 
   return (

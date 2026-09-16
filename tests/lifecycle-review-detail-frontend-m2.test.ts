@@ -156,15 +156,17 @@ describe('Lifecycle Reviewer frontend Milestone 2 security and interaction bound
     join(process.cwd(), 'components', 'semantic-topic-lifecycle-reviews', 'LifecycleReviewDetail.tsx'),
     'utf8',
   )
+  const clientSource = readFileSync(join(process.cwd(), 'lib', 'lifecycle-review-client.ts'), 'utf8')
   const css = readFileSync(join(process.cwd(), 'app', 'dashboard', 'creator-os.css'), 'utf8')
 
   it('uses only the existing read endpoint with a same-origin GET request', () => {
     expect(componentSource).toContain("method: 'GET'")
-    expect(componentSource).toContain("credentials: 'same-origin'")
-    expect(componentSource).toContain("cache: 'no-store'")
+    expect(componentSource).toContain('requestLifecycleJson')
+    expect(clientSource).toContain("credentials: 'same-origin'")
+    expect(clientSource).toContain("cache: 'no-store'")
     expect(componentSource).not.toMatch(/method:\s*['"]POST['"]/)
     expect(componentSource).not.toMatch(/\/decision|\/cancel/)
-    expect(componentSource).not.toMatch(/['"]Origin['"]\s*:/)
+    expect(`${componentSource}\n${clientSource}`).not.toMatch(/['"]Origin['"]\s*:/)
   })
 
   it('has explicit loading, access, not-found and manual retry states', () => {
