@@ -144,11 +144,11 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
         </nav>
 
         <div className="wv-channel-cluster" ref={menuRef}>
-          <div className="wv-channel-context" aria-label={`${channelName}, ${laneLabel.toLocaleLowerCase('hu-HU')} minta Creator Lane`}>
+          <div className="wv-channel-context" aria-label={`${channelName}, ${laneLabel.toLocaleLowerCase('hu-HU')} Creator Lane`}>
             <span className="wv-lane-mark" aria-hidden="true" />
             <span className="wv-channel-copy">
               <strong>{channelName}</strong>
-              <small>{laneLabel} · mintanézet</small>
+              <small>{laneLabel} alkotói mód</small>
             </span>
           </div>
           <button
@@ -188,10 +188,10 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
           )}
         </div>
 
-        <div className="wv-mobile-context-bar" aria-label={`${channelName}, ${laneLabel.toLocaleLowerCase('hu-HU')} mintanézet`}>
+        <div className="wv-mobile-context-bar" aria-label={`${channelName}, ${laneLabel.toLocaleLowerCase('hu-HU')} alkotói mód`}>
           <span className="wv-lane-mark" aria-hidden="true" />
           <strong>{channelName}</strong>
-          <span>{laneLabel} · minta</span>
+          <span>{laneLabel} mód</span>
         </div>
       </header>
 

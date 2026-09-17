@@ -96,11 +96,11 @@ export type LifecycleDetailError =
   | { kind: 'invalid'; message: string }
   | { kind: 'server'; message: string }
 
-export function lifecycleDetailError(status: number, serverMessage?: string): LifecycleDetailError {
+export function lifecycleDetailError(status: number, _serverMessage?: string): LifecycleDetailError {
   if (status === 401) return { kind: 'unauthenticated', message: 'A munkamenet lejárt. Jelentkezz be újra a kérelem megnyitásához.' }
   if (status === 403) return { kind: 'forbidden', message: 'Ehhez a felülvizsgálati kérelemhez nincs aktív jogosultságod.' }
   if (status === 404) return { kind: 'not_found', message: 'Ez az életciklus-kérelem nem található, vagy már nem hozzáférhető.' }
-  if (status === 422) return { kind: 'invalid', message: serverMessage || 'Az életciklus-kérelem azonosítója nem érvényes.' }
+  if (status === 422) return { kind: 'invalid', message: 'Az életciklus-kérelem azonosítója nem érvényes.' }
   return { kind: 'server', message: 'Az életciklus-kérelem most nem tölthető be. Automatikus újrapróbálás nem indult.' }
 }
 

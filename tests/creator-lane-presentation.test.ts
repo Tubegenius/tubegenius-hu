@@ -13,12 +13,10 @@ describe('Creator Lane presentation', () => {
     ])
   })
 
-  it('gives each lane a distinct daily direction', () => {
-    expect(CREATOR_LANE_PRESENTATION.evidence.todayDirection).not.toBe(
-      CREATOR_LANE_PRESENTATION.entertainment.todayDirection,
-    )
-    expect(CREATOR_LANE_PRESENTATION.evidence.todaySupport).not.toBe(
-      CREATOR_LANE_PRESENTATION.entertainment.todaySupport,
-    )
+  it('does not embed fabricated daily recommendations in the lane definition', () => {
+    expect(CREATOR_LANE_PRESENTATION.evidence).not.toHaveProperty('todayDirection')
+    expect(CREATOR_LANE_PRESENTATION.evidence).not.toHaveProperty('todaySupport')
+    expect(CREATOR_LANE_PRESENTATION.entertainment).not.toHaveProperty('todayDirection')
+    expect(CREATOR_LANE_PRESENTATION.entertainment).not.toHaveProperty('todaySupport')
   })
 })

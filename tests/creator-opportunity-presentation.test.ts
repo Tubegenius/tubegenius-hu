@@ -1,33 +1,20 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import {
-  CREATOR_OPPORTUNITIES,
-  creatorOpportunityStarterHref,
-  findCreatorOpportunity,
-} from '@/lib/creator-opportunity-presentation'
 
-describe('Creator opportunity presentation', () => {
-  it('provides a focused opportunity set for both Creator Lanes', () => {
-    expect(CREATOR_OPPORTUNITIES.evidence).toHaveLength(3)
-    expect(CREATOR_OPPORTUNITIES.entertainment).toHaveLength(3)
-    expect(CREATOR_OPPORTUNITIES.evidence.every(item => item.lane === 'evidence')).toBe(true)
-    expect(CREATOR_OPPORTUNITIES.entertainment.every(item => item.lane === 'entertainment')).toBe(true)
+const discover = readFileSync(join(process.cwd(), 'components', 'dashboard', 'CreatorDiscover.tsx'), 'utf8')
+const createPage = readFileSync(join(process.cwd(), 'app', 'dashboard', 'create', 'page.tsx'), 'utf8')
+
+describe('Creator opportunity production truthfulness', () => {
+  it('ships no runtime opportunity fixture or static personalized brief', () => {
+    expect(existsSync(join(process.cwd(), 'lib', 'creator-opportunity-presentation.ts'))).toBe(false)
+    expect(discover).not.toMatch(/CREATOR_OPPORTUNITIES|mintaadat|szemléltető|Mentés a könyvtárba|Projektvázlat indítása/)
+    expect(createPage).not.toMatch(/starter|findCreatorOpportunity/)
   })
 
-  it('keeps each brief decision-ready without claiming live data', () => {
-    for (const opportunity of [...CREATOR_OPPORTUNITIES.evidence, ...CREATOR_OPPORTUNITIES.entertainment]) {
-      expect(opportunity.title.length).toBeGreaterThan(12)
-      expect(opportunity.whyNow.length).toBeGreaterThan(40)
-      expect(opportunity.audiencePromise.length).toBeGreaterThan(40)
-      expect(opportunity.nextMove.length).toBeGreaterThan(40)
-      expect(opportunity.tags.length).toBeGreaterThanOrEqual(2)
-    }
-  })
-
-  it('resolves only known frontend starters and creates a scoped handoff URL', () => {
-    const opportunity = CREATOR_OPPORTUNITIES.entertainment[0]
-    expect(findCreatorOpportunity(opportunity.id)).toEqual(opportunity)
-    expect(findCreatorOpportunity('unknown-opportunity')).toBeNull()
-    expect(creatorOpportunityStarterHref(opportunity)).toBe('/dashboard/create?starter=worst-flat-viewer')
-    expect(creatorOpportunityStarterHref(opportunity, '/frontend-preview/create')).toBe('/frontend-preview/create?starter=worst-flat-viewer')
+  it('keeps an honest premium empty state with only functioning route links', () => {
+    expect(discover).toContain('Még nincs biztonságosan betöltött')
+    expect(discover).toContain('href="/dashboard/channel-audit"')
+    expect(discover).toContain('href="/dashboard/profile"')
   })
 })

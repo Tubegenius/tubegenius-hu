@@ -180,10 +180,10 @@ export type LifecycleListError =
   | { kind: 'invalid'; message: string }
   | { kind: 'server'; message: string }
 
-export function lifecycleListError(status: number, serverMessage?: string): LifecycleListError {
+export function lifecycleListError(status: number, _serverMessage?: string): LifecycleListError {
   if (status === 401) return { kind: 'unauthenticated', message: 'A munkamenet lejárt. Jelentkezz be újra a lista folytatásához.' }
   if (status === 403) return { kind: 'forbidden', message: 'Ehhez a reviewer felülethez nincs aktív jogosultságod.' }
   if (status === 404) return { kind: 'not_found', message: 'A lifecycle reviewer lista nem érhető el.' }
-  if (status === 422) return { kind: 'invalid', message: serverMessage || 'A lista szűrői nem érvényesek.' }
+  if (status === 422) return { kind: 'invalid', message: 'A lista szűrői nem érvényesek.' }
   return { kind: 'server', message: 'A reviewer lista most nem tölthető be. Próbáld újra kézzel.' }
 }

@@ -92,7 +92,7 @@ describe('Lifecycle Reviewer frontend Milestone 1 presentation contract', () => 
     expect(lifecycleListError(401).kind).toBe('unauthenticated')
     expect(lifecycleListError(403).kind).toBe('forbidden')
     expect(lifecycleListError(404).kind).toBe('not_found')
-    expect(lifecycleListError(422, 'closed filter')).toEqual({ kind: 'invalid', message: 'closed filter' })
+    expect(lifecycleListError(422, 'sk_live_sensitive filter')).toEqual({ kind: 'invalid', message: 'A lista szűrői nem érvényesek.' })
     expect(lifecycleListError(500).kind).toBe('server')
   })
 
@@ -101,8 +101,8 @@ describe('Lifecycle Reviewer frontend Milestone 1 presentation contract', () => 
     expect(formatLifecycleStaleReason('SOURCE_IDENTITY_UNKNOWN')).toBe('Ismeretlen forrásazonosság található')
   })
 
-  it('registers the lifecycle route under the existing Growth navigation section', () => {
-    expect(creatorOSSectionForPath('/dashboard/semantic-topic-lifecycle-reviews')).toBe('growth')
+  it('keeps the capability-gated reviewer route outside the five creator destinations', () => {
+    expect(creatorOSSectionForPath('/dashboard/semantic-topic-lifecycle-reviews')).toBeNull()
   })
 })
 

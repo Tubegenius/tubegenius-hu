@@ -118,7 +118,7 @@ describe('Lifecycle Reviewer frontend Milestone 3 decision contract', () => {
     expect(lifecycleDecisionSubmitError(404).kind).toBe('not_found')
     expect(lifecycleDecisionSubmitError(409).kind).toBe('conflict')
     expect(lifecycleDecisionSubmitError(410).kind).toBe('expired')
-    expect(lifecycleDecisionSubmitError(422, 'closed error')).toEqual({ kind: 'invalid', message: 'closed error' })
+    expect(lifecycleDecisionSubmitError(422, 'sk_live_sensitive closed error')).toEqual({ kind: 'invalid', message: 'A döntés adatai nem érvényesek. Ellenőrizd a mezőket, majd próbáld újra.' })
     expect(lifecycleDecisionSubmitError(500).message).toContain('nem került rögzítésre')
   })
 })

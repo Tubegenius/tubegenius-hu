@@ -72,7 +72,7 @@ describe('Lifecycle Reviewer frontend Milestone 4A cancel contract', () => {
     expect(lifecycleCancelSubmitError(404).kind).toBe('not_found')
     expect(lifecycleCancelSubmitError(409).kind).toBe('conflict')
     expect(lifecycleCancelSubmitError(410).kind).toBe('expired')
-    expect(lifecycleCancelSubmitError(422, 'closed error')).toEqual({ kind: 'invalid', message: 'closed error' })
+    expect(lifecycleCancelSubmitError(422, 'sk_live_sensitive closed error')).toEqual({ kind: 'invalid', message: 'A visszavonás adatai nem érvényesek. Ellenőrizd a mezőket, majd próbáld újra.' })
     expect(lifecycleCancelSubmitError(500).message).toContain('nem került visszavonásra')
   })
 })

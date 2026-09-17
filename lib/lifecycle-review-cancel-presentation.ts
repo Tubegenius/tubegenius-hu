@@ -84,12 +84,12 @@ export type LifecycleCancelSubmitError = {
   message: string
 }
 
-export function lifecycleCancelSubmitError(status: number, serverMessage?: string): LifecycleCancelSubmitError {
+export function lifecycleCancelSubmitError(status: number, _serverMessage?: string): LifecycleCancelSubmitError {
   if (status === 401) return { kind: 'unauthenticated', message: 'A munkamenet lejárt. A kérelem nem került visszavonásra.' }
   if (status === 403) return { kind: 'forbidden', message: 'Nincs aktív felülvizsgálói jogosultságod. A kérelem nem került visszavonásra.' }
   if (status === 404) return { kind: 'not_found', message: 'A kérelem már nem található. Frissítsd a részletnézetet.' }
   if (status === 409) return { kind: 'conflict', message: 'A kérelem állapota időközben megváltozott, ezért nem vonható vissza. Frissítsd a részletnézetet.' }
   if (status === 410) return { kind: 'expired', message: 'A kérelem lejárt, ezért nem vonható vissza.' }
-  if (status === 422) return { kind: 'invalid', message: serverMessage || 'A szerver elutasította a visszavonás adatait.' }
+  if (status === 422) return { kind: 'invalid', message: 'A visszavonás adatai nem érvényesek. Ellenőrizd a mezőket, majd próbáld újra.' }
   return { kind: 'server', message: 'A kérelem nem került visszavonásra. Automatikus újrapróbálás nem indult.' }
 }
