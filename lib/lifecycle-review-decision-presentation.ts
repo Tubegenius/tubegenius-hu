@@ -175,12 +175,12 @@ export type LifecycleDecisionSubmitError = {
   message: string
 }
 
-export function lifecycleDecisionSubmitError(status: number, serverMessage?: string): LifecycleDecisionSubmitError {
+export function lifecycleDecisionSubmitError(status: number, _serverMessage?: string): LifecycleDecisionSubmitError {
   if (status === 401) return { kind: 'unauthenticated', message: 'A munkamenet lejárt. A döntés nem került rögzítésre.' }
   if (status === 403) return { kind: 'forbidden', message: 'Nincs aktív felülvizsgálói jogosultságod. A döntés nem került rögzítésre.' }
   if (status === 404) return { kind: 'not_found', message: 'A kérelem már nem található. Frissítsd a részletnézetet.' }
   if (status === 409) return { kind: 'conflict', message: 'A kérelem állapota időközben megváltozott. Frissítsd a részletnézetet, majd értékeld újra.' }
   if (status === 410) return { kind: 'expired', message: 'A kérelem lejárt, ezért a döntés nem rögzíthető.' }
-  if (status === 422) return { kind: 'invalid', message: serverMessage || 'A szerver elutasította a döntés adatait.' }
+  if (status === 422) return { kind: 'invalid', message: 'A döntés adatai nem érvényesek. Ellenőrizd a mezőket, majd próbáld újra.' }
   return { kind: 'server', message: 'A döntés nem került rögzítésre. Automatikus újrapróbálás nem indult.' }
 }

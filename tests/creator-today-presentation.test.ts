@@ -1,24 +1,21 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CREATOR_TODAY_PRESENTATION } from '@/lib/creator-today-presentation'
 
-describe('Creator Today presentation', () => {
-  it('keeps the complete daily workspace lane-specific', () => {
-    const evidence = CREATOR_TODAY_PRESENTATION.evidence
-    const entertainment = CREATOR_TODAY_PRESENTATION.entertainment
+const source = readFileSync(join(process.cwd(), 'components', 'dashboard', 'PremiumToday.tsx'), 'utf8')
 
-    expect(evidence.projectTitle).not.toBe(entertainment.projectTitle)
-    expect(evidence.artifactPhase).toContain('Állítások')
-    expect(entertainment.artifactPhase).toContain('Élményív')
-    expect(evidence.timelineLabel).toBe('Magyarázó képsor')
-    expect(entertainment.timelineLabel).toBe('Jelenetritmus')
+describe('Creator Today production truthfulness', () => {
+  it('renders only real profile and memory facts plus an honest no-project state', () => {
+    expect(source).toContain('profile?.specific_focus || profile?.niche')
+    expect(source).toContain('memoryCount')
+    expect(source).toContain('Nincs biztonságosan betöltve')
+    expect(source).not.toMatch(/mintaprojekt|mintaadat|szemléltető|pulseItems/i)
   })
 
-  it('provides lane-specific signals, opportunities and practical guidance', () => {
-    for (const presentation of Object.values(CREATOR_TODAY_PRESENTATION)) {
-      expect(presentation.intelligence).toHaveLength(3)
-      expect(presentation.opportunities).toHaveLength(2)
-      expect(presentation.tip.length).toBeGreaterThan(35)
-      expect(presentation.visualLabel.toLowerCase()).toContain('szemléltető')
-    }
+  it('links only to existing routes and never promises a fabricated continuation', () => {
+    expect(source).toContain('href="/dashboard/profile"')
+    expect(source).toContain('href="/dashboard/library"')
+    expect(source).toContain('href="/dashboard/channel-audit"')
+    expect(source).not.toContain('Folytatom az alkotást')
   })
 })

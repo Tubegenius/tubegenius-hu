@@ -269,7 +269,7 @@ export default function CreatorMemoryPage() {
       setPackages(packageData.packages || [])
       setAudits(auditData.audits || [])
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'A tartalommemória nem tölthető be.')
+      setLoadError('A tartalommemória most nem tölthető be. Próbáld újra kézzel.')
     } finally {
       setLoading(false)
     }
@@ -298,7 +298,7 @@ export default function CreatorMemoryPage() {
       await reloadItems()
       setStatusMessage(`Állapot frissítve: ${CREATOR_MEMORY_STATE[state].label}.`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Az állapot nem frissíthető.')
+      setStatusMessage('Az állapot most nem frissíthető. Próbáld újra kézzel.')
     } finally {
       setBusyKey(null)
     }
@@ -314,7 +314,7 @@ export default function CreatorMemoryPage() {
       await reloadItems()
       setStatusMessage('A memóriaelem eltávolítva.')
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'A memóriaelem nem törölhető.')
+      setStatusMessage('A memóriaelem most nem törölhető. Próbáld újra kézzel.')
     } finally {
       setBusyKey(null)
     }
@@ -330,7 +330,7 @@ export default function CreatorMemoryPage() {
       setConfirmPackageId(null)
       setStatusMessage('A videócsomag eltávolítva.')
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'A videócsomag nem törölhető.')
+      setStatusMessage('A videócsomag most nem törölhető. Próbáld újra kézzel.')
     } finally {
       setBusyKey(null)
     }

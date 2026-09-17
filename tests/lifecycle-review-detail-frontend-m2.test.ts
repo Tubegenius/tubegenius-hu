@@ -133,7 +133,7 @@ describe('Lifecycle Reviewer frontend Milestone 2 detail contract', () => {
     expect(lifecycleDetailError(401).kind).toBe('unauthenticated')
     expect(lifecycleDetailError(403).kind).toBe('forbidden')
     expect(lifecycleDetailError(404).kind).toBe('not_found')
-    expect(lifecycleDetailError(422, 'invalid uuid')).toEqual({ kind: 'invalid', message: 'invalid uuid' })
+    expect(lifecycleDetailError(422, 'postgres://private invalid uuid')).toEqual({ kind: 'invalid', message: 'Az életciklus-kérelem azonosítója nem érvényes.' })
     expect(lifecycleDetailError(409).kind).toBe('server')
     expect(lifecycleDetailError(410).kind).toBe('server')
     expect(lifecycleDetailError(500).message).toContain('Automatikus újrapróbálás nem indult')
