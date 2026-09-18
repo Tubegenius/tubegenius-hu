@@ -49,6 +49,7 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
   const menuRef = useRef<HTMLDivElement>(null)
   const accountTriggerRef = useRef<HTMLButtonElement>(null)
   const accountMenuRef = useRef<HTMLDivElement>(null)
+  const pendingMenuFocusRef = useRef<'first' | 'last' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [canReviewSemanticTopicLifecycle, setCanReviewSemanticTopicLifecycle] = useState(false)
   const activeSection = activeSectionOverride ?? creatorOSSectionForPath(pathname)
@@ -89,13 +90,14 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
     }
   }, [menuOpen])
 
-  function focusMenuEdge(edge: 'first' | 'last') {
-    window.requestAnimationFrame(() => {
-      const items = accountMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]')
-      if (!items?.length) return
-      items[edge === 'first' ? 0 : items.length - 1].focus()
-    })
-  }
+  useEffect(() => {
+    if (!menuOpen || !pendingMenuFocusRef.current) return
+    const edge = pendingMenuFocusRef.current
+    const items = accountMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]')
+    if (!items?.length) return
+    pendingMenuFocusRef.current = null
+    items[edge === 'first' ? 0 : items.length - 1].focus()
+  }, [menuOpen])
 
   function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
@@ -163,8 +165,8 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
             onKeyDown={event => {
               if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
               event.preventDefault()
+              pendingMenuFocusRef.current = event.key === 'ArrowDown' ? 'first' : 'last'
               setMenuOpen(true)
-              focusMenuEdge(event.key === 'ArrowDown' ? 'first' : 'last')
             }}
           >
             <span>{initials}</span>
