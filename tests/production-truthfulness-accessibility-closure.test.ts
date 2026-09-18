@@ -80,4 +80,14 @@ describe('Premium Frontend production truthfulness and accessibility closure', (
     ].join('\n')
     for (const route of PRESERVED_LEGACY_TOOL_ROUTES) expect(newWorkflow).not.toContain(`href="${route}"`)
   })
+
+  it('moves keyboard focus into the account menu only after the menu is mounted', () => {
+    const shell = source('components', 'dashboard', 'CreatorOSShell.tsx')
+
+    expect(shell).toContain("const pendingMenuFocusRef = useRef<'first' | 'last' | null>(null)")
+    expect(shell).toContain('if (!menuOpen || !pendingMenuFocusRef.current) return')
+    expect(shell).toContain("items[edge === 'first' ? 0 : items.length - 1].focus()")
+    expect(shell).toContain("pendingMenuFocusRef.current = event.key === 'ArrowDown' ? 'first' : 'last'")
+    expect(shell).not.toContain("setMenuOpen(true)\n              focusMenuEdge")
+  })
 })
