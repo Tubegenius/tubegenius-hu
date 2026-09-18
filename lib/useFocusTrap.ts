@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 const FOCUSABLE_SELECTOR = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
@@ -9,13 +9,13 @@ const FOCUSABLE_SELECTOR = 'button, a[href], input, select, textarea, [tabindex]
 // frissen, hogy a keydown-listener ne igényeljen effect-újrafutást minden
 // szülő-rerendernél (elkerülve, hogy egy köztes rerender újra elkapja a
 // document.activeElement-et, ami akkor már a modalon belüli elem lenne).
-export function useFocusTrap(onClose: () => void) {
+export function useFocusTrap(onClose: () => void, returnFocusRef?: RefObject<HTMLElement | null>) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
   useEffect(() => {
-    const previouslyFocused = document.activeElement as HTMLElement | null
+    const previouslyFocused = returnFocusRef?.current ?? document.activeElement as HTMLElement | null
     containerRef.current?.focus()
 
     function handleKeyDown(e: KeyboardEvent) {
@@ -42,7 +42,11 @@ export function useFocusTrap(onClose: () => void) {
     document.addEventListener('keydown', handleKeyDown)
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
-      if (previouslyFocused?.isConnected) previouslyFocused.focus()
+      if (previouslyFocused?.isConnected) {
+        window.requestAnimationFrame(() => {
+          if (previouslyFocused.isConnected) previouslyFocused.focus()
+        })
+      }
     }
   }, [])
 

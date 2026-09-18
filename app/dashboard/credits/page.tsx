@@ -1,12 +1,38 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { CreditCard } from 'lucide-react'
+import {
+  ArrowRight,
+  BadgeCheck,
+  BarChart3,
+  Check,
+  CircleAlert,
+  CircleCheck,
+  Clock3,
+  CreditCard,
+  FileText,
+  Gauge,
+  Lightbulb,
+  LockKeyhole,
+  Mic2,
+  PlaySquare,
+  RefreshCw,
+  ScanSearch,
+  ShieldCheck,
+  Smartphone,
+  Sparkles,
+  Stethoscope,
+  WalletCards,
+  X,
+  type LucideIcon,
+} from 'lucide-react'
 import CreditsHero from '@/components/credits/CreditsHero'
-import EmptyState from '@/components/ui/EmptyState'
-import ActionButton from '@/components/ui/ActionButton'
-import StatusIcon from '@/components/icons/StatusIcon'
+import {
+  formatCreditPrice,
+  formatCreditRenewalDate,
+  toCreditAmount,
+} from '@/lib/creator-credits-presentation'
 
 interface CreditInfo {
   balance: number
@@ -22,41 +48,32 @@ interface CreditInfo {
 }
 
 const PLANS = [
-  { key: 'starter', name: 'Starter', credits: 50, price: 2990, softDailyLimit: 10, featured: false },
-  { key: 'creator', name: 'Creator', credits: 150, price: 5990, softDailyLimit: 30, featured: true },
-  { key: 'pro', name: 'Pro', credits: 500, price: 11990, softDailyLimit: 100, featured: false },
+  { key: 'starter', name: 'Starter', credits: 50, price: 2990, softDailyLimit: 10, featured: false, note: 'Fókuszált, induló munkaritmushoz.' },
+  { key: 'creator', name: 'Creator', credits: 150, price: 5990, softDailyLimit: 30, featured: true, note: 'Rendszeres kutatáshoz és gyártáshoz.' },
+  { key: 'pro', name: 'Pro', credits: 500, price: 11990, softDailyLimit: 100, featured: false, note: 'Nagyobb tartalomvolumenhez.' },
 ]
 
 const TOPUP_PACKS = [
-  { key: 'topup_50', name: '50 kredit', credits: 50, price: 1990, featured: false },
-  { key: 'topup_150', name: '150 kredit', credits: 150, price: 4990, featured: true },
-  { key: 'topup_500', name: '500 kredit', credits: 500, price: 11990, featured: false },
+  { key: 'topup_50', name: 'Pulse', credits: 50, price: 1990, featured: false, note: 'Egy gyors extra futamhoz.' },
+  { key: 'topup_150', name: 'Momentum', credits: 150, price: 4990, featured: true, note: 'Több ötlet egymás utáni kidolgozásához.' },
+  { key: 'topup_500', name: 'Velocity', credits: 500, price: 11990, featured: false, note: 'Nagyobb gyártási időszakhoz.' },
 ]
 
-// Ez a lista a lib/stripe.ts PLANS/TOPUPS árait és kreditmennyiségeit tükrözi
-// (szerver-only fájl, kliens-oldalról nem importálható). Ár/kredit-szám
-// változtatás esetén mindkét helyen frissíteni kell.
-const CREDIT_COSTS = [
-  { feature: 'Gyártási csomag (Shorts)', cost: 2, icon: 'ti-device-mobile' },
-  { feature: 'Gyártási csomag (Long)', cost: 6, icon: 'ti-player-play' },
-  { feature: 'Auto Transcript', cost: 3, icon: 'ti-microphone' },
-  { feature: 'Script Extract', cost: 3, icon: 'ti-file-text' },
-  { feature: 'Videódiagnózis', cost: 4, icon: 'ti-stethoscope' },
-  { feature: 'Virális esély', cost: 1, icon: 'ti-chart-bar' },
-  { feature: 'Videólehetőségek', cost: 2, icon: 'ti-bulb' },
-  { feature: 'Heti Top Videólehetőség', cost: 0, icon: 'ti-chart-dots-3' },
-  { feature: 'Extra videólehetőség-keresés', cost: 2, icon: 'ti-refresh' },
-  { feature: 'Piaci bizonyíték (napi 3 ingyenes)', cost: 0, icon: 'ti-player-play' },
-  { feature: 'Piaci bizonyíték (napi 3 felett)', cost: 1, icon: 'ti-player-play' },
+// A meglévő szerveroldali árakat és kreditmennyiségeket tükrözi.
+// Nem backend-contract: változáskor a szerveroldali konfigurációval együtt frissítendő.
+const CREDIT_COSTS: { feature: string; detail: string; cost: number; icon: LucideIcon }[] = [
+  { feature: 'Gyártási csomag · Shorts', detail: 'Ötletből publikálható rövid videóterv', cost: 2, icon: Smartphone },
+  { feature: 'Gyártási csomag · Long', detail: 'Hosszú formátum teljes alkotói váza', cost: 6, icon: PlaySquare },
+  { feature: 'Auto Transcript', detail: 'Videóból szerkeszthető szövegalap', cost: 3, icon: Mic2 },
+  { feature: 'Script Extract', detail: 'Meglévő tartalomból használható szerkezet', cost: 3, icon: FileText },
+  { feature: 'Videódiagnózis', detail: 'Teljesítmény és kreatív döntések elemzése', cost: 4, icon: Stethoscope },
+  { feature: 'Virális esély', detail: 'Gyors lehetőségértékelés', cost: 1, icon: BarChart3 },
+  { feature: 'Videólehetőségek', detail: 'Bizonyítékokra épülő témakeresés', cost: 2, icon: Lightbulb },
+  { feature: 'Heti Top Videólehetőség', detail: 'A heti kiemelt validált lehetőség', cost: 0, icon: BadgeCheck },
+  { feature: 'Extra lehetőségkeresés', detail: 'Új piaci kör lefuttatása', cost: 2, icon: RefreshCw },
+  { feature: 'Piaci bizonyíték · napi első 3', detail: 'Alapkereten belüli validáció', cost: 0, icon: ScanSearch },
+  { feature: 'Piaci bizonyíték · napi 3 felett', detail: 'További validáció ugyanazon a napon', cost: 1, icon: ScanSearch },
 ]
-
-function formatPrice(n: number) {
-  return n.toLocaleString('hu-HU')
-}
-
-function toBucketValue(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null
-}
 
 export default function CreditsPage() {
   const [tab, setTab] = useState<'subscription' | 'topup'>('subscription')
@@ -70,7 +87,6 @@ export default function CreditsPage() {
 
   const success = searchParams.get('success')
   const canceled = searchParams.get('canceled')
-
   const hasActiveSubscription = credits?.subscription_status === 'active' || credits?.subscription_status === 'trialing'
 
   async function fetchCredits(): Promise<boolean> {
@@ -113,9 +129,8 @@ export default function CreditsPage() {
         body: JSON.stringify({ plan }),
       })
       const data = await res.json()
-      if (data.url) {
-        window.location.href = data.url
-      } else {
+      if (data.url) window.location.href = data.url
+      else {
         setError(data.error || 'Nem sikerült elindítani a fizetést.')
         setLoading(null)
       }
@@ -135,9 +150,8 @@ export default function CreditsPage() {
         body: JSON.stringify({ package: pkg }),
       })
       const data = await res.json()
-      if (data.url) {
-        window.location.href = data.url
-      } else {
+      if (data.url) window.location.href = data.url
+      else {
         setError(data.error || 'Nem sikerült elindítani a fizetést.')
         setLoading(null)
       }
@@ -153,9 +167,8 @@ export default function CreditsPage() {
     try {
       const res = await fetch('/api/stripe/customer-portal', { method: 'POST' })
       const data = await res.json()
-      if (data.url) {
-        window.location.href = data.url
-      } else {
+      if (data.url) window.location.href = data.url
+      else {
         setError(data.error || 'Nem sikerült elindítani a fizetést.')
         setLoading(null)
       }
@@ -165,55 +178,63 @@ export default function CreditsPage() {
     }
   }
 
-  const totalAvailable = toBucketValue(credits?.total_available_credits) ?? toBucketValue(credits?.balance)
-  const subscriptionBalance = toBucketValue(credits?.subscription_credit_balance)
-  const purchasedBalance = toBucketValue(credits?.purchased_credit_balance)
-  const totalUsedValue = toBucketValue(credits?.total_used)
-  const renewsAtLabel = credits?.renews_at
-    ? new Date(credits.renews_at).toLocaleDateString('hu-HU', { year: 'numeric', month: 'long', day: 'numeric' })
-    : null
+  const totalAvailable = toCreditAmount(credits?.total_available_credits) ?? toCreditAmount(credits?.balance)
+  const subscriptionBalance = toCreditAmount(credits?.subscription_credit_balance)
+  const purchasedBalance = toCreditAmount(credits?.purchased_credit_balance)
+  const totalUsedValue = toCreditAmount(credits?.total_used)
+  const monthlyAllowance = toCreditAmount(credits?.monthly_allowance)
+  const renewsAtLabel = formatCreditRenewalDate(credits?.renews_at)
 
   return (
-    <div className="max-w-5xl mx-auto">
-      {/* Success/Cancel — kizárólag informatív, nem pénzügyi bizonyíték */}
-      {success && (
-        <div className="mb-6 px-4 py-3 rounded-xl text-sm" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#CBD5E1' }}>
-          <p>A fizetési folyamatról visszatértél. A legfrissebb elérhető egyenlegedet mutatjuk. Ha a jóváírás még nem látható, frissítsd az egyenleget néhány másodperc múlva.</p>
-          <div className="flex items-center flex-wrap gap-3 mt-3">
-            <ActionButton variant="secondary" onClick={handleManualRefresh} disabled={refreshing} className="text-xs px-4 py-1.5">
-              {refreshing ? 'Frissítés...' : 'Egyenleg frissítése'}
-            </ActionButton>
-            {refreshError && <span className="text-xs" style={{ color: '#F59E0B' }}>{refreshError}</span>}
-          </div>
+    <div className="wv-credits-page">
+      <header className="wv-credits-intro">
+        <div>
+          <span className="wv-eyebrow"><Sparkles aria-hidden="true" /> Kapacitás és számlázás</span>
+          <h1>A lendület ne a kreditnél álljon meg.</h1>
+          <p>Lásd tisztán a keretedet, válassz a munkaritmusodhoz illő csomagot, és tudd előre, melyik alkotói lépés mennyibe kerül.</p>
         </div>
-      )}
-      {canceled && (
-        <div className="mb-6 px-4 py-3 rounded-xl text-sm" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#CBD5E1' }}>
-          Visszatértél a megszakított fizetési folyamatból. Ha bizonytalan vagy az állapotában, ellenőrizd az aktuális egyenlegedet.
+        <aside>
+          <ShieldCheck aria-hidden="true" />
+          <span><strong>Átlátható folyamat</strong>A fizetés és az előfizetés kezelése külön Stripe-felületen folytatódik.</span>
+        </aside>
+      </header>
+
+      {(success || canceled || error) && (
+        <div className="wv-credit-feedback-stack">
+          {success && (
+            <div className="wv-credit-feedback is-success" role="status">
+              <CircleCheck aria-hidden="true" />
+              <div>
+                <strong>Visszaérkeztél a fizetési folyamatból.</strong>
+                <p>A legfrissebb elérhető egyenleget mutatjuk. Ha a jóváírás még nem látható, frissíts néhány másodperc múlva.</p>
+                <button type="button" onClick={handleManualRefresh} disabled={refreshing}>
+                  <RefreshCw aria-hidden="true" />{refreshing ? 'Frissítés…' : 'Egyenleg frissítése'}
+                </button>
+                {refreshError && <span role="alert">{refreshError}</span>}
+              </div>
+            </div>
+          )}
+          {canceled && (
+            <div className="wv-credit-feedback is-neutral" role="status">
+              <X aria-hidden="true" />
+              <div><strong>A fizetési folyamat megszakadt.</strong><p>Nem kell új állapotot feltételezned: az aktuális egyenlegedet látod az oldalon.</p></div>
+            </div>
+          )}
+          {error && (
+            <div className="wv-credit-feedback is-error" role="alert">
+              <CircleAlert aria-hidden="true" />
+              <div><strong>A művelet most nem indítható el.</strong><p>{error}</p></div>
+            </div>
+          )}
         </div>
       )}
 
-      {error && (
-        <div className="mb-6 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#FCA5A5' }}>
-          <i className="ti ti-alert-circle" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {/* Credits Hero — az egyenleg a legerősebb elem az oldalon */}
       {loadError ? (
-        <>
-          <EmptyState
-            icon={CreditCard}
-            title="Nem sikerült betölteni a kredit egyenleget"
-            description="Ellenőrizd a kapcsolatot, majd próbáld újra."
-          />
-          <div className="flex justify-center mt-4 mb-6">
-            <ActionButton variant="secondary" onClick={handleRetryInitialLoad}>
-              Újrapróbálkozás
-            </ActionButton>
-          </div>
-        </>
+        <section className="wv-credit-load-error" role="alert">
+          <CircleAlert aria-hidden="true" />
+          <div><span className="wv-credit-kicker">Kapcsolati hiba</span><h2>Az egyenleg most nem olvasható.</h2><p>A csomagválasztás előtt töltsd újra az adatokat, hogy biztosan az aktuális állapotból indulj.</p></div>
+          <button type="button" onClick={handleRetryInitialLoad}><RefreshCw aria-hidden="true" /> Újrapróbálkozás</button>
+        </section>
       ) : (
         <CreditsHero
           loading={credits === null}
@@ -221,6 +242,7 @@ export default function CreditsPage() {
           subscriptionBalance={subscriptionBalance}
           purchasedBalance={purchasedBalance}
           plan={credits?.plan ?? null}
+          monthlyAllowance={monthlyAllowance}
           hasActiveSubscription={hasActiveSubscription}
           totalUsed={totalUsedValue}
           renewsAtLabel={renewsAtLabel}
@@ -229,155 +251,104 @@ export default function CreditsPage() {
         />
       )}
 
-      {/* Info csík */}
-      <div className="flex justify-center mb-8">
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl" style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.15)' }}>
-          <i className="ti ti-info-circle" style={{ color: '#3B82F6' }} />
-          <span className="text-sm" style={{ color: '#CBD5E1' }}>Hetente 1 validált Top Videólehetőség és az első 3 Piaci bizonyíték keresés ingyenes. Mélyebb elemzésnél vagy extra futtatásnál kredit szükséges.</span>
-        </div>
-      </div>
+      <section className="wv-credit-included" aria-label="Kredit nélküli alapkeret">
+        <div><BadgeCheck aria-hidden="true" /><span><strong>1 / hét</strong>validált Top Videólehetőség</span></div>
+        <div><ScanSearch aria-hidden="true" /><span><strong>3 / nap</strong>Piaci bizonyíték keresés</span></div>
+        <div><Sparkles aria-hidden="true" /><span><strong>Szabad böngészés</strong>kredit levonása nélkül</span></div>
+      </section>
 
-      {/* Tab toggle */}
-      <div className="flex justify-center mb-8">
-        <div className="inline-flex rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-          <button onClick={() => setTab('subscription')}
-            className="px-4 sm:px-6 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all"
-            style={{ background: tab === 'subscription' ? 'linear-gradient(135deg, #3B82F6, #8B5CF6)' : 'transparent', color: tab === 'subscription' ? '#fff' : '#94A3B8' }}>
-            Havi előfizetés
-          </button>
-          <button onClick={() => setTab('topup')}
-            className="px-4 sm:px-6 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-all"
-            style={{ background: tab === 'topup' ? 'linear-gradient(135deg, #3B82F6, #8B5CF6)' : 'transparent', color: tab === 'topup' ? '#fff' : '#94A3B8' }}>
-            Kredit feltöltés
-          </button>
-        </div>
-      </div>
+      <section className="wv-credit-market" aria-labelledby="credit-market-title">
+        <header>
+          <div>
+            <span className="wv-credit-kicker">Válaszd meg a ritmust</span>
+            <h2 id="credit-market-title">Keret az alkotói rendszeredhez</h2>
+            <p>A havi csomag adja az alapkapacitást. Aktív előfizetés mellett egyszeri kredittel bővítheted.</p>
+          </div>
+          <div className="wv-credit-tabs" role="tablist" aria-label="Kreditvásárlási mód">
+            <button type="button" role="tab" aria-selected={tab === 'subscription'} onClick={() => setTab('subscription')}>Havi keret</button>
+            <button type="button" role="tab" aria-selected={tab === 'topup'} onClick={() => setTab('topup')}>Egyszeri feltöltés</button>
+          </div>
+        </header>
 
-      {/* Pricing cards */}
-      {tab === 'subscription' ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-12">
-          {PLANS.map(plan => {
-            const isCurrentPlan = credits?.plan === plan.key && hasActiveSubscription
-            const isOtherPlanWhileSubscribed = hasActiveSubscription && !isCurrentPlan
-            const buttonLoadingKey = isOtherPlanWhileSubscribed ? 'portal' : plan.key
-            return (
-              <div key={plan.key} className="rounded-2xl p-6 text-center transition-all duration-200 hover:-translate-y-1 relative"
-                style={{
-                  background: plan.featured ? 'linear-gradient(180deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08), rgba(255,255,255,0.04))' : 'rgba(255,255,255,0.04)',
-                  border: plan.featured ? '2px solid rgba(59,130,246,0.5)' : '1px solid rgba(255,255,255,0.08)',
-                  boxShadow: plan.featured ? '0 0 32px rgba(59,130,246,0.2), 0 0 64px rgba(139,92,246,0.1)' : 'none',
-                }}>
-                {plan.featured && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-xs font-semibold"
-                    style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
-                    Ajánlott
-                  </div>
-                )}
-                <p className="text-sm font-medium mb-3 mt-1" style={{ color: '#CBD5E1' }}>{plan.name}</p>
-                <p className="text-4xl font-bold mb-1" style={{ color: '#F8FAFC' }}>{plan.credits}</p>
-                <p className="text-sm mb-4" style={{ color: '#94A3B8' }}>kredit/hó</p>
-                <p className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>{formatPrice(plan.price)} Ft</p>
-                <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>/ hó</p>
-                <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>Napi soft limit: {plan.softDailyLimit} kredit</p>
-                <ul className="text-left text-xs space-y-2 mb-5" style={{ color: '#CBD5E1' }}>
-                  <li className="flex items-center gap-2"><i className="ti ti-check text-xs" style={{ color: '#22C55E' }} /> Automatikus feltöltés</li>
-                  <li className="flex items-center gap-2"><i className="ti ti-check text-xs" style={{ color: '#22C55E' }} /> Bármikor lemondható</li>
-                  <li className="flex items-center gap-2"><i className="ti ti-check text-xs" style={{ color: '#22C55E' }} /> Minden funkció</li>
-                </ul>
-                <button
-                  onClick={isOtherPlanWhileSubscribed ? handleManageSubscription : () => handleSubscription(plan.key)}
-                  disabled={loading !== null || isCurrentPlan}
-                  className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
-                  style={{
-                    background: isCurrentPlan ? 'rgba(34,197,94,0.15)' : plan.featured ? 'linear-gradient(135deg, #3B82F6, #8B5CF6)' : 'rgba(255,255,255,0.06)',
-                    border: isCurrentPlan ? '1px solid rgba(34,197,94,0.3)' : plan.featured ? 'none' : '1px solid rgba(255,255,255,0.1)',
-                    color: isCurrentPlan ? '#22C55E' : plan.featured ? '#fff' : '#CBD5E1',
-                    boxShadow: plan.featured && !isCurrentPlan ? '0 0 20px rgba(59,130,246,0.3)' : 'none',
-                  }}>
-                  {loading === buttonLoadingKey ? 'Betöltés...' : isCurrentPlan ? 'Jelenlegi csomag' : isOtherPlanWhileSubscribed ? 'Előfizetés kezelése' : plan.featured ? 'Előfizetek' : 'Kiválasztom'}
-                </button>
-                {isOtherPlanWhileSubscribed && (
-                  <p className="text-xs mt-2" style={{ color: '#94A3B8' }}>A csomagoddal kapcsolatos lehetőségeket a Stripe ügyfélportálon kezelheted.</p>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      ) : (
-        <div>
-          {!hasActiveSubscription ? (
-            <div className="card flex flex-col items-center text-center py-10 px-6 mb-12">
-              <div className="w-12 h-12 rounded-full flex items-center justify-center mb-4" style={{ background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)' }}>
-                <StatusIcon kind="locked" className="w-6 h-6" />
-              </div>
-              <p className="text-sm font-semibold text-text-primary mb-1">Kredit feltöltéshez aktív előfizetés szükséges</p>
-              <p className="text-xs text-text-muted max-w-sm mb-4">Válassz előbb egy havi csomagot — utána bármikor tölthetsz fel extra kreditet.</p>
-              <ActionButton variant="secondary" onClick={() => setTab('subscription')}>
-                Válassz előfizetést
-              </ActionButton>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-12">
-              {TOPUP_PACKS.map(pack => (
-                <div key={pack.key} className="rounded-2xl p-6 text-center transition-all duration-200 hover:-translate-y-1 relative"
-                  style={{
-                    background: pack.featured ? 'linear-gradient(180deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08), rgba(255,255,255,0.04))' : 'rgba(255,255,255,0.04)',
-                    border: pack.featured ? '2px solid rgba(59,130,246,0.5)' : '1px solid rgba(255,255,255,0.08)',
-                    boxShadow: pack.featured ? '0 0 32px rgba(59,130,246,0.2), 0 0 64px rgba(139,92,246,0.1)' : 'none',
-                  }}>
-                  {pack.featured && (
-                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-xs font-semibold"
-                      style={{ background: 'linear-gradient(135deg, #3B82F6, #8B5CF6)', color: '#fff' }}>
-                      Legjobb érték
-                    </div>
-                  )}
-                  <p className="text-sm font-medium mb-3 mt-1" style={{ color: '#CBD5E1' }}>{pack.name}</p>
-                  <p className="text-4xl font-bold mb-1" style={{ color: '#F8FAFC' }}>{pack.credits}</p>
-                  <p className="text-sm mb-4" style={{ color: '#94A3B8' }}>kredit</p>
-                  <p className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>{formatPrice(pack.price)} Ft</p>
-                  <p className="text-xs mb-4" style={{ color: '#94A3B8' }}>egyszeri vásárlás</p>
+        {tab === 'subscription' ? (
+          <div className="wv-credit-plan-grid" role="tabpanel">
+            {PLANS.map((plan, index) => {
+              const isCurrentPlan = credits?.plan === plan.key && hasActiveSubscription
+              const isOtherPlanWhileSubscribed = hasActiveSubscription && !isCurrentPlan
+              const buttonLoadingKey = isOtherPlanWhileSubscribed ? 'portal' : plan.key
+              return (
+                <article key={plan.key} className="wv-credit-plan-card" data-featured={plan.featured || undefined} data-current={isCurrentPlan || undefined}>
+                  <div className="wv-credit-plan-index"><span>0{index + 1}</span>{plan.featured && <b>Kiemelt keret</b>}{isCurrentPlan && <b>Aktív</b>}</div>
+                  <span className="wv-credit-plan-name">{plan.name}</span>
+                  <h3>{plan.credits}<small> kredit / hó</small></h3>
+                  <p>{plan.note}</p>
+                  <div className="wv-credit-plan-price"><strong>{formatCreditPrice(plan.price)}</strong><span>/ hó</span></div>
+                  <ul>
+                    <li><Gauge aria-hidden="true" /><span>Napi soft limit</span><strong>{plan.softDailyLimit} kredit</strong></li>
+                    <li><RefreshCw aria-hidden="true" /><span>Havi kreditfrissítés</span><Check aria-label="Elérhető" /></li>
+                    <li><ShieldCheck aria-hidden="true" /><span>Bármikor lemondható</span><Check aria-label="Elérhető" /></li>
+                  </ul>
                   <button
-                    onClick={() => handleTopup(pack.key)}
-                    disabled={loading !== null}
-                    className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
-                    style={{
-                      background: pack.featured ? 'linear-gradient(135deg, #3B82F6, #8B5CF6)' : 'rgba(255,255,255,0.06)',
-                      border: pack.featured ? 'none' : '1px solid rgba(255,255,255,0.1)',
-                      color: pack.featured ? '#fff' : '#CBD5E1',
-                      boxShadow: pack.featured ? '0 0 20px rgba(59,130,246,0.3)' : 'none',
-                    }}>
-                    {loading === pack.key ? 'Betöltés...' : 'Vásárlás'}
+                    type="button"
+                    onClick={isOtherPlanWhileSubscribed ? handleManageSubscription : () => handleSubscription(plan.key)}
+                    disabled={loading !== null || isCurrentPlan}
+                  >
+                    {loading === buttonLoadingKey ? 'Megnyitás…' : isCurrentPlan ? 'Jelenlegi csomag' : isOtherPlanWhileSubscribed ? 'Csomag kezelése' : 'Ezt a keretet választom'}
+                    {!isCurrentPlan && loading !== buttonLoadingKey && <ArrowRight aria-hidden="true" />}
                   </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+                  {isOtherPlanWhileSubscribed && <small>A váltás lehetőségeit az előfizetési portálon látod.</small>}
+                </article>
+              )
+            })}
+          </div>
+        ) : !hasActiveSubscription ? (
+          <div className="wv-credit-topup-lock" role="tabpanel">
+            <div><LockKeyhole aria-hidden="true" /></div>
+            <span className="wv-credit-kicker">Előfizetői kiegészítés</span>
+            <h3>Az extra kredit az aktív havi keretet egészíti ki.</h3>
+            <p>Válassz előbb előfizetést, utána bármikor adhatsz egyszeri kapacitást az egyenlegedhez.</p>
+            <button type="button" onClick={() => setTab('subscription')}>Havi keretek megtekintése <ArrowRight aria-hidden="true" /></button>
+          </div>
+        ) : (
+          <div className="wv-credit-plan-grid" role="tabpanel">
+            {TOPUP_PACKS.map((pack, index) => (
+              <article key={pack.key} className="wv-credit-plan-card is-topup" data-featured={pack.featured || undefined}>
+                <div className="wv-credit-plan-index"><span>0{index + 1}</span>{pack.featured && <b>Kiemelt feltöltés</b>}</div>
+                <span className="wv-credit-plan-name">{pack.name}</span>
+                <h3>{pack.credits}<small> kredit</small></h3>
+                <p>{pack.note}</p>
+                <div className="wv-credit-plan-price"><strong>{formatCreditPrice(pack.price)}</strong><span>egyszeri vásárlás</span></div>
+                <button type="button" onClick={() => handleTopup(pack.key)} disabled={loading !== null}>
+                  {loading === pack.key ? 'Megnyitás…' : 'Feltöltés kiválasztása'}
+                  {loading !== pack.key && <ArrowRight aria-hidden="true" />}
+                </button>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
 
-      {/* What you get */}
-      <div className="rounded-2xl p-6 mb-8" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-        <h3 className="text-lg font-semibold mb-5" style={{ color: '#F8FAFC' }}>Mit kapsz a kreditjeidért?</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <section className="wv-credit-costs" aria-labelledby="credit-costs-title">
+        <header>
+          <div><span className="wv-credit-kicker">Kiszámítható működés</span><h2 id="credit-costs-title">Mire elég egy kredit?</h2></div>
+          <p>Az ingyenes alapkeretet külön jelöljük. Fizetés előtt minden kreditköteles műveletnél látod a szükséges összeget.</p>
+        </header>
+        <div className="wv-credit-cost-grid">
           {CREDIT_COSTS.map(item => (
-            <div key={item.feature} className="flex items-center justify-between px-4 py-3 rounded-xl"
-              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: item.cost === 0 ? 'rgba(34,197,94,0.12)' : 'rgba(59,130,246,0.12)' }}>
-                  <i className={`ti ${item.icon} text-sm`} style={{ color: item.cost === 0 ? '#22C55E' : '#3B82F6' }} />
-                </div>
-                <span className="text-sm" style={{ color: '#CBD5E1' }}>{item.feature}</span>
-              </div>
-              <span className="text-sm font-semibold" style={{ color: item.cost === 0 ? '#22C55E' : '#F8FAFC' }}>
-                {item.cost === 0 ? 'Ingyenes' : `${item.cost} kredit`}
-              </span>
-            </div>
+            <article key={item.feature} data-free={item.cost === 0 || undefined}>
+              <div><item.icon aria-hidden="true" /></div>
+              <span><strong>{item.feature}</strong><small>{item.detail}</small></span>
+              <b>{item.cost === 0 ? 'Alapkeret' : `${item.cost} kredit`}</b>
+            </article>
           ))}
         </div>
-        <p className="text-xs mt-4 text-center" style={{ color: '#94A3B8' }}>
-          Kreditet generálásnál, mélyebb elemzésnél és extra keresésnél használsz. A böngészés, a heti Top Videólehetőség és a napi Piaci bizonyíték alapkeret ingyenes.
-        </p>
-      </div>
+      </section>
+
+      <footer className="wv-credit-assurance">
+        <WalletCards aria-hidden="true" />
+        <p><strong>A kredit az alkotói döntések üzemanyaga, nem homályos pontszám.</strong> Böngészhetsz és tervezhetsz szabadon; kreditet generálásnál, mélyebb elemzésnél és extra keresésnél használsz.</p>
+        <span><Clock3 aria-hidden="true" /> A művelet költsége indítás előtt látható</span>
+      </footer>
     </div>
   )
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase'
 import type { CreatorProfile } from '@/types'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
@@ -14,7 +15,51 @@ import SectionCard from '@/components/video-package/SectionCard'
 import PackageCopyBtn from '@/components/video-package/CopyBtn'
 import TagPill from '@/components/video-package/TagPill'
 import PlatformChecklistCard from '@/components/video-package/PlatformChecklistCard'
-import { Mic, Type, FileText, Megaphone, Clock, Zap, Target, AlertTriangle, Timer, Video, ListChecks, Film, Hash, Flame, CheckCircle2, Image, Pin, Send, PlayCircle, Globe } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  BarChart3,
+  Bell,
+  Bookmark,
+  CheckCircle2,
+  Clock,
+  Coins,
+  Facebook,
+  FileText,
+  Film,
+  Flame,
+  Globe,
+  Hash,
+  Image,
+  Instagram,
+  ListChecks,
+  Megaphone,
+  MessageCircle,
+  Mic,
+  Music2,
+  Pin,
+  PlayCircle,
+  Send,
+  Share2,
+  Sparkles,
+  Smartphone,
+  Target,
+  Timer,
+  Type,
+  Video,
+  Youtube,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react'
+import {
+  CREATOR_STUDIO_FORMATS,
+  CREATOR_STUDIO_GOALS,
+  resolveCreatorStudioFormat,
+  resolveCreatorStudioGoal,
+  resolveCreatorStudioLane,
+} from '@/lib/creator-studio-presentation'
+import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 // ─── Types ────────────────────────────────────────────────────
 type PlatformChecklist =
@@ -171,11 +216,11 @@ interface SourceVideoExtractResult {
 
 // ─── Constants ────────────────────────────────────────────────
 const PLATFORMS = [
-  { value: 'youtube_shorts', label: 'YouTube Shorts', icon: '📱' },
-  { value: 'tiktok', label: 'TikTok', icon: '🎵' },
-  { value: 'instagram_reels', label: 'Instagram Reels', icon: '📸' },
-  { value: 'youtube_long', label: 'YouTube Long', icon: '▶️' },
-  { value: 'facebook_reels', label: 'Facebook Reels', icon: '👥' },
+  { value: 'youtube_shorts', label: 'YouTube Shorts', icon: Smartphone },
+  { value: 'tiktok', label: 'TikTok', icon: Music2 },
+  { value: 'instagram_reels', label: 'Instagram Reels', icon: Instagram },
+  { value: 'youtube_long', label: 'YouTube Long', icon: Youtube },
+  { value: 'facebook_reels', label: 'Facebook Reels', icon: Facebook },
 ]
 
 const VIDEO_LENGTHS = {
@@ -211,12 +256,12 @@ const INTENSITIES = [
 ]
 
 const GOALS = [
-  { value: 'views', label: '👁 Nézettség' },
-  { value: 'comments', label: '💬 Komment' },
-  { value: 'shares', label: '🔗 Megosztás' },
-  { value: 'saves', label: '📌 Mentés' },
-  { value: 'subscribers', label: '🔔 Feliratkozás' },
-  { value: 'affiliate', label: '💰 Affiliate' },
+  { value: 'views', label: 'Nézettség', icon: BarChart3 },
+  { value: 'comments', label: 'Komment', icon: MessageCircle },
+  { value: 'shares', label: 'Megosztás', icon: Share2 },
+  { value: 'saves', label: 'Mentés', icon: Bookmark },
+  { value: 'subscribers', label: 'Feliratkozás', icon: Bell },
+  { value: 'affiliate', label: 'Affiliate', icon: Coins },
 ]
 
 // ─── Helper components ────────────────────────────────────────
@@ -275,22 +320,17 @@ function getProductionBrief(pkg: VideoPackageResult, context: OpportunityPackage
   ].join('\n')
 }
 
-function SelectGroup({ options, value, onChange }: { options: { value: string; label: string; desc?: string; icon?: string }[]; value: string; onChange: (v: string) => void }) {
+function SelectGroup({ options, value, onChange }: { options: { value: string; label: string; desc?: string; icon?: LucideIcon }[]; value: string; onChange: (v: string) => void }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {options.map(opt => (
-        <button key={opt.value} onClick={() => onChange(opt.value)}
-          className="px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5"
-          style={{
-            background: value === opt.value ? 'rgba(59,130,246,0.1)' : '#121826',
-            border: value === opt.value ? '1px solid rgba(59,130,246,0.4)' : '1px solid rgba(255,255,255,0.08)',
-            color: value === opt.value ? '#3B82F6' : '#CBD5E1',
-          }}>
-          {opt.icon && <span>{opt.icon}</span>}
+    <div className="wv-package-options">
+      {options.map(opt => {
+        const Icon = opt.icon
+        return <button type="button" key={opt.value} aria-pressed={value === opt.value} onClick={() => onChange(opt.value)}>
+          {Icon && <Icon aria-hidden="true" />}
           <span>{opt.label}</span>
-          {opt.desc && <span style={{ color: '#94A3B8', fontSize: '10px' }}>— {opt.desc}</span>}
+          {opt.desc && <small>{opt.desc}</small>}
         </button>
-      ))}
+      })}
     </div>
   )
 }
@@ -299,14 +339,19 @@ function SelectGroup({ options, value, onChange }: { options: { value: string; l
 export default function VideoPackagePage() {
   const searchParams = useSearchParams()
   const supabase = createClient()
+  const { creatorLane: contextLane, setCreatorLane } = useCreatorOS()
+  const incomingStudioFormat = resolveCreatorStudioFormat(searchParams.get('platform'))
+  const incomingStudioGoal = resolveCreatorStudioGoal(searchParams.get('goal'))
+  const incomingStudioLane = resolveCreatorStudioLane(searchParams.get('creator_lane'))
+  const activePackageLane = incomingStudioLane ?? contextLane
 
   const [profile, setProfile] = useState<CreatorProfile | null>(null)
   const [topic, setTopic] = useState(searchParams.get('topic') || '')
-  const [platform, setPlatform] = useState('youtube_long')
-  const [videoLength, setVideoLength] = useState('6-10min')
+  const [platform, setPlatform] = useState<string>(incomingStudioFormat ? CREATOR_STUDIO_FORMATS[incomingStudioFormat].platform : 'youtube_long')
+  const [videoLength, setVideoLength] = useState<string>(incomingStudioFormat ? CREATOR_STUDIO_FORMATS[incomingStudioFormat].videoLength : '6-10min')
   const [narrationStyle, setNarrationStyle] = useState('storytelling')
   const [intensity, setIntensity] = useState('classic')
-  const [goal, setGoal] = useState('views')
+  const [goal, setGoal] = useState<string>(incomingStudioGoal ?? 'views')
   const [customPrompt, setCustomPrompt] = useState('')
 
   const [loading, setLoading] = useState(false)
@@ -345,6 +390,10 @@ export default function VideoPackagePage() {
   const opportunityNeedsValidation = opportunityResearchMode || opportunityHardBlocked
   const opportunityPreparationMode = opportunityResearchMode && allowWeakOpportunityGeneration
   const generationBlockedByOpportunity = !!(opportunityHardBlocked || (opportunityResearchMode && !allowWeakOpportunityGeneration))
+
+  useEffect(() => {
+    if (incomingStudioLane) setCreatorLane(incomingStudioLane)
+  }, [incomingStudioLane, setCreatorLane])
 
   useEffect(() => {
     loadProfile()
@@ -994,35 +1043,34 @@ export default function VideoPackagePage() {
   ] : []
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>🎬 Gyártási csomag</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>Platformra szabott, teljes videócsomag — a Creator Profile alapján.</p>
-      </div>
+    <div className="wv-package-page" data-creator-lane={activePackageLane}>
+      <header className="wv-package-intro">
+        <div>
+          <span className="wv-eyebrow"><Film aria-hidden="true" /> Creator Studio · Gyártási csomag</span>
+          <h1>Egy témából teljes gyártási rendszer.</h1>
+          <p>A nyitástól a narráción és jeleneteken át a publikálási csomagig. Minden döntést még generálás előtt ellenőrizhetsz.</p>
+        </div>
+        <Link href="/dashboard/create"><ArrowLeft aria-hidden="true" />Vissza a projektindítóhoz</Link>
+      </header>
 
-      {/* Profil badge — ez a csatorna ÁLLANDÓ alapbeállítása, NEM az aktuálisan
-          gyártott téma kontextusa. A kettő eltérhet (pl. profil niche "AI és
-          orvostudomány", de a most gyártott téma memória-pszichológia) — ez
-          nem hiba, csak a profil egy háttér-beállítás, amit a csomag stílusa/
-          hashtagjei figyelembe vesznek, nem a téma maga. */}
-      {profile && (
-        <div className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between"
-          style={{ background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)' }}>
-          <div className="flex gap-4 text-xs" style={{ color: '#CBD5E1' }}>
-            <span>Profil: <span style={{ color: '#F8FAFC' }}>{profile.channel_name || '—'}</span></span>
-            <span title="Ez a csatornád alapbeállítása a Profil oldalon — nem feltétlenül egyezik a most gyártott témával.">
-              Profil niche (alapbeállítás): <span style={{ color: '#F8FAFC' }}>{profile.niche || '—'}</span>
-            </span>
-            <span>Stílus: <span style={{ color: '#F8FAFC' }}>{NARRATION_STYLES.find(s => s.value === profile.narration_style)?.label || '—'}</span></span>
+      {sourceContext === 'creator_studio' && incomingStudioLane && incomingStudioFormat && incomingStudioGoal && (
+        <div className="wv-video-studio-inheritance" role="status">
+          <Sparkles aria-hidden="true" />
+          <div>
+            <span>Creator Studio projektöröklés</span>
+            <strong>{incomingStudioLane === 'evidence' ? 'Bizonyítékvezérelt' : 'Élményvezérelt'} · {CREATOR_STUDIO_FORMATS[incomingStudioFormat].label} · {CREATOR_STUDIO_GOALS[incomingStudioGoal]}</strong>
+            <p>A téma, a formátum és az elsődleges cél átérkezett. Generálás előtt minden beállítást módosíthatsz.</p>
           </div>
-          <a href="/dashboard/profile" className="text-xs" style={{ color: '#3B82F6' }}>Szerkesztés →</a>
         </div>
       )}
-      {topic.trim() && (
-        <div className="rounded-xl px-4 py-2.5 mb-4 text-xs" style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.15)', color: '#CBD5E1' }}>
-          Aktuális téma kontextus (ez alapján gyártunk, nem a profil niche alapján): <span style={{ color: '#F8FAFC', fontWeight: 600 }}>{topic}</span>
-        </div>
-      )}
+
+      <section className="wv-package-context" aria-label="Örökölt projektkörnyezet">
+        <div><span>Projekt Lane</span><strong>{activePackageLane === 'evidence' ? 'Bizonyítékvezérelt' : 'Élményvezérelt'}</strong></div>
+        <div><span>Creator Profile</span><strong>{profile?.channel_name || 'Betöltés…'}</strong></div>
+        <div title="A Creator Profile csatorna-alapbeállítása, nem az aktuális videótéma."><span>Csatorna fókusza</span><strong>{profile?.niche || '—'}</strong></div>
+        <div><span>Narrációs alap</span><strong>{NARRATION_STYLES.find(style => style.value === profile?.narration_style)?.label || 'Storytelling'}</strong></div>
+        <Link href="/dashboard/profile">Profil szerkesztése<ArrowRight aria-hidden="true" /></Link>
+      </section>
 
       {sourceVideoInfo && (
         <div className="rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3"
@@ -1113,97 +1161,70 @@ export default function VideoPackagePage() {
       )}
 
       {/* Input form */}
-      <div className="rounded-xl p-5 mb-6 space-y-5" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }}>
-        {/* Téma */}
-        <div>
-          <label className="block text-sm font-medium mb-1.5" style={{ color: '#CBD5E1' }}>Videó témája</label>
-          <input value={topic} onChange={e => setTopic(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleGenerate()}
-            placeholder="pl. AI szemüveg — a jövő már itt van"
-            className="w-full rounded-lg px-4 py-3 text-sm"
-            style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }} />
-        </div>
+      <section className="wv-package-composer" aria-labelledby="wv-package-composer-title">
+        <header>
+          <div><span>01</span><div><small>Döntési konzol</small><h2 id="wv-package-composer-title">Állítsd be a gyártási irányt.</h2><p>A projektkörnyezet már megérkezett. Itt a konkrét videó formáját és kreatív nyomását döntöd el.</p></div></div>
+          <aside><Coins aria-hidden="true" /><span><small>Generálás ára</small><strong>{isShorts ? '2' : '6'} kredit</strong></span></aside>
+        </header>
 
-        {/* Platform */}
-        <div>
-          <label className="block text-sm font-medium mb-2" style={{ color: '#CBD5E1' }}>Platform</label>
-          <SelectGroup options={PLATFORMS} value={platform} onChange={setPlatform} />
-        </div>
+        <label className="wv-package-topic-field">
+          <span>Videó témája</span>
+          <input value={topic} onChange={event => setTopic(event.target.value)} onKeyDown={event => event.key === 'Enter' && handleGenerate()} placeholder="Például: Miért nézzük újra ugyanazokat a videókat?" />
+          <small>Ez az aktuális videó témája; nem írja felül a Creator Profile csatornafókuszát.</small>
+        </label>
 
-        {/* Videóhossz */}
-        <div>
-          <label className="block text-sm font-medium mb-2" style={{ color: '#CBD5E1' }}>Videóhossz</label>
-          <SelectGroup
-            options={isShorts ? VIDEO_LENGTHS.shorts : VIDEO_LENGTHS.long}
-            value={videoLength}
-            onChange={setVideoLength}
-          />
-        </div>
-
-        {/* Narrációs stílus */}
-        <div>
-          <label className="block text-sm font-medium mb-2" style={{ color: '#CBD5E1' }}>
-            Narrációs stílus
-            {profile?.narration_style && <span className="ml-2 text-xs" style={{ color: '#94A3B8' }}>(profil alapértelmezett)</span>}
-          </label>
-          <SelectGroup options={NARRATION_STYLES} value={narrationStyle} onChange={setNarrationStyle} />
-          {narrationStyle === 'sajat' && (
-            <textarea value={customPrompt} onChange={e => setCustomPrompt(e.target.value)}
-              placeholder='pl. "Írj Dylan Page stílusú, laza, pletykás narrációt magyarul."'
-              rows={2} className="mt-2 w-full rounded-lg px-4 py-3 text-sm resize-none"
-              style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }} />
-          )}
-        </div>
-
-        {/* Intenzitás + Cél */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium mb-2" style={{ color: '#CBD5E1' }}>Intenzitás</label>
+        <div className="wv-package-decision-grid">
+          <article className="wv-package-decision is-platform">
+            <header><span>02</span><div><strong>Platform</strong><small>A felület és a csomag szerkezete ehhez igazodik</small></div></header>
+            <SelectGroup options={PLATFORMS} value={platform} onChange={setPlatform} />
+          </article>
+          <article className="wv-package-decision">
+            <header><span>03</span><div><strong>Videóhossz</strong><small>A választott platformhoz elérhető tartomány</small></div></header>
+            <SelectGroup options={isShorts ? VIDEO_LENGTHS.shorts : VIDEO_LENGTHS.long} value={videoLength} onChange={setVideoLength} />
+          </article>
+          <article className="wv-package-decision is-voice">
+            <header><span>04</span><div><strong>Narrációs karakter</strong><small>{profile?.narration_style ? 'A profil alapértelmezése kijelölve, de projektenként módosítható' : 'Válaszd ki a videó megszólalásának alapját'}</small></div></header>
+            <SelectGroup options={NARRATION_STYLES} value={narrationStyle} onChange={setNarrationStyle} />
+            {narrationStyle === 'sajat' && <textarea value={customPrompt} onChange={event => setCustomPrompt(event.target.value)} placeholder="Írd le röviden a saját narrációs hangot." rows={3} />}
+          </article>
+          <article className="wv-package-decision">
+            <header><span>05</span><div><strong>Intenzitás</strong><small>A tempó és a megfogalmazás ereje</small></div></header>
             <SelectGroup options={INTENSITIES} value={intensity} onChange={setIntensity} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2" style={{ color: '#CBD5E1' }}>Cél</label>
+          </article>
+          <article className="wv-package-decision is-goal">
+            <header><span>06</span><div><strong>Elsődleges cél</strong><small>A kreatív csomag fő teljesítményfókusza</small></div></header>
             <SelectGroup options={GOALS} value={goal} onChange={setGoal} />
-          </div>
+          </article>
         </div>
 
-        {reopenedWithoutCharge ? (
-          <div className="flex items-center gap-2 text-xs mb-1 px-3 py-2 rounded-lg" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22C55E' }}>
-            <span>✓</span>
-            <span>Mentett csomag megnyitva — nem vontunk le új kreditet. Újragenerálás új kreditet fogyaszt.</span>
-          </div>
-        ) : saved ? (
-          <div className="flex items-center gap-2 text-xs mb-1 px-3 py-2 rounded-lg" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22C55E' }}>
-            <span>✓</span>
-            <span>Gyártási csomag elkészült és mentésre került. Újragenerálás új kreditet fogyaszt.</span>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between text-xs mb-1" style={{ color: '#94A3B8' }}>
-            <span>Generálás ára: <span style={{ color: '#3B82F6' }}>{isShorts ? '2' : '6'} kredit</span></span>
-          </div>
-        )}
-        <button onClick={handleGenerate} disabled={loading || !topic.trim() || generationBlockedByOpportunity}
-          className="w-full py-3 rounded-lg font-semibold text-sm transition-all disabled:opacity-40"
-          style={{ background: (loading || generationBlockedByOpportunity) ? '#121826' : 'linear-gradient(135deg, #3B82F6, #2563EB)', color: generationBlockedByOpportunity ? '#CBD5E1' : '#080B12' }}>
-          {loading ? (
-            <span className="flex items-center justify-center gap-2">
-              <span className="inline-block w-4 h-4 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#3B82F6', borderTopColor: 'transparent' }} />
-              {factsLoading ? 'Tényadatok keresése (Wikipedia, Google)...' : (isShorts ? 'Shorts csomag generálása...' : 'Long videó csomag generálása...')}
+        <footer className="wv-package-generate-rail">
+          <div>
+            {reopenedWithoutCharge || saved ? <CheckCircle2 aria-hidden="true" /> : <Zap aria-hidden="true" />}
+            <span>
+              <strong>{reopenedWithoutCharge ? 'Mentett csomag megnyitva — új kredit levonása nélkül.' : saved ? 'A csomag elkészült és mentésre került.' : `${isShorts ? 'Shorts' : 'Long videó'} csomag · ${isShorts ? '2' : '6'} kredit`}</strong>
+              <small>{reopenedWithoutCharge || saved ? 'Az újragenerálás új kreditet használ.' : 'A következő lépés előtt kreditmegerősítést kapsz.'}</small>
             </span>
-          ) : generationBlockedByOpportunity ? 'Előbb validálás vagy előkészítés' : saved ? `🔄 Újragenerálás (${isShorts ? '2' : '6'} kredit)` : opportunityPreparationMode ? `🧭 ${isShorts ? 'Shorts' : 'Long videó'} előkészítő csomag` : `🎬 ${isShorts ? 'Shorts' : 'Long videó'} csomag generálása`}
-        </button>
-      </div>
+          </div>
+          <button type="button" onClick={handleGenerate} disabled={loading || !topic.trim() || generationBlockedByOpportunity}>
+            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved ? <>Újragenerálás <span>{isShorts ? '2' : '6'} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
+          </button>
+        </footer>
+      </section>
 
       {loading && (
-        <div className="rounded-xl p-5 mb-6" style={{ background: '#0F1420', border: '1px solid rgba(255,255,255,0.08)' }}>
+        <div className="wv-package-loading">
           <LoadingScreen steps={LOADING_STEPS.videoPackage} message={factsLoading ? 'Tényadatok keresése (Wikipedia, Google)...' : undefined} />
         </div>
       )}
 
-      {error && <div className="rounded-xl px-5 py-4 mb-6 text-sm" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#EF4444' }}>{error}</div>}
+      {error && <div className="wv-package-error" role="alert"><AlertTriangle aria-hidden="true" /><span><strong>A csomag most nem készíthető el.</strong>{error}</span></div>}
 
       {result && (
-        <div className="space-y-4">
+        <section className="wv-package-results" aria-labelledby="wv-package-results-title">
+          <header className="wv-package-results-head">
+            <div><span>02</span><div><small>Elkészült gyártási dosszié</small><h2 id="wv-package-results-title">A videó teljes alkotói rendszere</h2></div></div>
+            <PackageCopyBtn text={fullText} label="Teljes csomag másolása" />
+          </header>
           <VideoPackageHero
             topic={result.topic}
             metaBadges={heroMetaBadges}
@@ -1220,12 +1241,8 @@ export default function VideoPackagePage() {
             onSaveToCalendar={saveToCalendar}
           />
 
-          <div className="flex justify-end">
-            <PackageCopyBtn text={fullText} label="Teljes csomag" />
-          </div>
-
           {/* Producer brief — checklist + saját CopyBtn, a fő státusz-adatok a Hero-ban jelennek meg */}
-          <SectionCard title="Producer brief" icon={ListChecks} accent="rgba(34,197,94,0.2)" action={<PackageCopyBtn text={producerBrief} label="Producer brief másolása" />}>
+          <SectionCard title="Producer brief" icon={ListChecks} accent="rgba(34,197,94,0.2)" action={<PackageCopyBtn text={producerBrief} label="Producer brief másolása" />} wide>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 text-xs">
               {['Forrás check', 'Narráció próba', 'B-roll lista', 'Thumbnail', 'CTA'].map(item => (
                 <div key={item} className="rounded-lg px-3 py-2" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)', color: '#CBD5E1' }}>
@@ -1253,7 +1270,7 @@ export default function VideoPackagePage() {
           )}
 
           {/* Hook */}
-          <SectionCard title="Hook" icon={Zap} accent="rgba(139,92,246,0.2)" action={<PackageCopyBtn text={result.hook} label="Hook másolása" />}>
+          <SectionCard title="Hook" icon={Zap} accent="rgba(139,92,246,0.2)" action={<PackageCopyBtn text={result.hook} label="Hook másolása" />} wide>
             <p className="text-sm leading-relaxed font-medium" style={{ color: '#F8FAFC' }}>{result.hook}</p>
             {result.hook_variations && result.hook_variations.length > 0 && (
               <div className="mt-4 pt-4 space-y-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
@@ -1296,12 +1313,13 @@ export default function VideoPackagePage() {
             title={isShorts ? 'Narráció (shorts)' : 'Teljes narráció'}
             icon={Mic}
             action={<PackageCopyBtn text={result.narration} label="Narráció másolása" />}
+            wide
           >
             <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: '#D1D9E6' }}>{result.narration}</p>
           </SectionCard>
 
           {/* Jelenetek */}
-          <SectionCard title="Jelenetstruktúra" icon={Film}>
+          <SectionCard title="Jelenetstruktúra" icon={Film} wide>
             <div className="space-y-3">
               {result.scene_structure.map(scene => (
                 <div key={scene.number} className="rounded-lg p-4" style={{ background: '#0A0E18', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -1417,7 +1435,7 @@ export default function VideoPackagePage() {
 
           {/* Platform-natív feltöltési checklist */}
           {result.platform_checklist && (
-            <SectionCard title="Platform-natív feltöltési checklist" icon={Send} accent="rgba(59,130,246,0.2)">
+            <SectionCard title="Platform-natív feltöltési checklist" icon={Send} accent="rgba(59,130,246,0.2)" wide>
               <PlatformChecklistCard checklist={result.platform_checklist} />
             </SectionCard>
           )}
@@ -1441,7 +1459,7 @@ export default function VideoPackagePage() {
               gyakran figyelmen kívül hagyja — ezért korábban a fenti "X web ·
               Y video" számláló Y-t mutatott, de sehol nem jelent meg a Y videó). */}
           {opportunityContext?.evidence_videos && opportunityContext.evidence_videos.length > 0 && (
-            <SectionCard title={`Bizonyíték videók (${opportunityContext.evidence_videos.length})`} icon={PlayCircle} accent="rgba(59,130,246,0.15)">
+            <SectionCard title={`Bizonyíték videók (${opportunityContext.evidence_videos.length})`} icon={PlayCircle} accent="rgba(59,130,246,0.15)" wide>
               <p className="text-xs mb-3" style={{ color: '#CBD5E1' }}>
                 Ezek a YouTube-videók igazolják, hogy a témának van piaci/nézettségi jele.
               </p>
@@ -1465,7 +1483,7 @@ export default function VideoPackagePage() {
 
           {/* Források */}
           {result.sources_used && result.sources_used.length > 0 && (
-            <SectionCard title="Felhasznált források" icon={Globe} accent="rgba(34,197,94,0.15)">
+            <SectionCard title="Felhasznált források" icon={Globe} accent="rgba(34,197,94,0.15)" wide>
               <p className="text-xs mb-3" style={{ color: '#CBD5E1' }}>
                 A narráció a következő ellenőrzött forrásokból dolgozott. A konkrét adatok, számok ezekből származnak.
               </p>
@@ -1487,7 +1505,7 @@ export default function VideoPackagePage() {
               Nem találtunk ellenőrzött forrást ehhez a témához — a narráció általános koncepció szinten készült, konkrét adatok nélkül. Publikálás előtt érdemes saját kutatást végezni.
             </div>
           )}
-        </div>
+        </section>
       )}
 
       {creditCheck && (
