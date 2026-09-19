@@ -38,7 +38,12 @@ afterEach(() => {
 })
 
 describe('lib/stripe.ts is importable with a fully missing Stripe environment', () => {
-  it('module import itself does not throw', async () => {
+  // The first dynamic import in this file cold-loads the Stripe SDK. Measured
+  // first-test durations: ~0.1s (local SSD), 0.66s (Node 20 container), 5.14s
+  // (Node 24 container on a slow bind mount, which exceeded vitest's default
+  // 5s). Only this test gets an explicit budget (~6x the worst measurement);
+  // the global timeout is untouched and the assertion is unchanged.
+  it('module import itself does not throw', { timeout: 30_000 }, async () => {
     await expect(import('@/lib/stripe')).resolves.toBeDefined()
   })
 

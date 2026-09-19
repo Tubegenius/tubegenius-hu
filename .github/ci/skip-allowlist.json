@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) authenticated cannot INSERT/UPDATE creator_memory at all (full table-level revoke, not just content_lane)",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) authenticated cannot set content_lane via direct SET ROLE INSERT",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) authenticated cannot set content_lane via direct SET ROLE UPDATE",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) authenticated retains SELECT (proven used by app/dashboard/page.tsx), sees only own rows via RLS",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) legacy service_role writer (real onConflict upsert) still works unaffected by the authenticated revoke",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) pending/NULL-lane public flow (upsert_creator_memory RPC via service_role) still works",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-authenticated-privilege-db-integration.test.ts",
+      "name": "Creator Lane -- authenticated privilege gate, S1 (067-only) video_idea_id legacy compatibility: service_role can still write it directly in S1 (documented, RPC-only restriction deferred to 068)",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s1-legacy-compat-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S1 -- 001-066+067 schema + OLD application write contract every row created by the OLD write paths has NULL lane columns",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s1-legacy-compat-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S1 -- 001-066+067 schema + OLD application write contract OLD memory route POST upsert (onConflict=user_id,topic, includes video_idea_id) succeeds, no 42P10, no permission denied",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s1-legacy-compat-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S1 -- 001-066+067 schema + OLD application write contract OLD video_ideas writer (ensureVideoIdea select-then-insert-or-update) still works, no permission denied",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s1-legacy-compat-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S1 -- 001-066+067 schema + OLD application write contract OLD video-audit route creator_memory auto-save upsert (onConflict=user_id,topic) succeeds, no 42P10, no permission denied",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s1-legacy-compat-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S1 -- 001-066+067 schema + OLD application write contract OLD/unchanged video_ideas writers: setVideoIdeaWorkflowStatus, markVideoIdeaReadyToProduce (video_package_id), PATCH-style field updates",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s1-legacy-compat-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S1 -- 001-066+067 schema + OLD application write contract sanity: creator_memory_user_id_topic_key is present (068 not applied) -- this suite is only meaningful in that state",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) all 5 new RPCs are reachable and functional on the expand-only schema",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) an UNRELATED unique_violation is never swallowed by the exception handler -- it still raises, unmodified",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) GET /api/memory without ?lane= returns NULL-lane rows only, via the real route handler",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) GET /api/memory?lane=evidence_led fails closed (400) since no lane UI exists yet, but the parameter itself is already handled",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) lane-aware reads (getCreatorMemoryForLane / getPendingCreatorMemory) are already functional",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) Opportunity legacy/pending-only exclusion read (getOpportunityExclusionMemory) works on the expand-only schema",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) raw HTTP/PostgREST layer: the lane conflict is a clean 409 with no raw constraint name in the body (not 5xx)",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) real /api/opportunity route reads its creator_memory exclusion set via the RPC-safe helper without error on the expand-only schema",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) real memory route POST sequence (RPC upsert + RPC link) succeeds on the expand-only schema",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) same-topic different-lane creator_memory coexistence fails CLOSED with a clean, stable error (expected S2 limitation, not a bug)",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) sanity: creator_memory_user_id_topic_key is present (068 not applied) -- this suite is only meaningful in that state",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) the SECOND legacy constraint (creator_memory_user_topic_unique, production-only in reality) also translates to lane_conflict_pending_contract",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) upsertCreatorMemory pending/NULL-lane branch works end to end",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/creator-lane-s2-new-app-expand-db-integration.test.ts",
+      "name": "Creator Lane rollout gate S2 -- 001-066+067 schema + NEW application (RPC-based) user B never sees user A rows on the expand-only schema (tenant isolation unaffected by phase)",
+      "reason": "Rollout-phase gate: this suite is only meaningful on a database that has migration 067 but NOT 068 (the test file self-skips once 068 is applied). Structurally unreachable on the fully migrated 001-089 stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) active-membership partial uniqueness (semantic_topic_membership_active_evidence_key) does NOT reject overlapping closed historical intervals for the same evidence (documented S1 gap, not a guarantee)",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) a forbidden anon grant makes a re-run fail closed; revoking it restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) an extra service_role grant makes a re-run fail closed; revoking it restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) an unauthorized column addition makes a re-run fail closed; reverting restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) an unexpected RLS policy makes a re-run fail closed; dropping it restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) disabling RLS makes a re-run fail closed; re-enabling+forcing restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) dropping a CHECK constraint makes a re-run fail closed; re-adding the identical constraint restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) drift fail-closed (column, constraint, index, RLS, policy, grant, owner) dropping a non-PK index makes a re-run fail closed; recreating the identical index restores a clean no-op",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) global topology gate a 1-of-2 state (only semantic_topics present) is rejected before any DDL, leaving the surviving table untouched",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/semantic-topic-identity-schema-db-integration.test.ts",
+      "name": "Semantic Topic Identity v0 S1 — semantic_topics / semantic_topic_membership schema (real local DB) global topology gate a fresh 0-of-2 state creates exactly 2 new, empty tables, and the migration is then a byte-exact no-op on re-run",
+      "reason": "State gate: only meaningful against a 072-only database whose assignment_reason still has the pre-073 definition (the test file self-skips once 073+ is applied). Structurally unreachable on the fully migrated stack."
+    },
+    {
+      "file": "tests/supervised-intake-cli-subprocess-e2e.test.ts",
+      "name": "Supervised Intake CLI -- REAL subprocess E2E (section 4) E) signal handling (POSIX only -- see comment above) double SIGINT (second interrupt while the first is still being handled): immediate hard exit, documented UNEXPECTED_INTERNAL_ERROR code, zero provider calls",
+      "reason": "POSIX-only signal-handling test: Node on Windows cannot deliver SIGINT/SIGTERM to a child process, so it is skipped on win32 only. On Linux (CI) it must run and pass -- the entry is therefore scoped to win32.",
+      "platforms": [
+        "win32"
+      ]
+    },
+    {
+      "file": "tests/supervised-intake-cli-subprocess-e2e.test.ts",
+      "name": "Supervised Intake CLI -- REAL subprocess E2E (section 4) E) signal handling (POSIX only -- see comment above) single SIGINT before any claim: finishes gracefully, claims nothing new, documented exit code, zero provider calls",
+      "reason": "POSIX-only signal-handling test: Node on Windows cannot deliver SIGINT/SIGTERM to a child process, so it is skipped on win32 only. On Linux (CI) it must run and pass -- the entry is therefore scoped to win32.",
+      "platforms": [
+        "win32"
+      ]
+    }
+  ]
+}
