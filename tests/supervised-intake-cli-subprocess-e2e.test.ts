@@ -18,7 +18,7 @@
 // row count for the specific evidence used (a network call could never
 // reach a code path where callAnthropicForExtraction runs without ALSO
 // leaving a reservation row, since reserve happens strictly before it).
-import { execFile, execSync, spawn } from 'node:child_process'
+import { execFile, execSync, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -148,19 +148,139 @@ function assertNeverCalledProvider(result: CliResult) {
   expect(combined).not.toMatch(/api\.anthropic\.com/i)
 }
 
-// Signal-testing helper (section 8): spawns the CLI, waits for a specific
-// line to appear in its stdout (proving the process has reached exactly
-// that point -- e.g. signal handlers are already registered and a batch
-// already exists, but no claim has happened yet), sends the requested
-// signal(s) at that moment, then waits for the process to exit. Waiting
-// for a concrete log line rather than a fixed delay is what makes this
-// reliable rather than a timing guess.
-function runCliUntilLineThenSignal(
+// Signal-testing harness (section 8, POSIX only). A signal test is only
+// meaningful if the child is provably at a known point of the runner when the
+// signal arrives, so nothing here relies on a sleep or on "the line just
+// appeared in the pipe":
+//
+//   1. readiness   -- the runner has logged its cumulative-capacity preflight.
+//                     That line is written after the SIGINT/SIGTERM handlers are
+//                     registered and immediately before create_supervised_intake_batch,
+//                     so the handlers exist and the runner is at the create step.
+//   2. blocked     -- a separate DB session holds a SHARE lock on
+//                     supervised_intake_batches, so the runner's INSERT inside
+//                     create_supervised_intake_batch cannot finish. The harness
+//                     waits until pg_stat_activity shows that exact backend
+//                     waiting on that lock: the child is provably suspended
+//                     INSIDE the create RPC, before any claim.
+//   3. signal #1   -- sent to the runner's own PID (a direct `node` child, no
+//                     shell wrapper) and acknowledged by the runner's handler
+//                     (the "received SIGINT ... signalCount" log line).
+//   4. single      -- only now is the lock released; the runner finishes
+//                     creating the batch, sees the abort flag at the top of its
+//                     claim loop and stops without claiming.
+//      double      -- signal #2 is sent after the first was acknowledged, while
+//                     the runner is still blocked (a second interrupt while the
+//                     first is still being handled); the runner must hard-exit.
+//   5. terminal    -- wait for the process to exit, release/destroy the lock
+//                     session, wait until no create RPC is still in flight, and
+//                     prove the child PID no longer exists (no orphan/zombie).
+// Every failure path kills the child and the lock session.
+const CREATE_BATCH_RPC = 'create_supervised_intake_batch'
+
+// The whole signal scenario shares ONE deadline that is always shorter than
+// the per-test timeout below. This is a safety invariant, not a tuning knob:
+// if vitest's own test timeout fired first, the afterEach hook's synchronous
+// cleanupMarker() (execSync) would block on the lock the harness still holds,
+// and the event loop that must release that lock could never run. With the
+// harness deadline first, every failure path unwinds (kills the child and the
+// lock session) before the framework timeout can interfere. Measured happy
+// path on Linux: ~1.0-1.2s per test.
+const SIGNAL_HARNESS_DEADLINE_MS = 20_000
+const SIGNAL_TEST_TIMEOUT_MS = 30_000
+
+function parseJsonLines(text: string): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = []
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('{')) continue
+    try {
+      events.push(JSON.parse(trimmed) as Record<string, unknown>)
+    } catch {
+      // a partially received trailing line -- completed by a later chunk
+    }
+  }
+  return events
+}
+
+function hasLogEvent(text: string, message: RegExp, fields: Record<string, unknown> = {}): boolean {
+  return parseJsonLines(text).some(
+    (event) => typeof event.message === 'string' && message.test(event.message) && Object.entries(fields).every(([key, value]) => event[key] === value),
+  )
+}
+
+async function waitUntil(condition: () => boolean, description: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for: ${description}`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+function runnerBlockedInsideBatchCreate(): boolean {
+  return Number(dockerPsql(
+    `select count(*) from pg_stat_activity where wait_event_type='Lock' and wait_event='relation' and query ilike '%${CREATE_BATCH_RPC}%' and query not ilike '%pg_stat_activity%';`,
+  ).trim()) >= 1
+}
+
+function batchCreateRpcInFlight(): boolean {
+  return Number(dockerPsql(
+    `select count(*) from pg_stat_activity where state <> 'idle' and query ilike '%${CREATE_BATCH_RPC}%' and query not ilike '%pg_stat_activity%';`,
+  ).trim()) >= 1
+}
+
+// A separate DB session that holds `LOCK TABLE ... IN SHARE MODE` on
+// supervised_intake_batches: readers are unaffected, writers (the runner's
+// INSERT inside create_supervised_intake_batch) wait until it is released.
+function holdBatchInsertLock() {
+  const session = spawn('docker', ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'])
+  let output = ''
+  let closed = false
+  let spawnError: Error | undefined
+  session.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
+  session.on('close', () => { closed = true })
+  session.on('error', (err) => { spawnError = err; closed = true })
+  session.stdin.write("begin;\nlock table public.supervised_intake_batches in share mode;\nselect 'LOCK_HELD';\n")
+  return {
+    async acquired(): Promise<void> {
+      await waitUntil(() => {
+        if (spawnError) throw spawnError
+        return output.includes('LOCK_HELD')
+      }, 'the lock-holder DB session to acquire its lock', 5_000)
+    },
+    async release(): Promise<void> {
+      if (closed) return
+      session.stdin.write('commit;\n')
+      session.stdin.end()
+      await waitUntil(() => closed, 'the lock-holder DB session to close', 5_000)
+    },
+    async destroy(): Promise<void> {
+      if (closed) return
+      session.kill('SIGKILL')
+      await waitUntil(() => closed, 'the killed lock-holder DB session to close', 5_000)
+    },
+  }
+}
+
+interface SignalRunResult extends CliResult {
+  pid: number
+  terminationSignal: NodeJS.Signals | null
+}
+
+async function runCliSignalledWhileBlockedInBatchCreate(
   args: string[],
   envOverrides: Record<string, string | undefined>,
-  waitForLineMatching: RegExp,
-  signals: NodeJS.Signals[],
-): Promise<CliResult> {
+  signalCount: 1 | 2,
+): Promise<SignalRunResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   delete env.ANTHROPIC_API_KEY
   env.ANTHROPIC_AUTH_SCOPE_MODE = 'identity_linked'
@@ -170,30 +290,51 @@ function runCliUntilLineThenSignal(
     else env[k] = v
   }
 
-  return new Promise<CliResult>((resolve, reject) => {
-    const child = spawn('node', [CLI_ENTRY, ...args], { cwd: REPO_ROOT, env })
+  const deadline = Date.now() + SIGNAL_HARNESS_DEADLINE_MS
+  const wait = (condition: () => boolean, description: string, phaseMs: number) =>
+    waitUntil(condition, description, Math.max(0, Math.min(phaseMs, deadline - Date.now())))
+  const lock = holdBatchInsertLock()
+  let child: ChildProcess | undefined
+  const state: { exited: boolean; exit?: { code: number | null; signal: NodeJS.Signals | null }; spawnError?: Error } = { exited: false }
+  try {
+    await lock.acquired()
+
     let stdout = ''
     let stderr = ''
-    let signaled = false
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL')
-      reject(new Error(`runCliUntilLineThenSignal: timed out waiting for ${waitForLineMatching} -- stdout so far: ${stdout}`))
-    }, 30_000)
+    const spawned = spawn('node', [CLI_ENTRY, ...args], { cwd: REPO_ROOT, env })
+    child = spawned
+    spawned.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    spawned.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    spawned.on('close', (code, signal) => { state.exit = { code, signal }; state.exited = true })
+    spawned.on('error', (err) => { state.spawnError = err; state.exited = true })
+    const pid = spawned.pid
+    if (pid === undefined) throw new Error('the runner process failed to spawn')
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-      if (!signaled && waitForLineMatching.test(stdout)) {
-        signaled = true
-        for (const sig of signals) child.kill(sig)
-      }
-    })
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    child.on('close', (code, signal) => {
-      clearTimeout(timeout)
-      resolve({ exitCode: code ?? (signal ? -1 : 0), stdout, stderr })
-    })
-    child.on('error', (err) => { clearTimeout(timeout); reject(err) })
-  })
+    await wait(() => {
+      if (state.spawnError) throw state.spawnError
+      return hasLogEvent(stdout, /cumulative daily capacity preflight/)
+    }, 'the runner preflight log line (signal handlers registered, runner at the batch-create step)', 15_000)
+    await wait(runnerBlockedInsideBatchCreate, 'the runner blocked inside create_supervised_intake_batch', 10_000)
+
+    spawned.kill('SIGINT')
+    await wait(() => hasLogEvent(stdout, /^received SIGINT/, { signalCount: 1 }), 'the runner acknowledging SIGINT #1', 5_000)
+    if (signalCount === 2) spawned.kill('SIGINT')
+    else await lock.release()
+
+    await wait(() => state.exited, 'the runner process to exit', 10_000)
+    await lock.release()
+    await wait(() => !batchCreateRpcInFlight(), 'no create_supervised_intake_batch call to remain in flight', 10_000)
+
+    if (!state.exit) throw new Error('the runner exited without a close event')
+    return { exitCode: state.exit.code ?? -1, stdout, stderr, pid, terminationSignal: state.exit.signal }
+  } finally {
+    if (child && !state.exited) {
+      child.kill('SIGKILL')
+      await waitUntil(() => state.exited, 'the force-killed runner to exit').catch(() => undefined)
+    }
+    await lock.destroy()
+    await waitUntil(() => !batchCreateRpcInFlight(), 'a pending create_supervised_intake_batch call to drain after cleanup', 5_000).catch(() => undefined)
+  }
 }
 
 let workDir: string
@@ -438,7 +579,7 @@ describeIfLocalDb('Supervised Intake CLI -- REAL subprocess E2E (section 4)', ()
   // with this explicit reason, on win32 only.
   const describeSignalTests = process.platform === 'win32' ? describe.skip : describe
   describeSignalTests('E) signal handling (POSIX only -- see comment above)', () => {
-    it('single SIGINT before any claim: finishes gracefully, claims nothing new, documented exit code, zero provider calls', async () => {
+    it('single SIGINT before any claim: finishes gracefully, claims nothing new, documented exit code, zero provider calls', { timeout: SIGNAL_TEST_TIMEOUT_MS }, async () => {
       enableIntakePolicyForFixture()
       const evidenceId = createEvidence('sigint-single')
       const idempotencyKey = nextMarker('batch-sigint-single')
@@ -448,23 +589,28 @@ describeIfLocalDb('Supervised Intake CLI -- REAL subprocess E2E (section 4)', ()
       }))
       const claimStatePath = path.join(workDir, 'claim-state.json')
 
-      const result = await runCliUntilLineThenSignal(
+      const result = await runCliSignalledWhileBlockedInBatchCreate(
         ['--input', inputPath, '--claim-state', claimStatePath],
         { NEXT_PUBLIC_SUPABASE_URL: LOCAL_URL, SUPABASE_SERVICE_ROLE_KEY: LOCAL_SERVICE_ROLE_KEY },
-        /"batch created"/,
-        ['SIGINT'],
+        1,
       )
 
+      expect(result.terminationSignal).toBeNull() // exited on its own, was not killed by a signal
       expect(result.exitCode).toBe(3) // BATCH_STOPPED -- "left running, no new item claimed"
       expect(result.stdout).toMatch(/finishing the item in flight, then stopping before claiming a new one/)
+      expect(result.stdout).toMatch(/shutdown signal received -- not claiming a new item/)
+      // A graceful shutdown emits no runner error-level log line (those go to stderr
+      // as JSON; Node's own non-JSON warnings are not runner output).
+      expect(parseJsonLines(result.stderr)).toEqual([])
       assertNeverCalledProvider(result)
       expect(existsSync(claimStatePath)).toBe(false) // nothing was ever claimed, so nothing was ever written
+      expect(processExists(result.pid)).toBe(false) // no orphan / zombie runner left behind
       const row = dockerPsql(`select status||'|'||coalesce(reason_code,'<null>') from supervised_intake_batches where idempotency_key='${idempotencyKey}';`).trim()
-      expect(['batch_created|<null>', 'running|<null>']).toContain(row)
+      expect(row).toBe('batch_created|<null>')
       expect(dockerPsql(`select count(*) from supervised_intake_batch_items where batch_id in (select id from supervised_intake_batches where idempotency_key='${idempotencyKey}') and status <> 'pending';`).trim()).toBe('0')
     })
 
-    it('double SIGINT (second interrupt while the first is still being handled): immediate hard exit, documented UNEXPECTED_INTERNAL_ERROR code, zero provider calls', async () => {
+    it('double SIGINT (second interrupt while the first is still being handled): immediate hard exit, documented UNEXPECTED_INTERNAL_ERROR code, zero provider calls', { timeout: SIGNAL_TEST_TIMEOUT_MS }, async () => {
       enableIntakePolicyForFixture()
       const evidenceId = createEvidence('sigint-double')
       const idempotencyKey = nextMarker('batch-sigint-double')
@@ -474,16 +620,26 @@ describeIfLocalDb('Supervised Intake CLI -- REAL subprocess E2E (section 4)', ()
       }))
       const claimStatePath = path.join(workDir, 'claim-state.json')
 
-      const result = await runCliUntilLineThenSignal(
+      const result = await runCliSignalledWhileBlockedInBatchCreate(
         ['--input', inputPath, '--claim-state', claimStatePath],
         { NEXT_PUBLIC_SUPABASE_URL: LOCAL_URL, SUPABASE_SERVICE_ROLE_KEY: LOCAL_SERVICE_ROLE_KEY },
-        /"batch created"/,
-        ['SIGINT', 'SIGINT'],
+        2,
       )
 
+      expect(result.terminationSignal).toBeNull() // process.exit(5) from the handler, not a signal death
       expect(result.exitCode).toBe(5) // UNEXPECTED_INTERNAL_ERROR -- documented hard-exit code for a second interrupt
-      expect(result.stdout).toMatch(/second interrupt received -- exiting immediately without further DB cleanup/)
+      // Both interrupts were acknowledged on stdout (warn level) ...
+      expect(hasLogEvent(result.stdout, /^received SIGINT/, { signalCount: 1 })).toBe(true)
+      expect(hasLogEvent(result.stdout, /^received SIGINT/, { signalCount: 2 })).toBe(true)
+      // ... and the force-stop notice is an error-level log line, which the runner
+      // writes to STDERR (console.error) -- exactly one such line, never on stdout.
+      const stderrEvents = parseJsonLines(result.stderr)
+      expect(stderrEvents).toHaveLength(1)
+      expect(stderrEvents[0]).toMatchObject({ level: 'error', message: 'second interrupt received -- exiting immediately without further DB cleanup' })
+      expect(result.stdout).not.toMatch(/second interrupt received/)
       assertNeverCalledProvider(result)
+      expect(existsSync(claimStatePath)).toBe(false) // the runner never reached a claim
+      expect(processExists(result.pid)).toBe(false) // no orphan / zombie runner left behind
     })
   })
 
