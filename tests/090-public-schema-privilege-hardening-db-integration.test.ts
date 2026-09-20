@@ -34,11 +34,31 @@ interface PsqlResult {
   output: string
 }
 
+// Migration 091 (Starter Credit Contract v1) deliberately replaces the body of handle_new_user_credits(),
+// which 090 pins byte-for-byte. Every rolled-back transaction in THIS file therefore first restores the
+// recorded pre-091 function (the state 001-090 leave behind), so 090 keeps being tested exactly as
+// rolled out; 091 has its own suite (tests/091-starter-credit-contract-*.test.ts).
+const PRE_091_FUNCTION_SQL = `CREATE OR REPLACE FUNCTION public.handle_new_user_credits()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+BEGIN
+  INSERT INTO public.user_credits (user_id) VALUES (NEW.id)
+  ON CONFLICT (user_id) DO NOTHING;
+  RETURN NEW;
+END;
+$function$;`
+// md5(replace(prosrc, CRLF, LF)) of the 091 function body; the live catalog may legitimately carry it.
+const POST_091_HANDLE_NEW_USER_CREDITS_BODY_MD5 = 'a93e8c9b68b6f11fee1bff310d00cf83'
+
 function psql(sql: string, user = 'postgres'): PsqlResult {
+  const wrapped = /^\s*BEGIN;/.test(sql) ? sql.replace('BEGIN;', `BEGIN;\n${PRE_091_FUNCTION_SQL}`) : sql
   const result = spawnSync(
     'docker',
     ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', user, '-d', 'postgres', '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'],
-    { input: sql, encoding: 'utf-8' },
+    { input: wrapped, encoding: 'utf-8' },
   )
   return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
 }
@@ -234,7 +254,16 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
         WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e' AND e.extname = 'pg_trgm');`)
       .split('\n').map((l) => l.trim()).filter(Boolean)
     expect(live).toHaveLength(77)
-    expect([...live].sort()).toEqual([...contract].sort())
+    // The only function 091 changes is handle_new_user_credits(): identity/owner/security/search_path/ACL must
+    // still match the 090 contract exactly; its body may be the recorded 090 body OR the 091 body.
+    const swap091Body = (line: string) => (line.startsWith('handle_new_user_credits()|')
+      ? line.replace(/\|body=[0-9a-f]{32}$/, '|body=<091-or-090>')
+      : line)
+    const liveHandle = live.find((l) => l.startsWith('handle_new_user_credits()|')) ?? ''
+    const liveBody = /\|body=([0-9a-f]{32})$/.exec(liveHandle)?.[1]
+    const contractBody = /\|body=([0-9a-f]{32})$/.exec(contract.find((l) => l.startsWith('handle_new_user_credits()|')) ?? '')?.[1]
+    expect([liveBody]).toEqual([expect.stringMatching(new RegExp(`^(${contractBody}|${POST_091_HANDLE_NEW_USER_CREDITS_BODY_MD5})$`))])
+    expect([...live].map(swap091Body).sort()).toEqual([...contract].map(swap091Body).sort())
     expect(contract.some((l) => /\|acl=[^|]*(PUBLIC:|anon:)/.test(l))).toBe(false)
   })
 })
@@ -277,8 +306,14 @@ ROLLBACK;`)
 
   it('reapply of the real migration file (committed, BEGIN/COMMIT) is a clean no-op', () => {
     const before = psqlOk(`${DIGEST_EXPR};\n${EXTRA_COUNTS_SQL}`)
-    const run = psql(MIGRATION)
+    // 091 changed handle_new_user_credits(), which 090 pins: restore the recorded pre-091 function inside the
+    // 090 transaction, then (if 091 was live) re-apply 091 so the stack ends exactly as it started.
+    const post091Live = psqlOk(`SELECT md5(replace(prosrc, E'\\r\\n', E'\\n')) = '${POST_091_HANDLE_NEW_USER_CREDITS_BODY_MD5}' FROM pg_proc WHERE oid = 'public.handle_new_user_credits()'::regprocedure;`).trim() === 't'
+    const run = psql(MIGRATION.replace(/^BEGIN;$/m, `BEGIN;\n${PRE_091_FUNCTION_SQL}`))
     expect(run.status).toBe(0)
+    if (post091Live) {
+      psqlOk(readFileSync(path.join(ROOT, 'supabase', 'migrations', '091_starter_credit_contract.sql'), 'utf8'))
+    }
     const after = psqlOk(`${DIGEST_EXPR};\n${EXTRA_COUNTS_SQL}`)
     expect(after).toBe(before)
     const counts = parseExtraCounts(after)

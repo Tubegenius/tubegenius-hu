@@ -39,9 +39,10 @@ function md5Sorted(lines: string[]): string {
 describe('090 migration source policy', () => {
   const code = stripSqlComments(migration)
 
-  it('is a normally named, ASCII-only, LF-only file that is the last migration', () => {
+  it('is a normally named, ASCII-only, LF-only file and the only 090 migration (later migrations, e.g. 091, may follow it)', () => {
     const names = readdirSync(path.join(ROOT, 'supabase', 'migrations')).filter((f) => f.endsWith('.sql')).sort()
-    expect(names[names.length - 1]).toBe('090_public_schema_privilege_hardening.sql')
+    expect(names.filter((n) => n.startsWith('090'))).toEqual(['090_public_schema_privilege_hardening.sql'])
+    expect(names[names.length - 1] >= '090_public_schema_privilege_hardening.sql').toBe(true)
     // eslint-disable-next-line no-control-regex
     expect(/[^\x00-\x7F]/.test(migration)).toBe(false)
     expect(migration.includes('\r')).toBe(false)
