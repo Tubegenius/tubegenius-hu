@@ -73,6 +73,9 @@ jobs:
           retention-days: 7
 
   regression:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -89,6 +92,21 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
+      - name: Authenticate and verify GHCR image pull
+        timeout-minutes: 5
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set +x
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin > /dev/null
+          image="ghcr.io/supabase/postgres-meta:v0.99.0"
+          if ! docker pull "$image"; then
+            echo "::error title=Authenticated GHCR image pull failed::Could not pull $image before Supabase stack startup"
+            exit 1
+          fi
+          echo "authenticated GHCR image pull succeeded: $image"
+
       - name: Start clean local Supabase stack
         timeout-minutes: 20
         run: |
@@ -98,7 +116,8 @@ jobs:
           # studio (UI) are not needed by the suite. Migrations in
           # supabase/migrations are applied automatically on a fresh stack.
           if ! supabase start -x logflare,vector,studio > "$RUNNER_TEMP/supabase-start.log" 2>&1; then
-            echo "supabase start failed; redacted tail of the start log:"
+            echo "::error title=Supabase stack startup failed::The authenticated image pull passed, but the local Supabase stack did not start"
+            echo "redacted tail of the start log:"
             tail -n 80 "$RUNNER_TEMP/supabase-start.log" | sed -E "$JWT_SCRUB"
             exit 1
           fi
