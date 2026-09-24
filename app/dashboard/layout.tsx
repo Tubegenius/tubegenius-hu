@@ -1,9 +1,10 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
-import DashboardSidebar from '@/components/dashboard/Sidebar'
-import DashboardHeader from '@/components/dashboard/Header'
 import OnboardingGuard from '@/components/dashboard/OnboardingGuard'
 import DailySoftLimitGuard from '@/components/dashboard/DailySoftLimitGuard'
+import CreatorOSShell from '@/components/dashboard/CreatorOSShell'
+import { CreatorOSProvider } from '@/components/dashboard/CreatorOSContext'
+import './creator-os.css'
 
 export default async function DashboardLayout({
   children,
@@ -28,21 +29,13 @@ export default async function DashboardLayout({
   // layoutban self-redirect hurkot okozna a /dashboard/profile oldalon).
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <CreatorOSProvider>
       <DailySoftLimitGuard />
-      {/* Sidebar */}
-      <DashboardSidebar profile={profile} />
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <DashboardHeader user={user} profile={profile} />
-        
-        <main className="flex-1 p-6 overflow-auto">
-          <OnboardingGuard onboardingCompleted={profile?.onboarding_completed === true}>
-            {children}
-          </OnboardingGuard>
-        </main>
-      </div>
-    </div>
+      <CreatorOSShell profile={profile} userEmail={user.email}>
+        <OnboardingGuard onboardingCompleted={profile?.onboarding_completed === true}>
+          {children}
+        </OnboardingGuard>
+      </CreatorOSShell>
+    </CreatorOSProvider>
   )
 }

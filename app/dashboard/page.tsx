@@ -1,6 +1,6 @@
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
-import DashboardClient from '@/components/dashboard/DashboardClient'
+import PremiumToday from '@/components/dashboard/PremiumToday'
 
 export default async function DashboardPage() {
   const supabase = createServerSupabaseClient()
@@ -17,13 +17,13 @@ export default async function DashboardPage() {
     .from('creator_memory').select('*').eq('user_id', user.id)
     .order('updated_at', { ascending: false }).limit(20)
 
-  const displayName = profile?.channel_name || user.email?.split('@')[0] || 'Creator'
+  const displayName = profile?.channel_name || user.email?.split('@')[0] || 'Alkotó'
 
   return (
-    <DashboardClient
+    <PremiumToday
       profile={profile}
-      memoryItems={memoryItems || []}
       displayName={displayName}
+      memoryCount={memoryItems?.length || 0}
     />
   )
 }

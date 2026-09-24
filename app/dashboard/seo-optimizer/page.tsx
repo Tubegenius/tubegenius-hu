@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import PublishKitFrame from '@/components/publish-kit/PublishKitFrame'
+import { AlertTriangle, Check, CheckCircle2, Clipboard, Copy, FileText, Hash, Info, ListVideo, MessageCircle, RefreshCw, Search, Send, WandSparkles } from 'lucide-react'
 
 interface SeoPackage {
   seo_title: string
@@ -34,18 +36,9 @@ const SEO_OPTIMIZER_COST = 1
 function CopyField({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false)
   return (
-    <div className="mb-3">
-      <div className="flex items-center justify-between mb-1">
-        <p className="text-xs" style={{ color: '#94A3B8' }}>{label}</p>
-        <button
-          onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
-          className="text-xs px-2 py-0.5 rounded"
-          style={{ background: '#121826', color: copied ? '#22C55E' : '#94A3B8' }}
-        >
-          {copied ? '✓ Másolva' : '📋 Másolás'}
-        </button>
-      </div>
-      <p className="text-sm whitespace-pre-wrap" style={{ color: '#F8FAFC' }}>{value}</p>
+    <div className="wv-seo-copy-field">
+      <header><span>{label}</span><button type="button" className={copied ? 'is-copied' : ''} onClick={() => { navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500) }}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? 'Másolva' : 'Másolás'}</button></header>
+      <p>{value}</p>
     </div>
   )
 }
@@ -71,6 +64,13 @@ export default function SeoOptimizerPage() {
   useEffect(() => {
     if (paidResultId) {
       loadPaidResult(paidResultId)
+      return
+    }
+    const incomingTopic = searchParams.get('topic')
+    const incomingTitle = searchParams.get('existingTitle')
+    if (incomingTopic || incomingTitle) {
+      if (incomingTopic) setTopic(incomingTopic)
+      if (incomingTitle) setExistingTitle(incomingTitle)
       return
     }
     try {
@@ -162,122 +162,56 @@ export default function SeoOptimizerPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {creditCheck && (
-        <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => { setCreditCheck(null); setPendingForceRefresh(false) }} loading={loading} />
-      )}
+    <PublishKitFrame
+      active="seo"
+      title="Minden, ami a publikálás pillanatához kell."
+      description="A videó ígéretéből rendezett feltöltési rendszer: kereshető cím, leírás, tagek, fejezetvázlat és nézői továbbvezetés egy helyen."
+      topic={topic}
+      existingTitle={existingTitle}
+    >
+      {creditCheck && <CreditConfirmModal check={creditCheck} onConfirm={confirmGenerate} onCancel={() => { setCreditCheck(null); setPendingForceRefresh(false) }} loading={loading} />}
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-1" style={{ color: '#F8FAFC' }}>📋 SEO / Feltöltés-optimalizáló</h1>
-        <p className="text-sm" style={{ color: '#CBD5E1' }}>Teljes feltöltési csomag egy menetben: cím, leírás, tagek, hashtagek, fejezetek, komment, CTA.</p>
-      </div>
-
-      <div className="card mb-6 space-y-3">
-        <input
-          value={topic}
-          onChange={e => setTopic(e.target.value)}
-          placeholder="Miről szól a videó?"
-          className="w-full px-4 py-2.5 rounded-lg text-sm"
-          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
-        />
-        <input
-          value={existingTitle}
-          onChange={e => setExistingTitle(e.target.value)}
-          placeholder="Meglévő cím (opcionális)"
-          className="w-full px-4 py-2.5 rounded-lg text-sm"
-          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
-        />
-        <input
-          value={keywords}
-          onChange={e => setKeywords(e.target.value)}
-          placeholder="Kulcsszavak vesszővel elválasztva (opcionális)"
-          className="w-full px-4 py-2.5 rounded-lg text-sm"
-          style={{ background: '#121826', border: '1px solid rgba(255,255,255,0.08)', color: '#F8FAFC' }}
-        />
-        <button onClick={() => runGenerate()} disabled={loading || !topic.trim()} className="btn-primary w-full">
-          {loading ? 'Generálás...' : 'SEO csomag generálása'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="card mb-6" style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
-          <p className="text-sm" style={{ color: '#EF4444' }}>{error}</p>
+      <section className="wv-publish-composer" aria-labelledby="wv-seo-brief-title">
+        <header>
+          <div><span>03</span><div><small>Publikálási brief</small><h2 id="wv-seo-brief-title">Rendezd feltölthető csomaggá.</h2></div></div>
+          <aside><Search aria-hidden="true" /><span><small>Generálás ára</small><strong>1 kredit</strong></span></aside>
+        </header>
+        <div className="wv-publish-fields is-seo">
+          <label className="is-primary"><span>Videó témája</span><input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Miről szól a videó?" /><small>Ez marad a teljes feltöltési csomag központi témája.</small></label>
+          <label><span>Elfogadott cím <i>opcionális</i></span><input value={existingTitle} onChange={event => setExistingTitle(event.target.value)} placeholder="A kiválasztott cím" /><small>Ha megadod, finomítjuk, nem cseréljük le önkényesen.</small></label>
+          <label><span>Kulcsszavak <i>opcionális</i></span><input value={keywords} onChange={event => setKeywords(event.target.value)} placeholder="Vesszővel elválasztva" /><small>A téma nélkülük is használható elsődleges kifejezésként.</small></label>
         </div>
-      )}
+        <footer>
+          <div><Info aria-hidden="true" /><span><strong>Teljes feltöltési rendszer</strong><small>Cím, leírás, tagek, fejezetek, komment és CTA.</small></span></div>
+          <button type="button" onClick={() => runGenerate()} disabled={loading || !topic.trim()}>{loading ? <><i />Épül a csomag</> : <><WandSparkles aria-hidden="true" />Publish Kit elkészítése<span>1 kredit</span></>}</button>
+        </footer>
+      </section>
 
-      {loading && (
-        <div className="card">
-          <LoadingScreen steps={LOADING_STEPS.seoOptimizer} />
-        </div>
-      )}
+      {error && <div className="wv-publish-alert is-error" role="alert"><AlertTriangle aria-hidden="true" /><span><strong>A feltöltési csomag most nem készíthető el.</strong>{error}</span></div>}
+      {loading && <div className="wv-publish-loading"><LoadingScreen steps={LOADING_STEPS.seoOptimizer} /></div>}
 
       {result && (
-        <div className="space-y-4">
-          {result.from_paid_result && (
-            <div className="rounded-xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap"
-              style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)' }}>
-              <div>
-                <p className="text-sm font-medium" style={{ color: '#93C5FD' }}>
-                  {result.cache_status === 'fresh' ? 'Friss mentett eredmény betöltve' : 'Korábbi mentett eredmény betöltve'}
-                </p>
-                <p className="text-xs mt-0.5" style={{ color: '#94A3B8' }}>
-                  Nem vontunk le új kreditet.
-                  {result.last_analyzed_at && ` Utolsó generálás: ${new Date(result.last_analyzed_at).toLocaleDateString('hu-HU')}.`}
-                </p>
-              </div>
-              <button onClick={() => runGenerate(true)} disabled={loading}
-                className="text-xs px-3 py-2 rounded-lg font-semibold flex-shrink-0"
-                style={{ background: 'rgba(255,255,255,0.06)', color: '#F8FAFC' }}
-                title="A frissítés új generálást indít, ezért kreditet használ.">
-                Eredmény frissítése
-              </button>
-            </div>
-          )}
-          <div className="card">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-xs" style={{ color: '#94A3B8' }}>FELTÖLTÉSI METAADAT-SCORE</p>
-              <span className="text-2xl font-bold" style={{ color: result.seo_score >= 70 ? '#22C55E' : result.seo_score >= 40 ? '#F59E0B' : '#EF4444' }}>{result.seo_score}/100</span>
-            </div>
-            <p className="text-xs mb-3" style={{ color: '#64748B' }}>{result.score_disclaimer || 'Heurisztikus ellenőrzőpont, nem keresési helyezés- vagy nézettség-előrejelzés.'}</p>
-            <div className="space-y-1.5">
-              {result.checklist.map((item, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs">
-                  <span style={{ color: item.done ? '#22C55E' : '#94A3B8' }}>{item.done ? '✓' : '○'}</span>
-                  <span style={{ color: item.done ? '#F8FAFC' : '#94A3B8' }}>{item.label}</span>
-                </div>
-              ))}
-            </div>
+        <section className="wv-publish-results" aria-labelledby="wv-seo-results-title">
+          {result.from_paid_result && <div className="wv-publish-alert is-saved"><Check aria-hidden="true" /><span><strong>{result.cache_status === 'fresh' ? 'Friss mentett csomag betöltve.' : 'Korábbi mentett csomag betöltve.'}</strong>Nem vontunk le új kreditet.{result.last_analyzed_at && ` Utolsó generálás: ${new Date(result.last_analyzed_at).toLocaleDateString('hu-HU')}.`}</span></div>}
+          <header className="wv-publish-results-head"><div><span>04</span><div><small>Publikálásra rendezve</small><h2 id="wv-seo-results-title">A teljes feltöltési dosszié</h2></div></div><span><Send aria-hidden="true" />YouTube csomag</span></header>
+
+          <div className="wv-seo-readiness" data-score={result.seo_score >= 70 ? 'high' : result.seo_score >= 40 ? 'medium' : 'low'}>
+            <div className="wv-seo-score-orbit"><span><strong>{result.seo_score}</strong><small>/ 100</small></span></div>
+            <div><span className="wv-eyebrow">Feltöltési metaadat-score</span><h3>{result.seo_score >= 70 ? 'A csomag szerkezetileg készen áll.' : result.seo_score >= 40 ? 'A csomag még finomítható.' : 'Néhány alapjel még hiányzik.'}</h3><p>{result.score_disclaimer || 'Heurisztikus ellenőrzőpont, nem keresési helyezés- vagy nézettség-előrejelzés.'}</p></div>
+            <div className="wv-seo-checklist">{result.checklist.map((item, index) => <div key={`${item.label}-${index}`} className={item.done ? 'is-done' : ''}>{item.done ? <CheckCircle2 aria-hidden="true" /> : <i aria-hidden="true" />}<span>{item.label}</span></div>)}</div>
+            {result.from_paid_result && <button type="button" onClick={() => runGenerate(true)} disabled={loading} title="A frissítés új generálást indít, ezért kreditet használ."><RefreshCw aria-hidden="true" />Eredmény frissítése<small>1 kredit</small></button>}
           </div>
 
-          <div className="card">
-            <CopyField label="SEO cím" value={result.seo_package.seo_title} />
-            <CopyField label="Leírás" value={result.seo_package.description} />
-            <CopyField label="Tagek" value={(result.seo_package.tags || []).join(', ')} />
-            <CopyField label="Hashtagek" value={(result.seo_package.hashtags || []).join(' ')} />
+          <div className="wv-seo-grid">
+            <article className="is-wide"><header><FileText aria-hidden="true" /><div><small>Alap metaadat</small><h3>Cím és leírás</h3></div></header><CopyField label="SEO cím" value={result.seo_package.seo_title} /><CopyField label="Leírás" value={result.seo_package.description} /></article>
+            <article><header><Hash aria-hidden="true" /><div><small>Felfedezhetőség</small><h3>Tagek és hashtagek</h3></div></header><CopyField label="Tagek" value={(result.seo_package.tags || []).join(', ')} /><CopyField label="Hashtagek" value={(result.seo_package.hashtags || []).join(' ')} /></article>
+            <article><header><ListVideo aria-hidden="true" /><div><small>Nézői tájékozódás</small><h3>Fejezetvázlat</h3></div></header><p className="wv-seo-note">Az időbélyegeket a készre vágott videó alapján kell hozzáadni.</p><ol className="wv-seo-chapters">{(result.seo_package.chapters || []).map((chapter, index) => <li key={`${chapter.label}-${index}`}><span>{String(index + 1).padStart(2, '0')}</span>{chapter.label}</li>)}</ol></article>
+            <article className="is-wide"><header><MessageCircle aria-hidden="true" /><div><small>Nézői továbbvezetés</small><h3>Kapcsolódás és következő lépés</h3></div></header><div className="wv-seo-distribution"><CopyField label="Playlist javaslat" value={result.seo_package.playlist_suggestion} /><CopyField label="Kitűzhető komment" value={result.seo_package.pinned_comment} /><CopyField label="Végképernyő CTA" value={result.seo_package.end_screen_cta} /></div></article>
           </div>
-
-          <div className="card">
-            <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>FEJEZETVÁZLAT</p>
-            <p className="text-xs mb-2" style={{ color: '#64748B' }}>Az időbélyegeket a készre vágott videó alapján kell hozzáadni.</p>
-            {(result.seo_package.chapters || []).map((c, i) => (
-              <p key={i} className="text-sm mb-1" style={{ color: '#F8FAFC' }}>{c.label}</p>
-            ))}
-          </div>
-
-          <div className="card">
-            <CopyField label="Playlist javaslat" value={result.seo_package.playlist_suggestion} />
-            <CopyField label="Kitűzhető komment" value={result.seo_package.pinned_comment} />
-            <CopyField label="Végképernyő CTA" value={result.seo_package.end_screen_cta} />
-          </div>
-        </div>
+        </section>
       )}
 
-      {!result && !loading && (
-        <div className="card text-center py-12">
-          <p className="text-3xl mb-3">📋</p>
-          <p style={{ color: '#CBD5E1' }}>Írd be a témát, és teljes feltöltési csomagot kapsz.</p>
-        </div>
-      )}
-    </div>
+      {!result && !loading && <section className="wv-publish-empty"><span><Clipboard aria-hidden="true" /></span><small>A brief után</small><h2>Egy rendezett csomag, nem szétszórt szövegmezők.</h2><p>A cím, a leírás, a keresési jelek és a nézői továbbvezetés ugyanabban a publikálási dossziéban jelenik meg.</p></section>}
+    </PublishKitFrame>
   )
 }
