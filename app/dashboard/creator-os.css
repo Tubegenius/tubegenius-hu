@@ -1,3 +1,6 @@
+/* A munkamenet véget ért: a védett shell (fiókadat, kreditjelző) azonnal eltűnik, amíg a kemény navigáció a bejelentkezésre nem ér. */
+html[data-wv-session='ended'] .wv-shell { visibility: hidden; }
+
 .wv-shell {
   --wv-bg: #101210;
   --wv-deep: #0a0c0a;
@@ -205,6 +208,8 @@
 .wv-account-menu a:hover,
 .wv-account-menu button:hover { color: var(--wv-text); background: var(--wv-raised); }
 .wv-account-menu svg { width: 17px; height: 17px; }
+.wv-account-menu-error { margin: 4px 0 2px; padding: 8px 10px; color: var(--wv-coral); font-size: 12px; line-height: 1.4; border: 1px solid color-mix(in srgb, var(--wv-coral) 30%, var(--wv-line)); border-radius: 8px; }
+.wv-account-menu button:disabled { cursor: progress; opacity: 0.6; }
 
 .wv-main {
   position: relative;

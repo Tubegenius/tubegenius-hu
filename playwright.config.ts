@@ -26,6 +26,9 @@ function signLocalJwt(role: 'anon' | 'service_role'): string {
 }
 
 const PORT = 3200
+// WV_E2E_PROD=1 serves a production build (next build && next start) instead of the dev server, so
+// console/cache-header/bfcache behaviour is the deployed behaviour, not dev-mode behaviour.
+const PROD = process.env.WV_E2E_PROD === '1'
 const BASE_URL = `http://127.0.0.1:${PORT}`
 const LOCAL_SUPABASE_URL = 'http://127.0.0.1:54321'
 
@@ -60,12 +63,24 @@ export default defineConfig({
       // 'msedge') -- no Chromium binary is downloaded by this config.
       use: { ...devices['Desktop Edge'], channel: 'msedge' },
     },
+    {
+      // Same browser with the back/forward cache ENABLED. Playwright's Chromium
+      // defaults disable bfcache (--disable-back-forward-cache), which real
+      // users' browsers do not, so Back/Forward regressions need this project.
+      name: 'edge-bfcache',
+      testMatch: '**/logout-back-navigation.spec.ts',
+      use: {
+        ...devices['Desktop Edge'],
+        channel: 'msedge',
+        launchOptions: { ignoreDefaultArgs: ['--disable-back-forward-cache'] },
+      },
+    },
   ],
   webServer: {
-    command: `npx next dev -p ${PORT}`,
+    command: PROD ? `npx next build && npx next start -p ${PORT}` : `npx next dev -p ${PORT}`,
     url: BASE_URL,
     reuseExistingServer: false,
-    timeout: 60_000,
+    timeout: PROD ? 900_000 : 60_000,
     stdout: 'pipe',
     stderr: 'pipe',
     env: {

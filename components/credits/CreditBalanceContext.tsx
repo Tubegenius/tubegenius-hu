@@ -3,12 +3,14 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   CreditBalanceRequestCoordinator,
+  CreditBalanceUnauthorizedError,
   fetchCreditBalance,
   type CreditBalance,
 } from '@/lib/credit-balance-client'
+import { AUTH_SESSION_ENDED_EVENT, endAuthSession } from '@/lib/auth-session-events'
 import { CREDIT_MUTATION_COMPLETED_EVENT } from '@/lib/credit-balance-events'
 
-type CreditBalanceStatus = 'loading' | 'ready' | 'error'
+type CreditBalanceStatus = 'loading' | 'ready' | 'error' | 'signed-out'
 
 interface CreditBalanceContextValue {
   credits: CreditBalance | null
@@ -32,8 +34,16 @@ export function CreditBalanceProvider({ children }: { children: ReactNode }) {
       setCredits(nextCredits)
       setStatus('ready')
       return nextCredits
-    } catch {
+    } catch (error) {
       if (!mountedRef.current || !coordinatorRef.current.isCurrent(request.id)) return null
+      if (error instanceof CreditBalanceUnauthorizedError) {
+        // A védett fa munkamenet nélkül él tovább (visszaállított oldal, lejárt
+        // vagy máshol megszüntetett munkamenet): az egyenleg nem maradhat meg.
+        setCredits(null)
+        setStatus('signed-out')
+        endAuthSession('unauthorized')
+        return null
+      }
       setStatus('error')
       return null
     }
@@ -47,6 +57,16 @@ export function CreditBalanceProvider({ children }: { children: ReactNode }) {
       coordinatorRef.current.abort()
     }
   }, [refreshCredits])
+
+  useEffect(() => {
+    const clear = () => {
+      coordinatorRef.current.abort()
+      setCredits(null)
+      setStatus('signed-out')
+    }
+    window.addEventListener(AUTH_SESSION_ENDED_EVENT, clear)
+    return () => window.removeEventListener(AUTH_SESSION_ENDED_EVENT, clear)
+  }, [])
 
   useEffect(() => {
     const reconcile = () => { void refreshCredits({ supersede: true }) }

@@ -5,6 +5,7 @@ import DailySoftLimitGuard from '@/components/dashboard/DailySoftLimitGuard'
 import CreatorOSShell from '@/components/dashboard/CreatorOSShell'
 import { CreatorOSProvider } from '@/components/dashboard/CreatorOSContext'
 import { CreditBalanceProvider } from '@/components/credits/CreditBalanceContext'
+import AuthSessionGuard from '@/components/auth/AuthSessionGuard'
 import './creator-os.css'
 
 export default async function DashboardLayout({
@@ -32,6 +33,7 @@ export default async function DashboardLayout({
   return (
     <CreditBalanceProvider key={user.id}>
       <CreatorOSProvider>
+        <AuthSessionGuard />
         <DailySoftLimitGuard />
         <CreatorOSShell profile={profile} userEmail={user.email}>
           <OnboardingGuard onboardingCompleted={profile?.onboarding_completed === true}>

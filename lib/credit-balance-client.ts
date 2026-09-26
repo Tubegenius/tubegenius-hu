@@ -10,6 +10,13 @@ export interface CreditBalance {
   subscription_status: string | null
 }
 
+export class CreditBalanceUnauthorizedError extends Error {
+  constructor() {
+    super('credit_balance_unauthorized')
+    this.name = 'CreditBalanceUnauthorizedError'
+  }
+}
+
 function finiteNonNegative(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
@@ -41,6 +48,7 @@ export async function fetchCreditBalance(signal?: AbortSignal): Promise<CreditBa
     cache: 'no-store',
     signal,
   })
+  if (response.status === 401) throw new CreditBalanceUnauthorizedError()
   if (!response.ok) throw new Error('credit_balance_unavailable')
   const parsed = parseCreditBalanceResponse(await response.json())
   if (!parsed) throw new Error('credit_balance_invalid_contract')

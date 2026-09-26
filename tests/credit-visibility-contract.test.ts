@@ -60,6 +60,49 @@ describe('credit visibility and billing clarity contract', () => {
     expect(provider).toContain('coordinatorRef.current.abort()')
   })
 
+  it('ends the protected tree with the session: hard logout, shared 401 handling, guard, hidden shell', () => {
+    const layout = read('app/dashboard/layout.tsx')
+    const shell = read('components/dashboard/CreatorOSShell.tsx')
+    const provider = read('components/credits/CreditBalanceContext.tsx')
+    const indicator = read('components/credits/CreditBalanceIndicator.tsx')
+    const guard = read('components/auth/AuthSessionGuard.tsx')
+    const events = read('lib/auth-session-events.ts')
+    const css = read('app/dashboard/creator-os.css')
+
+    // logout is a HARD navigation: router.push('/auth/login') left the Router Cache tree restorable via Back
+    expect(shell).toContain("endAuthSession('logout')")
+    // only a SUCCESSFUL signOut ends the session; an error or exception must not present it as ended
+    expect(shell).toContain('signedOut = error === null')
+    expect(shell.indexOf("setLogoutState('failed')")).toBeGreaterThan(-1)
+    expect(shell.indexOf("setLogoutState('failed')")).toBeLessThan(shell.indexOf("endAuthSession('logout')"))
+    expect(shell).not.toContain('finally') // no unconditional session end after a failed signOut
+    expect(shell).toContain("if (logoutState === 'pending') return")
+    expect(shell).toContain('role="alert"')
+    expect(shell).not.toContain('scope:') // the global sign-out scope (default) is unchanged
+    expect(shell).not.toContain("router.push('/auth/login')")
+    expect(events).toContain('window.location.replace(LOGIN_PATH)')
+    // the guard sits inside the credit provider, keyed by the same authenticated user
+    expect(layout.indexOf('<CreditBalanceProvider key={user.id}>')).toBeLessThan(layout.indexOf('<AuthSessionGuard />'))
+    expect(guard).toContain("event === 'SIGNED_OUT'")
+    expect(guard).toContain('armAuthSessionEnd()')
+    expect(guard).toContain('rearmAuthSessionEnd()')
+    expect(events).toContain('if (endAnnounced) return')
+    expect(events).toContain('if (leaveRequested) return')
+    expect(guard).toContain('event.persisted')
+    expect(guard).toContain("window.addEventListener('popstate', revalidate)")
+    expect(guard).toContain('refreshCredits({ supersede: true })')
+    expect(read('app/auth/layout.tsx')).toContain('<StaleSessionDocumentPurge />')
+    expect(read('components/auth/StaleSessionDocumentPurge.tsx')).toContain('window.location.reload()')
+    // shared credit state: a 401 or the session-ended event clears the balance, never keeps it
+    expect(provider).toContain('CreditBalanceUnauthorizedError')
+    expect(provider).toContain('AUTH_SESSION_ENDED_EVENT')
+    expect(provider).toContain('setCredits(null)')
+    expect(provider).toContain("setStatus('signed-out')")
+    expect(indicator).toContain("status === 'signed-out'")
+    // the stale shell is hidden until the navigation completes
+    expect(css).toContain("html[data-wv-session='ended'] .wv-shell { visibility: hidden; }")
+  })
+
   it('keeps balance read failures distinct from real zero and from successful product results', () => {
     const provider = read('components/credits/CreditBalanceContext.tsx')
     const indicator = read('components/credits/CreditBalanceIndicator.tsx')

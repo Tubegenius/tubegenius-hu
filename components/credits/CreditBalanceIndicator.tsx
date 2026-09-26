@@ -7,6 +7,7 @@ import { formatCreditAmount } from '@/lib/creator-credits-presentation'
 
 export default function CreditBalanceIndicator() {
   const { credits, status } = useCreditBalance()
+  if (status === 'signed-out') return null
   const label = status === 'loading'
     ? 'Betöltés…'
     : status === 'error'
