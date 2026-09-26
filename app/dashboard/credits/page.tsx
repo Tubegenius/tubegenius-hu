@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
   ArrowRight,
@@ -11,41 +11,23 @@ import {
   CircleCheck,
   Clock3,
   CreditCard,
-  FileText,
   Gauge,
-  Lightbulb,
   LockKeyhole,
-  Mic2,
-  PlaySquare,
   RefreshCw,
   ScanSearch,
   ShieldCheck,
-  Smartphone,
   Sparkles,
-  Stethoscope,
   WalletCards,
   X,
-  type LucideIcon,
 } from 'lucide-react'
 import CreditsHero from '@/components/credits/CreditsHero'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { CREATOR_CREDIT_COSTS, CREATOR_SEARCH_ALLOWANCES } from '@/lib/creator-credit-catalog'
 import {
   formatCreditPrice,
   formatCreditRenewalDate,
   toCreditAmount,
 } from '@/lib/creator-credits-presentation'
-
-interface CreditInfo {
-  balance: number
-  total_used: number
-  plan: string
-  monthly_allowance: number
-  subscription_status?: string
-  stripe_customer_id?: string
-  subscription_credit_balance?: number
-  purchased_credit_balance?: number
-  renews_at?: string | null
-  total_available_credits?: number
-}
 
 const PLANS = [
   { key: 'starter', name: 'Starter', credits: 50, price: 2990, softDailyLimit: 10, featured: false, note: 'Fókuszált, induló munkaritmushoz.' },
@@ -59,26 +41,9 @@ const TOPUP_PACKS = [
   { key: 'topup_500', name: 'Velocity', credits: 500, price: 11990, featured: false, note: 'Nagyobb gyártási időszakhoz.' },
 ]
 
-// A meglévő szerveroldali árakat és kreditmennyiségeket tükrözi.
-// Nem backend-contract: változáskor a szerveroldali konfigurációval együtt frissítendő.
-const CREDIT_COSTS: { feature: string; detail: string; cost: number; icon: LucideIcon }[] = [
-  { feature: 'Gyártási csomag · Shorts', detail: 'Ötletből publikálható rövid videóterv', cost: 2, icon: Smartphone },
-  { feature: 'Gyártási csomag · Long', detail: 'Hosszú formátum teljes alkotói váza', cost: 6, icon: PlaySquare },
-  { feature: 'Auto Transcript', detail: 'Videóból szerkeszthető szövegalap', cost: 3, icon: Mic2 },
-  { feature: 'Script Extract', detail: 'Meglévő tartalomból használható szerkezet', cost: 3, icon: FileText },
-  { feature: 'Videódiagnózis', detail: 'Teljesítmény és kreatív döntések elemzése', cost: 4, icon: Stethoscope },
-  { feature: 'Virális esély', detail: 'Gyors lehetőségértékelés', cost: 1, icon: BarChart3 },
-  { feature: 'Videólehetőségek', detail: 'Bizonyítékokra épülő témakeresés', cost: 2, icon: Lightbulb },
-  { feature: 'Heti Top Videólehetőség', detail: 'A heti kiemelt validált lehetőség', cost: 0, icon: BadgeCheck },
-  { feature: 'Extra lehetőségkeresés', detail: 'Új piaci kör lefuttatása', cost: 2, icon: RefreshCw },
-  { feature: 'Piaci bizonyíték · napi első 3', detail: 'Alapkereten belüli validáció', cost: 0, icon: ScanSearch },
-  { feature: 'Piaci bizonyíték · napi 3 felett', detail: 'További validáció ugyanazon a napon', cost: 1, icon: ScanSearch },
-]
-
 export default function CreditsPage() {
   const [tab, setTab] = useState<'subscription' | 'topup'>('subscription')
-  const [credits, setCredits] = useState<CreditInfo | null>(null)
-  const [loadError, setLoadError] = useState(false)
+  const { credits, status, refreshCredits } = useCreditBalance()
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [loading, setLoading] = useState<string | null>(null)
@@ -89,32 +54,14 @@ export default function CreditsPage() {
   const canceled = searchParams.get('canceled')
   const hasActiveSubscription = credits?.subscription_status === 'active' || credits?.subscription_status === 'trialing'
 
-  async function fetchCredits(): Promise<boolean> {
-    try {
-      const res = await fetch('/api/credits')
-      if (!res.ok) return false
-      const data = await res.json()
-      setCredits(data)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  useEffect(() => {
-    fetchCredits().then(ok => { if (!ok) setLoadError(true) })
-  }, [])
-
   async function handleRetryInitialLoad() {
-    setLoadError(false)
-    const ok = await fetchCredits()
-    if (!ok) setLoadError(true)
+    await refreshCredits({ supersede: true })
   }
 
   async function handleManualRefresh() {
     setRefreshing(true)
     setRefreshError(null)
-    const ok = await fetchCredits()
+    const ok = await refreshCredits({ supersede: true })
     if (!ok) setRefreshError('Nem sikerült frissíteni az egyenleget. Próbáld újra.')
     setRefreshing(false)
   }
@@ -184,6 +131,7 @@ export default function CreditsPage() {
   const totalUsedValue = toCreditAmount(credits?.total_used)
   const monthlyAllowance = toCreditAmount(credits?.monthly_allowance)
   const renewsAtLabel = formatCreditRenewalDate(credits?.renews_at)
+  const loadError = status === 'error'
 
   return (
     <div className="wv-credits-page">
@@ -237,7 +185,7 @@ export default function CreditsPage() {
         </section>
       ) : (
         <CreditsHero
-          loading={credits === null}
+          loading={status === 'loading'}
           totalAvailable={totalAvailable}
           subscriptionBalance={subscriptionBalance}
           purchasedBalance={purchasedBalance}
@@ -256,6 +204,7 @@ export default function CreditsPage() {
         <div><ScanSearch aria-hidden="true" /><span><strong>3 / nap</strong>Piaci bizonyíték keresés</span></div>
         <div><Sparkles aria-hidden="true" /><span><strong>Szabad böngészés</strong>kredit levonása nélkül</span></div>
       </section>
+      <p className="wv-credit-allowance-note"><Gauge aria-hidden="true" /> A csomag napi kerete ajánlott költési határ, nem lejárat: elérésekor a folytatáshoz külön megerősítés szükséges.</p>
 
       <section className="wv-credit-market" aria-labelledby="credit-market-title">
         <header>
@@ -331,14 +280,23 @@ export default function CreditsPage() {
       <section className="wv-credit-costs" aria-labelledby="credit-costs-title">
         <header>
           <div><span className="wv-credit-kicker">Kiszámítható működés</span><h2 id="credit-costs-title">Mire elég egy kredit?</h2></div>
-          <p>Az ingyenes alapkeretet külön jelöljük. Fizetés előtt minden kreditköteles műveletnél látod a szükséges összeget.</p>
+          <p>Az ingyenes keresési keretet és a fix költségű alkotói műveleteket külön mutatjuk. Indítás előtt mindig a konkrét művelet ára az irányadó.</p>
         </header>
+        <div className="wv-credit-search-rules" aria-label="Ingyenes és fizetős keresések">
+          {CREATOR_SEARCH_ALLOWANCES.map(item => (
+            <article key={item.key}>
+              <ScanSearch aria-hidden="true" />
+              <span><strong>{item.feature}</strong><small>{item.included}</small></span>
+              <b>{item.paid}</b>
+            </article>
+          ))}
+        </div>
         <div className="wv-credit-cost-grid">
-          {CREDIT_COSTS.map(item => (
-            <article key={item.feature} data-free={item.cost === 0 || undefined}>
-              <div><item.icon aria-hidden="true" /></div>
+          {CREATOR_CREDIT_COSTS.map(item => (
+            <article key={item.key}>
+              <div>{item.group === 'create' ? <Sparkles aria-hidden="true" /> : item.group === 'analyse' ? <BarChart3 aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}</div>
               <span><strong>{item.feature}</strong><small>{item.detail}</small></span>
-              <b>{item.cost === 0 ? 'Alapkeret' : `${item.cost} kredit`}</b>
+              <b>{item.cost} kredit</b>
             </article>
           ))}
         </div>

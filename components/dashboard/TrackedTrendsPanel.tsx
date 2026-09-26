@@ -5,6 +5,8 @@ import Link from 'next/link'
 import Sparkline from '@/components/dashboard/Sparkline'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 interface TrackedTrend {
   id: string
@@ -111,6 +113,7 @@ function formatNumber(n: number | null): string {
 }
 
 export default function TrackedTrendsPanel() {
+  const { refreshCredits } = useCreditBalance()
   const [tracked, setTracked] = useState<TrackedTrend[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [openEvidenceFor, setOpenEvidenceFor] = useState<string | null>(null)
@@ -158,9 +161,9 @@ export default function TrackedTrendsPanel() {
     setRefreshMessage(null)
     setRefreshError(null)
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       const cost = 1
 
       setPendingDeepRefreshId(candidateId)
@@ -168,14 +171,14 @@ export default function TrackedTrendsPanel() {
         feature: 'Trend mély frissítés',
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
+        currentCredits: balance,
         remainingCreditsAfterRun: Math.round(Math.max(0, balance - cost)),
         requiresConfirmation: true,
         canRun: balance >= cost,
         reason: balance >= cost ? undefined : 'insufficient_credits',
         message: balance >= cost
           ? 'A rendszer új YouTube-jeleket és webes forrásokat keres ehhez a követett trendtémához.'
-          : `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
+          : `Nincs elég kredited. ${cost} kredit szükséges.`,
       })
     } catch {
       setRefreshError('Nem sikerült lekérni a kreditegyenleget.')
@@ -196,6 +199,7 @@ export default function TrackedTrendsPanel() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'A mély frissítés nem sikerült.')
+      publishCreditMutationCompleted('/api/dashboard/tracked-trends/deep-refresh', data)
       setRefreshMessage(`Frissítve: ${data.added_videos || 0} új videójel, ${data.added_web_sources || 0} új webes forrás.`)
       await loadTracked()
       if (openEvidenceFor === candidateId) await loadEvidence(candidateId, true)

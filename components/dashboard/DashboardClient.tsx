@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { CreatorProfile, CreatorMemoryItem, OpportunityTopic, OpportunityApiResponse } from '@/types'
-import { checkManualRefreshCredit } from '@/lib/dashboard/manual-refresh-credit'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 // ─── Score helpers ────────────────────────────────────────────
 import { scoreColor, scoreLabel, scoreLabelColor } from '@/lib/score-utils'
@@ -1078,6 +1079,7 @@ interface Props {
 }
 
 export default function DashboardClient({ profile, memoryItems, displayName }: Props) {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const router = useRouter()
   const [topics, setTopics] = useState<DashboardOpportunityTopic[]>([])
@@ -1137,15 +1139,15 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
     // Dashboard kézi frissítés MINDIG 2 kreditbe kerül
     const cost = 2
     setOpportunityError(null)
-    const check = await checkManualRefreshCredit()
+    const check = await refreshCredits()
 
-    if (!check.ok) {
+    if (!check) {
       // Fail-CLOSED, nem fail-open: a kredit-előellenőrzés bármilyen hibája
       // (hálózati hiba, non-2xx válasz, JSON-feldolgozási hiba) esetén SOSE
       // induljon Opportunity keresés/force_refresh — korábban itt egy
       // loadOpportunities(false, true) hívás futott a catch-ágban, ami
       // force_refresh=true keresést indíthatott sikertelen kredit-ellenőrzés
-      // mellett is (kredit-preflight nélkül). A checkManualRefreshCredit()
+      // mellett is (kredit-preflight nélkül). A közös egyenlegolvasás
       // sosem hívja az Opportunity route-ot, ezért ez az ág garantáltan 0
       // /api/opportunity hívást jelent. A `loading` állapotot ez a függvény
       // sosem állítja true-ra, tehát nincs mit "visszaállítani" — a user
@@ -1160,12 +1162,12 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
         feature: 'Trend Feed frissítés',
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
+        currentCredits: balance,
         remainingCreditsAfterRun: balance,
         requiresConfirmation: true,
         canRun: false,
         reason: 'insufficient_credits',
-        message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
+        message: `Nincs elég kredited. ${cost} kredit szükséges.`,
       })
       return
     }
@@ -1174,8 +1176,8 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       feature: 'Trend Feed frissítés',
       cost,
       currency: 'credit',
-      currentCredits: Math.round(balance),
-      remainingCreditsAfterRun: Math.round(balance - cost),
+      currentCredits: balance,
+      remainingCreditsAfterRun: balance - cost,
       requiresConfirmation: true,
       canRun: true,
       message: `Új trendtémák keresése ${cost} kreditbe kerül. A heti Top Opportunity ajánlás ingyenes, az extra keresés kredites.`,
@@ -1218,13 +1220,19 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       // kreditet, megerősítést kér. Soha nem töltünk le automatikusan kreditet
       // felugró jóváhagyás nélkül, ezért itt megmutatjuk a modalt és megállunk.
       if (data.needs_confirmation) {
+        const creditSnapshot = await refreshCredits()
+        if (!creditSnapshot) {
+          setOpportunityError('Nem sikerült ellenőrizni a kredit-egyenleget. Próbáld újra egy kicsit később.')
+          setGenerated(true)
+          return
+        }
         setLoading(false)
         setCreditCheck({
           feature: 'Trend Feed frissítés',
           cost: data.confirmation_cost || 2,
           currency: 'credit',
-          currentCredits: 0,
-          remainingCreditsAfterRun: 0,
+          currentCredits: creditSnapshot.balance,
+          remainingCreditsAfterRun: Math.max(0, creditSnapshot.balance - (data.confirmation_cost || 2)),
           requiresConfirmation: true,
           canRun: true,
           message: data.message || 'A heti ingyenes Top Opportunity ajánlásod már megvan. Ez az extra keresés kreditbe kerül.',
@@ -1234,6 +1242,7 @@ export default function DashboardClient({ profile, memoryItems, displayName }: P
       }
 
       const allTopics = (data.topics || []) as DashboardOpportunityTopic[]
+      publishCreditMutationCompleted('/api/opportunity', data)
 
       // Egy cache_only hívás sosem indíthat automatikusan friss keresést —
       // ha nincs friss cache (üres vagy a mentett eredmény lejárt), csak

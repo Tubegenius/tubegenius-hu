@@ -1,3 +1,6 @@
+/* A munkamenet véget ért: a védett shell (fiókadat, kreditjelző) azonnal eltűnik, amíg a kemény navigáció a bejelentkezésre nem ér. */
+html[data-wv-session='ended'] .wv-shell { visibility: hidden; }
+
 .wv-shell {
   --wv-bg: #101210;
   --wv-deep: #0a0c0a;
@@ -117,6 +120,30 @@
 .wv-channel-copy strong { max-width: 190px; overflow: hidden; color: var(--wv-text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .wv-channel-copy small { color: var(--wv-muted); }
 
+.wv-credit-indicator {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 10px;
+  color: var(--wv-text);
+  background: color-mix(in srgb, var(--wv-lime) 6%, var(--wv-raised));
+  border: 1px solid color-mix(in srgb, var(--wv-lime) 24%, var(--wv-line));
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 180ms ease;
+}
+.wv-credit-indicator:hover { background: color-mix(in srgb, var(--wv-lime) 10%, var(--wv-raised)); border-color: color-mix(in srgb, var(--wv-lime) 45%, var(--wv-line)); transform: translateY(-1px); }
+.wv-credit-indicator svg { width: 16px; height: 16px; color: var(--wv-lime); }
+.wv-credit-indicator[data-state="loading"] { color: var(--wv-muted); }
+.wv-credit-indicator[data-state="loading"] svg { animation: wv-credit-breathe 1.2s ease-in-out infinite alternate; }
+.wv-credit-indicator[data-state="error"] { color: var(--wv-muted); border-color: color-mix(in srgb, var(--wv-coral) 25%, var(--wv-line)); }
+.wv-credit-indicator[data-state="error"] svg { color: var(--wv-coral); }
+@keyframes wv-credit-breathe { from { opacity: 0.4; } to { opacity: 1; } }
+
 .wv-account-trigger {
   display: inline-flex;
   align-items: center;
@@ -181,6 +208,8 @@
 .wv-account-menu a:hover,
 .wv-account-menu button:hover { color: var(--wv-text); background: var(--wv-raised); }
 .wv-account-menu svg { width: 17px; height: 17px; }
+.wv-account-menu-error { margin: 4px 0 2px; padding: 8px 10px; color: var(--wv-coral); font-size: 12px; line-height: 1.4; border: 1px solid color-mix(in srgb, var(--wv-coral) 30%, var(--wv-line)); border-radius: 8px; }
+.wv-account-menu button:disabled { cursor: progress; opacity: 0.6; }
 
 .wv-main {
   position: relative;
@@ -1027,6 +1056,8 @@
 .wv-credit-included svg { width: 21px; height: 21px; color: var(--wv-lime); }
 .wv-credit-included span { display: grid; gap: 3px; color: var(--wv-muted); font-size: 11px; }
 .wv-credit-included strong { color: var(--wv-text); font-size: 15px; font-weight: 500; }
+.wv-credit-allowance-note { display: flex; gap: 9px; align-items: center; margin: -3px 3px 2px; color: var(--wv-muted); font-size: 11px; line-height: 1.45; }
+.wv-credit-allowance-note svg { flex: 0 0 auto; width: 16px; height: 16px; color: var(--credit-accent); }
 .wv-credit-market,
 .wv-credit-costs { padding: 23px; border: 1px solid var(--wv-line-strong); border-radius: 16px; background: linear-gradient(145deg, rgba(39, 45, 38, 0.84), rgba(14, 17, 14, 0.97)); box-shadow: 0 28px 58px rgba(0, 0, 0, 0.31), inset 0 1px rgba(255, 255, 255, 0.045); }
 .wv-credit-market > header,
@@ -1078,6 +1109,13 @@
 .wv-credit-load-error p { max-width: 650px; margin: 10px 0 0; color: var(--wv-muted); font-size: 13px; line-height: 1.5; }
 .wv-credit-load-error button { margin-top: 0; }
 .wv-credit-costs > header { align-items: end; }
+.wv-credit-search-rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 15px; }
+.wv-credit-search-rules article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 11px; align-items: center; min-height: 76px; padding: 13px; color: var(--wv-muted); background: color-mix(in srgb, var(--wv-lime) 4%, transparent); border: 1px solid color-mix(in srgb, var(--wv-lime) 20%, var(--wv-line)); border-radius: 9px; }
+.wv-credit-search-rules svg { width: 20px; height: 20px; color: var(--wv-lime); }
+.wv-credit-search-rules span { display: grid; gap: 3px; }
+.wv-credit-search-rules strong { color: var(--wv-text); font-size: 13px; font-weight: 500; }
+.wv-credit-search-rules small { font-size: 10px; }
+.wv-credit-search-rules b { padding: 7px 8px; color: var(--wv-lime); border: 1px solid color-mix(in srgb, var(--wv-lime) 23%, var(--wv-line)); border-radius: 6px; font-size: 10px; font-weight: 500; white-space: nowrap; }
 .wv-credit-cost-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 15px; }
 .wv-credit-cost-grid article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 11px; align-items: center; min-width: 0; min-height: 72px; padding: 11px 13px; border: 1px solid var(--wv-line); border-radius: 9px; background: rgba(242, 240, 232, 0.021); transition: border-color 180ms ease, background 180ms ease, transform 180ms ease; }
 .wv-credit-cost-grid article:hover { border-color: var(--wv-line-strong); background: rgba(242, 240, 232, 0.032); transform: translateY(-1px); }
@@ -2032,6 +2070,9 @@
   .wv-topbar { grid-template-columns: 1fr auto; min-height: 58px; padding: 9px 12px; }
   .wv-primary-nav,
   .wv-channel-context { display: none; }
+  .wv-channel-cluster { gap: 6px; }
+  .wv-credit-indicator { min-height: 42px; padding-inline: 9px; }
+  .wv-credit-indicator span { max-width: 92px; overflow: hidden; text-overflow: ellipsis; }
   .wv-brand-link,
   .wv-workspace-back,
   .wv-opportunity-row a,
@@ -2181,6 +2222,9 @@
   .wv-credit-load-error { grid-template-columns: 1fr; align-items: start; padding: 19px; }
   .wv-credit-load-error button { justify-self: start; }
   .wv-credit-cost-grid article { grid-template-columns: auto minmax(0, 1fr); }
+  .wv-credit-search-rules { grid-template-columns: 1fr; }
+  .wv-credit-search-rules article { grid-template-columns: auto minmax(0, 1fr); }
+  .wv-credit-search-rules article > b { grid-column: 2; justify-self: start; white-space: normal; }
   .wv-credit-cost-grid article > b { grid-column: 2; justify-self: start; }
   .wv-credit-cost-grid article strong,
   .wv-credit-cost-grid article small { overflow: visible; white-space: normal; }
@@ -2386,6 +2430,8 @@
 @media (prefers-reduced-motion: reduce) {
   .wv-route-enter,
   .wv-account-menu,
+  .wv-credit-indicator,
+  .wv-credit-indicator svg,
   .wv-studio-launch-main,
   .wv-studio-launch-summary,
   .wv-studio-lane-grid button,

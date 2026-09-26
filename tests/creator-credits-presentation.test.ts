@@ -17,7 +17,9 @@ describe('creator credits presentation', () => {
 
   it('formats credit values without inventing a fallback balance', () => {
     expect(formatCreditAmount(null)).toBe('—')
-    expect(formatCreditAmount(12.6)).toBe('13')
+    expect(formatCreditAmount(12.6)).toBe('12,6')
+    expect(formatCreditAmount(0.5)).toBe('0,5')
+    expect(formatCreditAmount(0)).toBe('0')
   })
 
   it('keeps prices and known plan names presentation-only', () => {

@@ -7,6 +7,8 @@ import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import PublishKitFrame from '@/components/publish-kit/PublishKitFrame'
 import { AlertTriangle, Check, CheckCircle2, Clipboard, Copy, FileText, Hash, Info, ListVideo, MessageCircle, RefreshCw, Search, Send, WandSparkles } from 'lucide-react'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 interface SeoPackage {
   seo_title: string
@@ -46,6 +48,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
 const SEO_STATE_KEY = 'willviral_seo_optimizer_state'
 
 export default function SeoOptimizerPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const paidResultId = searchParams.get('paidResultId') || ''
 
@@ -97,6 +100,7 @@ export default function SeoOptimizerPage() {
       }
       setTopic(data.topic || '')
       setResult(data)
+      publishCreditMutationCompleted('/api/seo-optimizer', data)
       persistState(data.topic || '', existingTitle, keywords, data)
     } catch {
       setError('Hiba a mentett SEO-csomag betöltésekor.')
@@ -115,9 +119,9 @@ export default function SeoOptimizerPage() {
     if (!topic.trim()) return
     setError(null)
     try {
-      const creditsRes = await fetch('/api/credits')
-      const credits = await creditsRes.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       setPendingForceRefresh(forceRefresh)
       setCreditCheck({
         feature: 'SEO / Upload Optimizer',

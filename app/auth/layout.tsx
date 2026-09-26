@@ -1,4 +1,5 @@
 import Logo from '@/components/brand/Logo'
+import StaleSessionDocumentPurge from '@/components/auth/StaleSessionDocumentPurge'
 
 export default function AuthLayout({
   children,
@@ -7,6 +8,7 @@ export default function AuthLayout({
 }) {
   return (
     <div className="wv-auth-shell">
+      <StaleSessionDocumentPurge />
       <div className="wv-auth-grid" aria-hidden="true" />
       <div className="wv-auth-frame">
         <div className="wv-auth-brand">

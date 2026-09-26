@@ -7,6 +7,8 @@ import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import { scoreLabel, scoreLabelColor } from '@/lib/score-utils'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 interface RelatedKeyword {
   keyword: string
@@ -42,6 +44,7 @@ interface KeywordResearchResult {
 const KEYWORD_RESEARCH_COST = 1
 
 export default function KeywordResearchPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const [seed, setSeed] = useState('')
   const [loading, setLoading] = useState(false)
@@ -81,6 +84,7 @@ export default function KeywordResearchPage() {
       }
       setSeed(data.seed_keyword || '')
       setResult(data)
+      publishCreditMutationCompleted('/api/keyword-research', data)
       setFromPaidResult(true)
     } catch {
       setError('Hiba a mentett kutatás betöltésekor.')
@@ -95,9 +99,9 @@ export default function KeywordResearchPage() {
 
     if (!confirmed) {
       try {
-        const creditsRes = await fetch('/api/credits')
-        const credits = await creditsRes.json()
-        const balance = Number(credits.balance ?? 0)
+        const credits = await refreshCredits()
+        if (!credits) throw new Error('credit_balance_unavailable')
+        const balance = credits.balance
         setCreditCheck({
           feature: 'Kulcsszókutató',
           cost: KEYWORD_RESEARCH_COST,

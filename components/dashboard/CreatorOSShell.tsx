@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import {
   BarChart3,
   BookOpen,
@@ -24,6 +24,8 @@ import { CREATOR_OS_NAV_ITEMS, creatorOSSectionForPath, type CreatorOSSectionId 
 import { CREATOR_LANE_PRESENTATION, type CreatorLane } from '@/lib/creator-lane-presentation'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 import { fetchLifecycleReviewerCapability } from '@/lib/lifecycle-review-capability-client'
+import CreditBalanceIndicator from '@/components/credits/CreditBalanceIndicator'
+import { endAuthSession } from '@/lib/auth-session-events'
 
 interface CreatorOSShellProps {
   children: ReactNode
@@ -43,7 +45,6 @@ const navIcons = {
 
 export default function CreatorOSShell({ children, profile, userEmail, activeSectionOverride, creatorLane: creatorLaneOverride }: CreatorOSShellProps) {
   const pathname = usePathname()
-  const router = useRouter()
   const { creatorLane: contextLane } = useCreatorOS()
   const creatorLane = creatorLaneOverride ?? contextLane
   const menuRef = useRef<HTMLDivElement>(null)
@@ -51,6 +52,7 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
   const accountMenuRef = useRef<HTMLDivElement>(null)
   const pendingMenuFocusRef = useRef<'first' | 'last' | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [logoutState, setLogoutState] = useState<'idle' | 'pending' | 'failed'>('idle')
   const [canReviewSemanticTopicLifecycle, setCanReviewSemanticTopicLifecycle] = useState(false)
   const activeSection = activeSectionOverride ?? creatorOSSectionForPath(pathname)
   const channelName = profile?.channel_name || userEmail?.split('@')[0] || 'Saját csatorna'
@@ -58,6 +60,7 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
   const laneLabel = CREATOR_LANE_PRESENTATION[creatorLane].label
 
   useEffect(() => setMenuOpen(false), [pathname])
+  useEffect(() => { if (!menuOpen) setLogoutState(current => (current === 'failed' ? 'idle' : current)) }, [menuOpen])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -115,9 +118,26 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
   }
 
   async function handleLogout() {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/auth/login')
+    if (logoutState === 'pending') return // dupla beküldés védelme
+    setLogoutState('pending')
+    let signedOut = false
+    try {
+      // Globális hatókör (alapértelmezés): minden eszköz munkamenete megszűnik.
+      const { error } = await createClient().auth.signOut()
+      signedOut = error === null
+    } catch {
+      signedOut = false
+    }
+    if (!signedOut) {
+      // A supabase-js hálózati/5xx hibánál a helyi sessiont megtartja: nem állítjuk,
+      // hogy a munkamenet megszűnt. Nincs automatikus újrapróbálás; csak új kattintásra.
+      setLogoutState('failed')
+      return
+    }
+    // Csak sikeres signOut után: kemény navigáció (Router Cache és memóriabeli
+    // fiókállapot eldobása; a router.push soft navigáció volt, így a Vissza gomb a
+    // védett fát kiszolgálás nélkül állította vissza).
+    endAuthSession('logout')
   }
 
   return (
@@ -153,6 +173,7 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
               <small>{laneLabel} alkotói mód</small>
             </span>
           </div>
+          <CreditBalanceIndicator />
           <button
             ref={accountTriggerRef}
             type="button"
@@ -185,7 +206,12 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
                 <Link href="/dashboard/semantic-topic-lifecycle-reviews" role="menuitem"><ShieldCheck aria-hidden="true" />Lifecycle reviewer</Link>
               ) : null}
               <Link href="/dashboard/profile" role="menuitem"><Settings aria-hidden="true" />Beállítások</Link>
-              <button type="button" role="menuitem" onClick={handleLogout}><LogOut aria-hidden="true" />Kijelentkezés</button>
+              <button type="button" role="menuitem" onClick={handleLogout} disabled={logoutState === 'pending'} aria-busy={logoutState === 'pending'}>
+                <LogOut aria-hidden="true" />{logoutState === 'pending' ? 'Kijelentkezés…' : 'Kijelentkezés'}
+              </button>
+              {logoutState === 'failed' && (
+                <p role="alert" className="wv-account-menu-error">A kijelentkezés nem sikerült, a munkamenet még érvényes lehet. Próbáld újra.</p>
+              )}
             </div>
           )}
         </div>

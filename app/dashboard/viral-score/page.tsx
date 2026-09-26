@@ -12,6 +12,8 @@ import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import ViralScoreHero from '@/components/viral-score/ViralScoreHero'
 import StatusIcon from '@/components/icons/StatusIcon'
 import { Bookmark, PlayCircle, Package, Eye } from 'lucide-react'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -21,6 +23,7 @@ function formatNumber(n: number): string {
 
 
 export default function ViralScorePage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const initialTopic = searchParams.get('topic') || ''
   const paidResultId = searchParams.get('paidResultId') || ''
@@ -64,6 +67,7 @@ export default function ViralScorePage() {
       }
       setTopic(data.topic || initialTopic)
       setResult(data)
+      publishCreditMutationCompleted('/api/viral-score', data)
       sessionStorage.setItem('willviral_viral_score_state', JSON.stringify({ topic: data.topic || initialTopic, result: data }))
     } catch {
       setError('Hiba a mentett Virális esély betöltésekor.')
@@ -105,21 +109,21 @@ export default function ViralScorePage() {
 
   async function checkCreditsBeforeAction(cost: number, featureName: string, onConfirm: () => void) {
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = credits.balance ?? 0
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
 
       if (balance < cost) {
         setCreditCheck({
           feature: featureName,
           cost,
           currency: 'credit',
-          currentCredits: Math.round(balance),
+          currentCredits: balance,
           remainingCreditsAfterRun: balance,
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges.`,
         })
         return
       }
@@ -129,8 +133,8 @@ export default function ViralScorePage() {
         feature: featureName,
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
+        currentCredits: balance,
+        remainingCreditsAfterRun: balance - cost,
         requiresConfirmation: true,
         canRun: true,
         message: `Ez a művelet ${cost} kreditbe kerül.`,

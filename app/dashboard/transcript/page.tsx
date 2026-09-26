@@ -6,6 +6,8 @@ import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 type TranscriptSegment = {
   start: number
@@ -91,6 +93,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 }
 
 export default function TranscriptPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
@@ -122,21 +125,21 @@ export default function TranscriptPage() {
 
   async function checkCreditsBeforeAction(onConfirm: () => void) {
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = credits.balance ?? 0
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
 
       if (balance < COST) {
         setCreditCheck({
           feature: 'Auto Transcript',
           cost: COST,
           currency: 'credit',
-          currentCredits: Math.round(balance),
+          currentCredits: balance,
           remainingCreditsAfterRun: balance,
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${COST} kredit szükséges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${COST} kredit szükséges.`,
         })
         return
       }
@@ -146,8 +149,8 @@ export default function TranscriptPage() {
         feature: 'Auto Transcript',
         cost: COST,
         currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - COST),
+        currentCredits: balance,
+        remainingCreditsAfterRun: balance - COST,
         requiresConfirmation: true,
         canRun: true,
         message: `Ez a művelet ${COST} kreditbe kerül.`,
@@ -176,6 +179,7 @@ export default function TranscriptPage() {
         return
       }
       setResult(data)
+      publishCreditMutationCompleted('/api/transcript', data)
       if (!title.trim()) setTitle(data.title || file.name)
     } catch {
       setError('Kapcsolati hiba transcript készítés közben.')

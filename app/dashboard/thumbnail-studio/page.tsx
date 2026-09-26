@@ -7,6 +7,8 @@ import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import PublishKitFrame from '@/components/publish-kit/PublishKitFrame'
 import { AlertTriangle, Bookmark, Check, Eye, Image, Info, Layers3, Sparkles, WandSparkles } from 'lucide-react'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 interface ThumbnailConcept {
   concept_label: string
@@ -28,6 +30,7 @@ const CLUTTER_LABELS: Record<string, { label: string; color: string }> = {
 }
 
 export default function ThumbnailStudioPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const inheritedTitle = searchParams.get('existingTitle') || ''
   const [topic, setTopic] = useState('')
@@ -88,9 +91,9 @@ export default function ThumbnailStudioPage() {
     if (!topic.trim()) return
     setError(null)
     try {
-      const creditsRes = await fetch('/api/credits')
-      const credits = await creditsRes.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       setCreditCheck({
         feature: 'Thumbnail Studio',
         cost: THUMBNAIL_STUDIO_COST,
@@ -123,6 +126,7 @@ export default function ThumbnailStudioPage() {
         return
       }
       setConcepts(data.concepts)
+      publishCreditMutationCompleted('/api/thumbnail-studio', data)
       setTopic(data.topic || topic.trim())
       setPaidResultId(data.paid_result_id || null)
       sessionStorage.setItem('willviral_thumbnail_studio_state', JSON.stringify({ topic: data.topic || topic.trim(), concepts: data.concepts, paidResultId: data.paid_result_id || null }))

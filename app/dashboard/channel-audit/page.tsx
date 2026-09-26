@@ -36,6 +36,8 @@ import {
   type ChannelAuditFocus,
 } from '@/lib/creator-channel-audit-presentation'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 interface ChannelVideoPerformance {
   videoId: string
@@ -263,6 +265,7 @@ function SuggestionStudio({
 }
 
 export default function ChannelAuditPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const { creatorLane } = useCreatorOS()
   const laneCopy = CHANNEL_AUDIT_LANE_COPY[creatorLane]
@@ -358,9 +361,9 @@ export default function ChannelAuditPage() {
       return
     }
     try {
-      const creditsResponse = await fetch('/api/credits')
-      const credits = await creditsResponse.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       setPendingForceRefresh(forceRefresh)
       setCreditCheck({
         feature: 'Channel Audit — következő videók', cost: CHANNEL_AUDIT_COST, currency: 'credit', currentCredits: balance,
@@ -379,6 +382,7 @@ export default function ChannelAuditPage() {
       const body = await response.json()
       if (!response.ok) { setSuggestionError(body.error || 'Generálás sikertelen.'); return }
       setSuggestionsResult(body)
+      publishCreditMutationCompleted('/api/channel-audit', body)
       try { if (data?.active_channel_id) sessionStorage.setItem(`${SUGGESTIONS_STATE_KEY}_${data.active_channel_id}`, JSON.stringify(body)) } catch {}
     } catch { setSuggestionError('Kapcsolati hiba a tartalomirányok készítésekor.') }
     finally { setGenerating(false); setPendingForceRefresh(false) }

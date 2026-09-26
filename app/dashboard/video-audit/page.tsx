@@ -10,6 +10,8 @@ import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import { presentVideoAuditDecision, presentVideoAuditScore, videoAuditFormReadiness, videoAuditScoreTone, VIDEO_AUDIT_DIMENSIONS, VIDEO_AUDIT_LANE_COPY, VIDEO_AUDIT_PLATFORM_META } from '@/lib/creator-video-audit-presentation'
 import type { Platform } from '@/lib/video-audit-scoring'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
 interface DimensionInterpretation { assessment?: string; reason?: string; suggested_fix?: string }
@@ -179,6 +181,7 @@ function AuditResultView({ result, canStartNew, onStartNew }: { result: AuditRes
 }
 
 export default function VideoAuditPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const { creatorLane } = useCreatorOS()
   const existingId = searchParams.get('id')
@@ -205,9 +208,9 @@ export default function VideoAuditPage() {
 
   async function checkCreditsBeforeAction(onConfirm: () => void) {
     try {
-      const response = await fetch('/api/credits'); const credits = await response.json(); const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits(); if (!credits) throw new Error('credit_balance_unavailable'); const balance = credits.balance
       pendingActionRef.current = balance >= AUDIT_COST ? onConfirm : null
-      setCreditCheck({ feature: 'Video Audit', cost: AUDIT_COST, currency: 'credit', currentCredits: Math.round(balance), remainingCreditsAfterRun: balance >= AUDIT_COST ? Math.round(balance - AUDIT_COST) : Math.round(balance), requiresConfirmation: true, canRun: balance >= AUDIT_COST, reason: balance >= AUDIT_COST ? undefined : 'insufficient_credits', message: balance >= AUDIT_COST ? `A diagnózis ${AUDIT_COST} kreditbe kerül.` : `Nincs elég kredited. ${AUDIT_COST} kredit szükséges, neked ${Math.round(balance)} van.` })
+      setCreditCheck({ feature: 'Video Audit', cost: AUDIT_COST, currency: 'credit', currentCredits: balance, remainingCreditsAfterRun: balance >= AUDIT_COST ? balance - AUDIT_COST : balance, requiresConfirmation: true, canRun: balance >= AUDIT_COST, reason: balance >= AUDIT_COST ? undefined : 'insufficient_credits', message: balance >= AUDIT_COST ? `A diagnózis ${AUDIT_COST} kreditbe kerül.` : `Nincs elég kredited. ${AUDIT_COST} kredit szükséges.` })
     } catch { setError('A kreditegyenleg most nem ellenőrizhető. Próbáld újra.') }
   }
 
@@ -224,7 +227,7 @@ export default function VideoAuditPage() {
       const body = isYouTube ? { platform, video_url: videoUrl } : { platform, manual_data: { ...manualData, platform, hashtags: manualData.hashtags.split(',').map(hashtag => hashtag.trim()).filter(Boolean) } }
       const response = await fetch('/api/video-audit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); const data = await response.json()
       if (!response.ok) throw new Error(data.error ?? 'A diagnózis nem készült el.')
-      setResult(data); try { sessionStorage.setItem('willviral_video_audit_state', JSON.stringify({ result: data, platform, videoUrl })) } catch {}
+      setResult(data); publishCreditMutationCompleted('/api/video-audit', data); try { sessionStorage.setItem('willviral_video_audit_state', JSON.stringify({ result: data, platform, videoUrl })) } catch {}
     } catch (caught: unknown) { setError(caught instanceof Error ? caught.message : 'Ismeretlen hiba történt.') } finally { setLoading(false) }
   }
 

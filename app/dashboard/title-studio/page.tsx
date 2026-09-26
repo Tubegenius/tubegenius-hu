@@ -7,6 +7,8 @@ import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import PublishKitFrame from '@/components/publish-kit/PublishKitFrame'
 import { AlertTriangle, Bookmark, Check, Gauge, Info, PenLine, Sparkles, WandSparkles } from 'lucide-react'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 interface TitleVariation {
   title: string
@@ -38,6 +40,7 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
 }
 
 export default function TitleStudioPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const [topic, setTopic] = useState('')
   const [existingTitle, setExistingTitle] = useState('')
@@ -104,9 +107,9 @@ export default function TitleStudioPage() {
     if (!topic.trim()) return
     setError(null)
     try {
-      const creditsRes = await fetch('/api/credits')
-      const credits = await creditsRes.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       setCreditCheck({
         feature: 'Title Studio',
         cost: TITLE_STUDIO_COST,
@@ -139,6 +142,7 @@ export default function TitleStudioPage() {
         return
       }
       setVariations(data.variations)
+      publishCreditMutationCompleted('/api/title-studio', data)
       setAcceptedTitle('')
       setTopic(data.topic || topic.trim())
       setPaidResultId(data.paid_result_id || null)

@@ -6,6 +6,8 @@ import Link from 'next/link'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 interface ContentGapSuggestion {
   gap_topic: string
@@ -17,6 +19,7 @@ interface ContentGapSuggestion {
 const CONTENT_GAP_COST = 2
 
 export default function ContentGapPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const [niche, setNiche] = useState('')
   const [loading, setLoading] = useState(false)
@@ -71,9 +74,9 @@ export default function ContentGapPage() {
     if (!niche.trim()) return
     setError(null)
     try {
-      const creditsRes = await fetch('/api/credits')
-      const credits = await creditsRes.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       setCreditCheck({
         feature: 'Content Gap Finder',
         cost: CONTENT_GAP_COST,
@@ -106,6 +109,7 @@ export default function ContentGapPage() {
         return
       }
       setGaps(data.gaps)
+      publishCreditMutationCompleted('/api/content-gap', data)
       setExistingCount(data.existing_video_count)
       sessionStorage.setItem('willviral_content_gap_state', JSON.stringify({ niche, gaps: data.gaps, existingCount: data.existing_video_count }))
     } catch {
