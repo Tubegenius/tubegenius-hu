@@ -62,9 +62,11 @@ describe('DashboardClient.tsx — no automatic cache_only -> real search transit
 describe('DashboardClient.tsx — handleManualRefresh credit-check is fail-closed (PFM-2E correction round)', () => {
   const src = readSource('components/dashboard/DashboardClient.tsx')
 
-  it('imports and uses the extracted, pure checkManualRefreshCredit helper', () => {
-    expect(src).toMatch(/import\s*\{\s*checkManualRefreshCredit\s*\}\s*from\s*'@\/lib\/dashboard\/manual-refresh-credit'/)
-    expect(src).toContain('await checkManualRefreshCredit()')
+  it('uses the shared, deduplicated credit balance provider', () => {
+    expect(src).toMatch(/import\s*\{\s*useCreditBalance\s*\}\s*from\s*'@\/components\/credits\/CreditBalanceContext'/)
+    expect(src).toContain('const { refreshCredits } = useCreditBalance()')
+    expect(src).toContain('await refreshCredits()')
+    expect(src).not.toContain("fetch('/api/credits')")
   })
 
   it('handleManualRefresh never calls loadOpportunities anywhere in its ACTUAL CODE (comments documenting the old bug are fine)', () => {
@@ -80,8 +82,8 @@ describe('DashboardClient.tsx — handleManualRefresh credit-check is fail-close
     expect(codeOnly).not.toMatch(/force_refresh\s*:/)
   })
 
-  it('the !check.ok branch sets a user-facing error message and returns (no credit/search side effects)', () => {
-    const checkIdx = src.indexOf('if (!check.ok)')
+  it('the missing shared balance branch sets a user-facing error message and returns (no credit/search side effects)', () => {
+    const checkIdx = src.indexOf('if (!check)')
     expect(checkIdx).toBeGreaterThan(-1)
     const nextBlockIdx = src.indexOf('const balance = check.balance', checkIdx)
     expect(nextBlockIdx).toBeGreaterThan(checkIdx)

@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 interface CompetitorVideo {
   id?: string
@@ -54,6 +56,7 @@ const ADD_COST = 1
 const REFRESH_COST = 1
 
 export default function CompetitorsPage() {
+  const { refreshCredits } = useCreditBalance()
   const [competitors, setCompetitors] = useState<Competitor[]>([])
   const [loading, setLoading] = useState(true)
   const [channelInput, setChannelInput] = useState('')
@@ -87,9 +90,9 @@ export default function CompetitorsPage() {
   async function withCreditConfirm(feature: string, cost: number, action: () => void) {
     setError(null)
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       setCreditCheck({
         feature,
         cost,
@@ -124,6 +127,7 @@ export default function CompetitorsPage() {
           return
         }
         setChannelInput('')
+        publishCreditMutationCompleted('/api/competitors', data)
         await loadCompetitors()
       } catch {
         setError('Kapcsolati hiba.')
@@ -143,6 +147,7 @@ export default function CompetitorsPage() {
           setError(data.error || 'Frissítés sikertelen.')
           return
         }
+        publishCreditMutationCompleted('/api/competitors/[id]/refresh', data)
         await loadCompetitors()
       } catch {
         setError('Kapcsolati hiba frissítés közben.')

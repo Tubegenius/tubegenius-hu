@@ -8,7 +8,8 @@ import type { CreatorProfile } from '@/types'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
-import { publishCreditBalance } from '@/lib/credit-balance-events'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 import VideoPackageHero, { type MetaBadge, type QualityMetaDisplay, type SaveStatusDisplay } from '@/components/video-package/VideoPackageHero'
 import type { BadgeVariant } from '@/components/ui/Badge'
 import SectionCard from '@/components/video-package/SectionCard'
@@ -337,6 +338,7 @@ function SelectGroup({ options, value, onChange }: { options: { value: string; l
 
 // ─── Main Page ────────────────────────────────────────────────
 export default function VideoPackagePage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const supabase = createClient()
   const { creatorLane: contextLane, setCreatorLane } = useCreatorOS()
@@ -653,21 +655,21 @@ export default function VideoPackagePage() {
 
   async function checkCreditsBeforeAction(cost: number, featureName: string, onConfirm: () => void) {
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = credits.balance ?? 0
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
 
       if (balance < cost) {
         setCreditCheck({
           feature: featureName,
           cost,
           currency: 'credit',
-          currentCredits: Math.round(balance),
+          currentCredits: balance,
           remainingCreditsAfterRun: balance,
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges.`,
         })
         return
       }
@@ -677,8 +679,8 @@ export default function VideoPackagePage() {
         feature: featureName,
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
+        currentCredits: balance,
+        remainingCreditsAfterRun: balance - cost,
         requiresConfirmation: true,
         canRun: true,
         message: `Ez a művelet ${cost} kreditbe kerül.`,
@@ -828,9 +830,7 @@ export default function VideoPackagePage() {
         return
       }
       setResult(data)
-      if (data._credits_remaining !== undefined) {
-        publishCreditBalance(data._credits_remaining)
-      }
+      publishCreditMutationCompleted('/api/video-package', data)
 
       // Mentés sessionStorage-ba — böngésző vissza gomb támogatás
       sessionStorage.setItem('willviral_video_package_state', JSON.stringify({

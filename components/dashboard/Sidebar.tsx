@@ -10,7 +10,8 @@ import type { CreatorProfile } from '@/types'
 import Logo from '@/components/brand/Logo'
 import AppIcon from '@/components/icons/AppIcon'
 import { NAV_SECTIONS } from '@/lib/nav-config'
-import { CREDIT_BALANCE_UPDATED_EVENT } from '@/lib/credit-balance-events'
+import { formatCreditAmount } from '@/lib/creator-credits-presentation'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
 
 interface SidebarProps {
   profile: CreatorProfile | null
@@ -36,7 +37,7 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
   const router = useRouter()
   const supabase = createClient()
 
-  const [credits, setCredits] = useState<{ balance: number; monthly_allowance: number; plan: string } | null>(null)
+  const { credits } = useCreditBalance()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const active = groupContainingPath(pathname)
@@ -80,19 +81,6 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
     setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
-  useEffect(() => {
-    fetch('/api/credits').then(r => r.json()).then(setCredits).catch(() => {})
-  }, [pathname])
-
-  useEffect(() => {
-    const handleCreditUpdate = (event: Event) => {
-      const balance = (event as CustomEvent<number>).detail
-      setCredits(current => current ? { ...current, balance } : current)
-    }
-    window.addEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
-    return () => window.removeEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
-  }, [])
-
   // Route váltáskor mobilon automatikusan záródjon a drawer, hogy ne kelljen
   // külön becsukni minden navigáció után.
   useEffect(() => {
@@ -112,9 +100,11 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
     router.push('/auth/login')
   }
 
-  const balance = credits?.balance ?? 50
-  const allowance = credits?.monthly_allowance ?? 50
-  const pct = Math.max(0, Math.min(100, (balance / allowance) * 100))
+  const balance = credits?.balance ?? null
+  const allowance = credits?.monthly_allowance ?? null
+  const pct = balance !== null && allowance !== null && allowance > 0
+    ? Math.max(0, Math.min(100, (balance / allowance) * 100))
+    : 0
 
   return (
     <>
@@ -207,11 +197,11 @@ export default function DashboardSidebar({ profile }: SidebarProps) {
       <div className="mx-3 mb-4 rounded-xl p-5" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08))', border: '1px solid rgba(59,130,246,0.2)', boxShadow: '0 0 20px rgba(59,130,246,0.08)' }}>
         <div className="flex items-center gap-2 mb-2">
           <i className="ti ti-bolt text-amber text-sm" />
-          <span className="text-sm font-semibold text-text-primary capitalize">{credits?.plan || 'Beta'}</span>
+          <span className="text-sm font-semibold text-text-primary capitalize">{credits?.plan || 'Csomag nem elérhető'}</span>
         </div>
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-text-muted"><i className="ti ti-bolt text-xs" /> {balance.toFixed(1)} kredit</span>
-          <span className="text-xs text-text-muted">{balance.toFixed(0)}/{allowance.toFixed(0)}</span>
+          <span className="text-xs text-text-muted"><i className="ti ti-bolt text-xs" /> {formatCreditAmount(balance)} kredit</span>
+          <span className="text-xs text-text-muted">{formatCreditAmount(balance)}/{formatCreditAmount(allowance)}</span>
         </div>
         <div className="w-full h-1.5 rounded-full mb-3" style={{ background: 'rgba(255,255,255,0.06)' }}>
           <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: pct < 20 ? '#EF4444' : 'linear-gradient(90deg, #3B82F6, #8B5CF6)' }} />

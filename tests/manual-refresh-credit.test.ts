@@ -29,8 +29,9 @@ describe('checkManualRefreshCredit', () => {
     const result = await checkManualRefreshCredit(fetchMock as unknown as typeof fetch)
 
     expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a failed credit check')
     expect(result.error).toBe('network_error')
-    expect(result.balance).toBe(0)
+    expect(result.balance).toBeNull()
     expect(countOpportunityPosts(fetchMock)).toBe(0)
   })
 
@@ -39,6 +40,7 @@ describe('checkManualRefreshCredit', () => {
     const result = await checkManualRefreshCredit(fetchMock as unknown as typeof fetch)
 
     expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a failed credit check')
     expect(result.error).toBe('credit_check_http_error')
     expect(countOpportunityPosts(fetchMock)).toBe(0)
   })
@@ -56,6 +58,7 @@ describe('checkManualRefreshCredit', () => {
     const result = await checkManualRefreshCredit(fetchMock as unknown as typeof fetch)
 
     expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a failed credit check')
     expect(result.error).toBe('invalid_balance_response')
   })
 

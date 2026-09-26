@@ -15,6 +15,7 @@ import { candidatesForActiveChannel, isNicheReviewRequired } from '@/lib/channel
 import NicheReviewBanner from '@/components/dashboard/NicheReviewBanner'
 import OnboardingStepper from '@/components/dashboard/OnboardingStepper'
 import { CREATOR_PROFILE_LANE_GUIDE, creatorProfileMarketLabel, deriveCreatorProfileFocus } from '@/lib/creator-profile-presentation'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 const channelUsageModes: { value: ChannelUsageMode; label: string; desc: string }[] = [
   { value: 'primary_profile', label: 'A csatornám legyen a fő profilom alapja', desc: 'A WillViral a csatornád eddigi videói alapján személyre szabja az ajánlásokat.' },
@@ -267,6 +268,7 @@ export default function ProfilePage() {
     setDiscovering(false)
     if (!res.ok) { setResolveError(data.message || 'A niche-felismerés sikertelen.'); return }
     setNicheCandidates(data.candidates as NicheCandidate[])
+    publishCreditMutationCompleted('/api/youtube/discover-niche', data)
   }
 
   async function handlePickCandidate(candidate: NicheCandidate) {

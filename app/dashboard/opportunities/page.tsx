@@ -14,6 +14,8 @@ import { useFocusTrap } from '@/lib/useFocusTrap'
 import { saveTopicToMemory, fetchSavedStatusForTopics } from '@/lib/creator-lane/memory-save-client'
 import { normalizeTopicKey } from '@/lib/creator-lane/topic-identity'
 import { runSavedLookupCoordinated } from '@/lib/creator-lane/saved-lookup-coordinator'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 // ── Score komponensek ─────────────────────────────────────────
 
@@ -324,6 +326,7 @@ function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacin
   // lehessen egy már elmentett témát véletlenül újra POST-olni.
   saveGateReady: boolean
 }) {
+  const { refreshCredits } = useCreditBalance()
   const [expanded, setExpanded] = useState(false)
   // Melyik pontos témacím ("identitás") ment/hibázott éppen — NEM egy sima
   // boolean, mert a cím a komponens élettartama alatt megváltozhat
@@ -453,16 +456,16 @@ function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacin
     similarInFlightRef.current = true
     setSimilarError(null)
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       const cost = 1
       setSimilarCreditCheck({
         feature: 'Mutass hasonlót',
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
+        currentCredits: balance,
+        remainingCreditsAfterRun: balance - cost,
         requiresConfirmation: true,
         canRun: balance >= cost,
         reason: balance >= cost ? undefined : 'insufficient_credits',
@@ -490,6 +493,7 @@ function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, replacin
       })
       const data = await res.json()
       if (res.ok) {
+        publishCreditMutationCompleted('/api/opportunity-similar', data)
         setDisplayTitle(data.title)
         setDisplayDescription(cleanText(data.description))
         onSimilarResult(index, { title: data.title, description: data.description })
@@ -988,6 +992,7 @@ function DiscoveryLaneCard({ topic, onSearch }: {
 // ── Fő oldal ──────────────────────────────────────────────────
 
 export default function OpportunitiesPage() {
+  const { refreshCredits } = useCreditBalance()
   const supabase = createClient()
   const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
@@ -1321,14 +1326,19 @@ export default function OpportunitiesPage() {
       // Van elég kredit, de a user MÉG NEM erősítette meg — mutassuk a modalt,
       // ne induljon el semmi kreditlevonás felugró jóváhagyás nélkül.
       if (data.needs_confirmation) {
+        const creditSnapshot = await refreshCredits()
+        if (!creditSnapshot) {
+          setError('A kreditegyenleg most nem ellenőrizhető. Próbáld újra.')
+          return
+        }
         setLoading(false)
         setPendingGenerate({ profile: prof || undefined, options: { ...options, confirmed: true } })
         setCreditCheck({
           feature: 'Videólehetőségek',
           cost: data.confirmation_cost || 2,
           currency: 'credit',
-          currentCredits: 0,
-          remainingCreditsAfterRun: 0,
+          currentCredits: creditSnapshot.balance,
+          remainingCreditsAfterRun: Math.max(0, creditSnapshot.balance - (data.confirmation_cost || 2)),
           requiresConfirmation: true,
           canRun: true,
           message: data.message || 'A heti ingyenes Top Opportunity ajánlásod már megvan. Ez az extra keresés kreditbe kerül.',
@@ -1336,6 +1346,7 @@ export default function OpportunitiesPage() {
         return
       }
       setMessage(data.message || null)
+      publishCreditMutationCompleted('/api/opportunity', data)
       setTopics(data.topics || [])
       setPoolTopics(data.pool_topics || [])
       setCached(data.cached || false)
@@ -1419,17 +1430,17 @@ export default function OpportunitiesPage() {
 
     replaceInFlightRef.current = true
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = Number(credits.balance ?? 0)
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
       const cost = 1
       setPendingReplaceIndex(index)
       setReplaceCreditCheck({
         feature: 'Mutass mást',
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
+        currentCredits: balance,
+        remainingCreditsAfterRun: balance - cost,
         requiresConfirmation: true,
         canRun: balance >= cost,
         reason: balance >= cost ? undefined : 'insufficient_credits',
@@ -1457,6 +1468,7 @@ export default function OpportunitiesPage() {
         })
         const data = await res.json()
         if (res.ok) {
+          publishCreditMutationCompleted('/api/opportunity-explain', data)
           finalTopic = { ...next, title: data.title, description: data.description, needs_explanation: false }
         } else {
           setError(res.status === 402 ? (data.error || 'Nincs elegendő kredited ehhez a művelethez.') : (data.error || 'Nem sikerült másik témát találni — próbáld újra.'))

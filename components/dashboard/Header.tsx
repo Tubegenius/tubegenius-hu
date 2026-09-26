@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import type { CreatorProfile } from '@/types'
-import { CREDIT_BALANCE_UPDATED_EVENT } from '@/lib/credit-balance-events'
 import { findNavSectionForPath } from '@/lib/nav-config'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { formatCreditAmount } from '@/lib/creator-credits-presentation'
 
 interface HeaderProps {
   user: User
@@ -22,17 +22,7 @@ function breadcrumbFor(pathname: string): string {
 export default function DashboardHeader({ user, profile }: HeaderProps) {
   const pathname = usePathname()
   const initials = (profile?.channel_name || user.email || 'U').slice(0, 2).toUpperCase()
-  const [credits, setCredits] = useState<number | null>(null)
-
-  useEffect(() => {
-    fetch('/api/credits').then(r => r.json()).then(d => setCredits(d.balance)).catch(() => {})
-
-    const handleCreditUpdate = (event: Event) => {
-      setCredits((event as CustomEvent<number>).detail)
-    }
-    window.addEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
-    return () => window.removeEventListener(CREDIT_BALANCE_UPDATED_EVENT, handleCreditUpdate)
-  }, [])
+  const { credits, status } = useCreditBalance()
 
   return (
     <header className="flex items-center justify-between px-8 sticky top-0 z-10"
@@ -48,7 +38,7 @@ export default function DashboardHeader({ user, profile }: HeaderProps) {
           style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', boxShadow: '0 0 16px rgba(59,130,246,0.08)' }}>
           <i className="ti ti-bolt text-sm" style={{ color: '#3B82F6' }} />
           <span className="font-semibold" style={{ color: '#3B82F6' }}>
-            {credits !== null ? credits.toFixed(1) : '...'} kredit
+            {status === 'ready' ? formatCreditAmount(credits?.balance ?? null) : status === 'error' ? '—' : '…'} kredit
           </span>
         </div>
 

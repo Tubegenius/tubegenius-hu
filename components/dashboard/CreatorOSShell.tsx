@@ -24,6 +24,7 @@ import { CREATOR_OS_NAV_ITEMS, creatorOSSectionForPath, type CreatorOSSectionId 
 import { CREATOR_LANE_PRESENTATION, type CreatorLane } from '@/lib/creator-lane-presentation'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 import { fetchLifecycleReviewerCapability } from '@/lib/lifecycle-review-capability-client'
+import CreditBalanceIndicator from '@/components/credits/CreditBalanceIndicator'
 
 interface CreatorOSShellProps {
   children: ReactNode
@@ -153,6 +154,7 @@ export default function CreatorOSShell({ children, profile, userEmail, activeSec
               <small>{laneLabel} alkotói mód</small>
             </span>
           </div>
+          <CreditBalanceIndicator />
           <button
             ref={accountTriggerRef}
             type="button"

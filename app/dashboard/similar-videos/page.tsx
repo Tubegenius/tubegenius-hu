@@ -9,6 +9,7 @@ import VideoCardActions from '@/components/VideoCardActions'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import type { UsageCheckResult } from '@/lib/usage-protection'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 interface ViralSimilarVideo extends SimilarVideo {
   relevance_score?: number
@@ -338,6 +339,7 @@ export default function SimilarVideosPage() {
     try {
       const tried: Array<'HU' | 'US'> = [r]
       const first = await requestVideos(r)
+      if (first.ok) publishCreditMutationCompleted('/api/similar-videos', first.data)
       let foundVideos = first.ok ? (first.data.videos || []) : []
       setQueriesUsed(first.data?.queries_used || [])
       if (first.ok && (first.data?.from_cache || first.data?.from_paid_result)) {
@@ -349,6 +351,7 @@ export default function SimilarVideosPage() {
       if (shouldTryOtherRegion) {
         const fallbackRegion = r === 'HU' ? 'US' : 'HU'
         const second = await requestVideos(fallbackRegion)
+        if (second.ok) publishCreditMutationCompleted('/api/similar-videos', second.data)
         tried.push(fallbackRegion)
         if (second.ok && second.data.videos?.length > 0) {
           foundVideos = second.data.videos

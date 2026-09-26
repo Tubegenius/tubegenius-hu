@@ -11,7 +11,10 @@ export function toCreditAmount(value: unknown): number | null {
 }
 
 export function formatCreditAmount(value: number | null): string {
-  return value === null ? '—' : Math.round(value).toLocaleString('hu-HU')
+  return value === null ? '—' : value.toLocaleString('hu-HU', {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 1,
+    maximumFractionDigits: 2,
+  })
 }
 
 export function formatCreditPrice(value: number): string {

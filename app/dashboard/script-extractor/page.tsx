@@ -5,6 +5,8 @@ import { useSearchParams } from 'next/navigation'
 import CreditConfirmModal from '@/components/CreditConfirmModal'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import type { UsageCheckResult } from '@/lib/usage-protection'
+import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
+import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 
 interface ExtractResult {
   video_id: string
@@ -51,6 +53,7 @@ const CACHE_PREFIX = 'willviral_script_extract_'
 const LAST_URL_KEY = 'willviral_script_extract_last_url'
 
 export default function ScriptExtractorPage() {
+  const { refreshCredits } = useCreditBalance()
   const searchParams = useSearchParams()
   const [url, setUrl] = useState(searchParams.get('url') || '')
   const [loading, setLoading] = useState(false)
@@ -108,21 +111,21 @@ export default function ScriptExtractorPage() {
 
   async function checkCreditsBeforeAction(cost: number, featureName: string, onConfirm: () => void) {
     try {
-      const res = await fetch('/api/credits')
-      const credits = await res.json()
-      const balance = credits.balance ?? 0
+      const credits = await refreshCredits()
+      if (!credits) throw new Error('credit_balance_unavailable')
+      const balance = credits.balance
 
       if (balance < cost) {
         setCreditCheck({
           feature: featureName,
           cost,
           currency: 'credit',
-          currentCredits: Math.round(balance),
+          currentCredits: balance,
           remainingCreditsAfterRun: balance,
           requiresConfirmation: true,
           canRun: false,
           reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${cost} kredit szükséges, neked ${Math.round(balance)} van.`,
+          message: `Nincs elég kredited. ${cost} kredit szükséges.`,
         })
         return
       }
@@ -132,8 +135,8 @@ export default function ScriptExtractorPage() {
         feature: featureName,
         cost,
         currency: 'credit',
-        currentCredits: Math.round(balance),
-        remainingCreditsAfterRun: Math.round(balance - cost),
+        currentCredits: balance,
+        remainingCreditsAfterRun: balance - cost,
         requiresConfirmation: true,
         canRun: true,
         message: `Ez a művelet ${cost} kreditbe kerül.`,
@@ -153,6 +156,7 @@ export default function ScriptExtractorPage() {
       const data = await res.json()
       if (!res.ok) { setError(data.error); return }
       setResult(data)
+      publishCreditMutationCompleted('/api/script-extract', data)
       // Eredmény cache-elése URL szerint — vissza-navigáláskor instant betöltés
       sessionStorage.setItem(CACHE_PREFIX + u, JSON.stringify(data))
       if (data.video_id) {
