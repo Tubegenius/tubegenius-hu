@@ -202,7 +202,19 @@ function MemoryDetailPanel({
               <Link href={`/dashboard/similar-videos?topic=${encodeURIComponent(item.search_keyword || item.topic)}`}><Film aria-hidden="true" />Piaci videók</Link>
               {item.video_package_id ? (
                 <Link href={`/dashboard/video-package?id=${item.video_package_id}`}><PackageOpen aria-hidden="true" />Csomag megnyitása</Link>
+              ) : item.video_idea_id ? (
+                // video_idea_id-alapú útvonal -- a szerver ebből olvassa
+                // (userhez kötötten) a mentett Opportunity-bizonyíték
+                // snapshotot, ha van (ld. lib/opportunity-evidence/
+                // evidence-service.ts). A topic/keyword query param
+                // kiegészítésként megy tovább, hogy régi (snapshot nélküli)
+                // mentett ötleteknél is előtöltve legyen a témamező.
+                <Link href={`/dashboard/video-package?video_idea_id=${encodeURIComponent(item.video_idea_id)}&topic=${encodeURIComponent(item.topic)}&keyword=${encodeURIComponent(item.search_keyword || '')}`}><Box aria-hidden="true" />Videócsomag</Link>
               ) : (
+                // Nagyon régi, video_idea_id nélküli mentés (Creator Lane
+                // előtti) -- nincs mihez kötni a szervernek, marad a puszta
+                // téma/kulcsszó előtöltés, egyértelmű hiányjelzéssel a
+                // video-package oldalon.
                 <Link href={`/dashboard/video-package?topic=${encodeURIComponent(item.topic)}&keyword=${encodeURIComponent(item.search_keyword || '')}`}><Box aria-hidden="true" />Videócsomag</Link>
               )}
               {item.audit_id && <Link href={`/dashboard/video-audit?id=${item.audit_id}`}><FileCheck2 aria-hidden="true" />Diagnózis</Link>}

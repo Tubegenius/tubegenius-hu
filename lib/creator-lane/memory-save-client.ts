@@ -23,10 +23,17 @@ export interface SaveTopicToMemoryInput {
   searchKeyword?: string | null
   opportunityScore?: number | null
   platform?: string | null
+  // When both are present, the server resolves the evidence snapshot from
+  // its OWN stored paid_results row for this (paidResultId, topicId) pair
+  // -- see lib/opportunity-evidence/evidence-service.ts. Never send score/
+  // sources/description here; the server never reads them from this body
+  // for the evidence-carrying save path.
+  paidResultId?: string | null
+  topicId?: string | null
 }
 
 export function buildSaveTopicToMemoryBody(input: SaveTopicToMemoryInput): Record<string, unknown> {
-  return {
+  const base = {
     // Ugyanaz az identitás-függvény, mint a re-entrancy őr / already-saved
     // Set / saved-lookup válasz feldolgozása — ld. lib/creator-lane/
     // topic-identity.ts. A szerver úgyis btrim()-eli, de a KLIENSOLDALI
@@ -38,6 +45,10 @@ export function buildSaveTopicToMemoryBody(input: SaveTopicToMemoryInput): Recor
     opportunity_score: input.opportunityScore ?? undefined,
     platform: input.platform ?? undefined,
   }
+  if (input.paidResultId && input.topicId) {
+    return { ...base, source_context: 'opportunity_engine', paid_result_id: input.paidResultId, topic_id: input.topicId }
+  }
+  return base
 }
 
 // app/api/memory/route.ts minden hibaágon már ma is egy fix, felhasználóbarát
