@@ -300,11 +300,17 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
     expect(out).toBe(`${constant('c_rls_count')}|${constant('c_rls_digest')}|0`)
 
     // 092's own new table (migration section 3): RLS ENABLE + FORCE, both true.
+    // Boolean-to-text via SQL `||` concatenation renders as 'true'/'false'
+    // (Postgres's own text cast), NOT psql's '-A -t' display abbreviation
+    // ('t'/'f') -- confirmed live via CI on 2026-09-28 (this exact line
+    // failed with "expected 'true:true' to be 't:t'"). Still a strict,
+    // unweakened check of BOTH conditions: only the literal was wrong, not
+    // what is being verified.
     const opp092Rls = psqlOk(`
       SELECT c.relrowsecurity || ':' || c.relforcerowsecurity
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relname = 'video_idea_opportunity_snapshots';`).trim()
-    expect(opp092Rls).toBe('t:t')
+    expect(opp092Rls).toBe('true:true')
   })
 
   it('the 31 pg_trgm functions match the allowlist exactly and are the only public functions callable by anon/PUBLIC', () => {

@@ -38,10 +38,10 @@ const DB_CONTAINER = STATEFUL_TARGET.allowed ? STATEFUL_TARGET.container! : null
 // Set ONLY by the dedicated CI job that starts its own disposable stack for
 // exactly this file (never by a developer's shell, never by the shared
 // `regression` job, which excludes this file entirely -- see
-// .github/workflows/quality.yml's `stateful-076` job and its exclusion of
-// this path from `regression`'s own run). In that job, silently skipping
-// would hide the fact these tests never ran; here it is a hard, immediate
-// module-load failure instead.
+// .github/workflows/quality.yml's `stateful-tests` matrix job (076 leg)
+// and its exclusion of this path from `regression`'s own run). In that
+// job, silently skipping would hide the fact these tests never ran; here
+// it is a hard, immediate module-load failure instead.
 const STATEFUL_REQUIRED = isStatefulDbRequired()
 if (STATEFUL_REQUIRED && !STATEFUL_TARGET.allowed) {
   throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the stateful DB target is not authorized: ${STATEFUL_TARGET.reason}`)

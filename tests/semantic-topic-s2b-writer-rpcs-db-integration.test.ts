@@ -1,10 +1,8 @@
 // Semantic Topic Identity v0 -- S2B writer RPCs, REAL local DB integration
-// tests. Same pattern as the 072/073 suites: uses the existing local
-// Docker Supabase stack (supabase_db_WillViralFinal), skips entirely (not
-// a failure) when unavailable, direct postgres-privileged psql fixture
-// inserts for everything the RPCs themselves don't own, SET ROLE for real
-// grant-boundary checks. Only synthetic, deterministic fixtures are used --
-// no AI/provider call, no production data.
+// tests. Same pattern as the 072/073 suites: direct postgres-privileged
+// psql fixture inserts for everything the RPCs themselves don't own, SET
+// ROLE for real grant-boundary checks. Only synthetic, deterministic
+// fixtures are used -- no AI/provider call, no production data.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 30000 })
@@ -12,6 +10,30 @@ import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { isStatefulDbRequired, resolveStatefulDbTarget } from './lib/db-integration-guard'
+
+// This file makes REAL, non-rolled-back function-body DROP/CREATE cycles
+// (see the "artificial body drift..." test in the record_topic_extraction_run
+// describe block below) -- gated behind the same explicit target+
+// confirmation check as 075's and 076's DB-integration suites, not the
+// hardcoded long-lived dev-container name the rest of this codebase's
+// *-db-integration.test.ts files still use: on 2026-09-28, running this
+// file against whatever local dev stack happened to be up (no explicit
+// opt-in asked or given) executed real DDL against it before this gate
+// existed. See tests/lib/db-integration-guard.ts for the exact env-var
+// contract and tests/db-integration-guard.test.ts for its own DB-free proof.
+const STATEFUL_TARGET = resolveStatefulDbTarget()
+const DB_CONTAINER = STATEFUL_TARGET.allowed ? STATEFUL_TARGET.container! : null
+// Set ONLY by the dedicated CI job that starts its own disposable stack for
+// exactly this file (never by a developer's shell, never by the shared
+// `regression` job, which excludes this file entirely -- see
+// .github/workflows/quality.yml). In that job, silently skipping would
+// hide the fact these tests never ran; here it is a hard, immediate
+// module-load failure instead.
+const STATEFUL_REQUIRED = isStatefulDbRequired()
+if (STATEFUL_REQUIRED && !STATEFUL_TARGET.allowed) {
+  throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the stateful DB target is not authorized: ${STATEFUL_TARGET.reason}`)
+}
 
 const MIGRATION_PATH = join(process.cwd(), 'supabase/migrations/074_semantic_topic_s2b_writer_rpcs.sql')
 
@@ -54,8 +76,18 @@ function extractLegacyRtadBodySql(): string {
   return createStatement.replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION') + '\n' + grantStatements
 }
 
+// Every one of these throws BEFORE attempting any Docker call at all when
+// the explicit target+confirmation gate is not satisfied -- see
+// STATEFUL_TARGET/DB_CONTAINER above. describeIfLocalDb below already
+// short-circuits to describe.skip in that case, so this throw is a
+// defense-in-depth backstop, not the primary mechanism.
+function requireContainer(): string {
+  if (!DB_CONTAINER) throw new Error(`stateful DB-integration call attempted without authorization: ${STATEFUL_TARGET.reason}`)
+  return DB_CONTAINER
+}
+
 function dockerPsql(sql: string): string {
-  return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+  return execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
     input: sql,
     encoding: 'utf-8',
   })
@@ -63,7 +95,7 @@ function dockerPsql(sql: string): string {
 
 function dockerPsqlExpectError(sql: string): string {
   try {
-    execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+    execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
       input: sql,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -78,7 +110,7 @@ function runMigration(): { out: string; threw: boolean } {
   const migrationSql = readFileSync(MIGRATION_PATH, 'utf8')
   try {
     const out = execSync(
-      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      `docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`,
       { input: migrationSql, encoding: 'utf8' },
     )
     return { out, threw: false }
@@ -87,12 +119,50 @@ function runMigration(): { out: string; threw: boolean } {
   }
 }
 
+// Every table/function this file's helpers ever write to (cleanupTestData,
+// the insert*/callExtractionRpc/callAssignmentRpc helpers, and the two
+// RPCs' own drop+recreate drift test) -- checked ONCE, read-only, up
+// front, before stackAvailable can become true, i.e. before this file
+// allows ANY write.
+const REQUIRED_TABLES = [
+  'signal_evidence', 'signal_sources', 'signal_runs', 'topic_extraction_runs',
+  'semantic_topic_membership_events', 'topic_assignment_decisions', 'semantic_topic_membership', 'semantic_topics',
+]
+const REQUIRED_FUNCTIONS = ['record_topic_extraction_run', 'record_topic_assignment_decision']
+
+function verifyRequiredSchema(): { ok: boolean; missing: string[] } {
+  const tablesSql = REQUIRED_TABLES.map((t) => `'${t}'`).join(',')
+  const fnsSql = REQUIRED_FUNCTIONS.map((f) => `'${f}'`).join(',')
+  const out = dockerPsql(`
+    SELECT 'MISSING_TABLE|' || t FROM unnest(ARRAY[${tablesSql}]) t WHERE to_regclass('public.' || t) IS NULL
+    UNION ALL
+    SELECT 'MISSING_FUNCTION|' || f FROM unnest(ARRAY[${fnsSql}]) f
+      WHERE NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = f);
+  `).trim()
+  const missing = out ? out.split('\n').map((l) => l.trim()).filter(Boolean) : []
+  return { ok: missing.length === 0, missing }
+}
+
+// The target+confirmation gate is checked FIRST, before any Docker call is
+// even attempted -- on a normal developer machine (or any CI job that
+// hasn't explicitly opted in), DB_CONTAINER is null and stackAvailable
+// stays false without ever touching Docker. When authorized, connectivity
+// AND schema completeness are BOTH required before stackAvailable becomes
+// true.
 let stackAvailable = false
-try {
-  dockerPsql('select 1;')
-  stackAvailable = true
-} catch {
-  stackAvailable = false
+if (DB_CONTAINER) {
+  try {
+    dockerPsql('select 1;')
+    const schema = verifyRequiredSchema()
+    stackAvailable = schema.ok
+    if (!schema.ok && STATEFUL_REQUIRED) {
+      throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the target's schema is incomplete -- missing: ${schema.missing.join(', ')}. Zero writes will be attempted.`)
+    }
+    // else (not required, schema incomplete): stackAvailable stays false, i.e. skip (zero writes), not a hard failure.
+  } catch (e) {
+    if (STATEFUL_REQUIRED) throw e // required mode: connectivity/schema failures must fail the run, not silently skip.
+    stackAvailable = false
+  }
 }
 
 const describeIfLocalDb = stackAvailable ? describe : describe.skip
@@ -442,7 +512,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
       const sql = `select record_topic_extraction_run('${evidenceId}'::uuid, 1, 'deterministic', NULL, NULL, NULL, 1, 'norm-concurrent', 1, 'completed', '${structuredOutput()}'::jsonb, NULL, NULL, NULL, NULL, '${key}', now() - interval '1 min', now());`
-      const args = ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql]
+      const args = ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql]
       const [r1, r2] = await Promise.all([execFileAsync('docker', args), execFileAsync('docker', args)])
       const outcomes = [r1.stdout, r2.stdout].map(o => JSON.parse(o.trim()).outcome).sort()
       expect(outcomes).toEqual(['created', 'replayed'])
@@ -457,7 +527,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
       const sqlFor = (key: string) => `select record_topic_extraction_run('${evidenceId}'::uuid, 1, 'deterministic', NULL, NULL, NULL, 1, 'norm-concurrent-cache', 1, 'completed', '${structuredOutput()}'::jsonb, NULL, NULL, NULL, NULL, '${key}', now() - interval '1 min', now());`
-      const argsFor = (key: string) => ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sqlFor(key)]
+      const argsFor = (key: string) => ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sqlFor(key)]
       const [r1, r2] = await Promise.all([
         execFileAsync('docker', argsFor(`sti-s2b-${marker}-idem-a`)),
         execFileAsync('docker', argsFor(`sti-s2b-${marker}-idem-b`)),
@@ -611,7 +681,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const { execFile } = await import('node:child_process')
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
-      const argsFor = (runId: string, key: string) => ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c',
+      const argsFor = (runId: string, key: string) => ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c',
         `select record_topic_assignment_decision('${runId}'::uuid, 'CREATE_NEW', 'no_similar_topic_found', '{}'::jsonb, '${key}', NULL);`]
       const [o1, o2] = await Promise.all([
         execFileAsync('docker', argsFor(r1, `sti-s2b-${marker}-dec-a`)),
@@ -734,7 +804,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const { execFile } = await import('node:child_process')
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
-      const argsFor = (runId: string, key: string) => ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c',
+      const argsFor = (runId: string, key: string) => ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c',
         `select record_topic_assignment_decision('${runId}'::uuid, 'ATTACH_EXISTING', 'exact_entity_match', '{}'::jsonb, '${key}', '${created.semantic_topic_id}'::uuid);`]
       const [o1, o2] = await Promise.all([
         execFileAsync('docker', argsFor(r1, `sti-s2b-${marker}-dec1`)),
@@ -940,7 +1010,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       // REPLACE branch, proven independently by 086's own test suite).
       const migration086Path = join(process.cwd(), 'supabase/migrations/086_semantic_topic_eligible_source_identity_correctness.sql')
       execSync(
-        'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+        `docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`,
         { input: readFileSync(migration086Path, 'utf8'), encoding: 'utf8' },
       )
     })
@@ -972,7 +1042,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const migration076 = readFileSync(join(process.cwd(), 'supabase/migrations/076_semantic_topic_canonical_input_timestamp_v2.sql'), 'utf8')
       const apply076 = (() => {
         try {
-          return { out: execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1', { input: migration076, encoding: 'utf8' }), threw: false }
+          return { out: execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`, { input: migration076, encoding: 'utf8' }), threw: false }
         } catch (e: any) {
           return { out: String(e.stdout || e.stderr || e.message || ''), threw: true }
         }
@@ -1246,7 +1316,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
       const sql = `select record_topic_assignment_decision('${extractionRunId}'::uuid, 'CREATE_NEW', 'no_similar_topic_found', '{}'::jsonb, '${key}', NULL);`
-      const args = ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql]
+      const args = ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql]
       const [r1, r2] = await Promise.all([execFileAsync('docker', args), execFileAsync('docker', args)])
       expect(r1.stderr).not.toMatch(/duplicate key value violates/)
       expect(r2.stderr).not.toMatch(/duplicate key value violates/)
@@ -1270,7 +1340,7 @@ describeIfLocalDb('Semantic Topic Identity v0 S2B — writer RPCs (real local DB
       const { execFile } = await import('node:child_process')
       const { promisify } = await import('node:util')
       const execFileAsync = promisify(execFile)
-      const argsFor = (key: string, outcome: string, reason: string) => ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c',
+      const argsFor = (key: string, outcome: string, reason: string) => ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c',
         `select record_topic_assignment_decision('${extractionRunId}'::uuid, '${outcome}', '${reason}', '{}'::jsonb, '${key}', NULL);`]
       // Both calls must be individually caught -- Promise.all rejects as
       // soon as ANY one promise rejects, and which of the two processes
