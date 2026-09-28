@@ -152,13 +152,49 @@ function currentRtadHash(): string {
   ).trim()
 }
 
-// A CREATE OR REPLACE FUNCTION never resets owner or ACL on an
-// already-existing function -- only the body/signature/volatility/
-// SECURITY/search_path clauses in extractRtadLegacy/CorrectedBodySql()'s
-// own extracted CREATE OR REPLACE statement are re-applied. This is
-// verified explicitly after EVERY bridge flip below (never merely assumed)
-// so a genuine corruption anywhere -- of the body, or of owner/ACL/
-// SECURITY DEFINER/search_path, which CREATE OR REPLACE does NOT touch --
+// CORRECTED CLAIM (this file previously asserted, incorrectly, that a bare
+// CREATE OR REPLACE FUNCTION on an already-existing function never resets
+// its ACL, and that re-applying it here therefore needed no explicit
+// GRANT -- confirmed live via CI on 2026-09-28 to be wrong in this exact
+// path: after extractRtadLegacyBodySql()'s bare REPLACE, anon and
+// authenticated ended up WITH EXECUTE and service_role WITHOUT it).
+// Whatever the precise mechanism, 074's OWN migration -- in the branch
+// that originally creates this function -- never relies on that
+// assumption either: immediately after its own CREATE FUNCTION, 074
+// explicitly runs REVOKE ALL ... FROM PUBLIC, anon, authenticated; GRANT
+// EXECUTE ... TO service_role (supabase/migrations/074_..._writer_rpcs.sql,
+// right after this function's closing $rpc$;). This bridge does the same,
+// explicitly, after EVERY flip below -- both the legacy-flip (074's exact
+// arg-type list, matching 074's own applied REVOKE/GRANT above) and the
+// corrected-restore (086 replaces the body only; it issues no REVOKE/GRANT
+// of its own, so the ACL must be explicitly reasserted here too) -- using
+// 090's own pinned, currently-authoritative contract
+// (supabase/migrations/090_public_schema_privilege_hardening.sql: `acl=
+// postgres:EXECUTE,service_role:EXECUTE`), not a blind copy of 074's
+// historical grant text. rtadGrantContractSql() below is the single
+// source for this statement so both flip sites and verifyRtadContract()'s
+// own expectations stay in lockstep.
+const RTAD_ARG_TYPES = 'UUID, TEXT, TEXT, JSONB, TEXT, UUID'
+function rtadGrantContractSql(): string {
+  return `
+    REVOKE ALL ON FUNCTION public.record_topic_assignment_decision(${RTAD_ARG_TYPES}) FROM PUBLIC, anon, authenticated;
+    GRANT EXECUTE ON FUNCTION public.record_topic_assignment_decision(${RTAD_ARG_TYPES}) TO service_role;
+  `
+}
+// Both the body flip and its ACL reassertion run as ONE dockerPsql() call,
+// inside an explicit BEGIN ... COMMIT, so a successful function swap can
+// never be left with a separately-failable privilege step after it: with
+// -v ON_ERROR_STOP=1 (already set by dockerPsql), a failure anywhere in
+// this script aborts psql before COMMIT ever runs, and the still-open
+// transaction is rolled back when the connection closes -- so either both
+// the body and the ACL land together, or neither does.
+function rtadFlipSql(bodySql: string): string {
+  return `BEGIN;\n${bodySql}\n${rtadGrantContractSql()}\nCOMMIT;\n`
+}
+
+// Full contract, not just the body hash -- verified explicitly after
+// EVERY bridge flip below (never merely assumed) so a genuine corruption
+// anywhere -- of the body, or of owner/ACL/SECURITY DEFINER/search_path --
 // is caught here rather than silently left in place. Mirrors exactly the
 // properties 086's own migration gate checks before it will REPLACE this
 // function (owner=postgres, SECURITY DEFINER, volatile, search_path=
@@ -434,10 +470,15 @@ function restoreHumanReviewObjects() {
   }
   const bridged = rtadHashBefore === RTAD_CORRECTED_HASH
   if (bridged) {
-    dockerPsql(extractRtadLegacyBodySql())
+    // Body flip + ACL reassertion in ONE transaction -- see
+    // rtadFlipSql()'s own header comment for exactly why, and the
+    // CORRECTED CLAIM comment above rtadGrantContractSql() for why the
+    // ACL reassertion itself is required, not merely assumed to survive
+    // the REPLACE.
+    dockerPsql(rtadFlipSql(extractRtadLegacyBodySql()))
     // Full contract, not just the body hash -- see verifyRtadContract()'s
     // own header comment for exactly why owner/ACL/SECURITY/search_path
-    // are checked here too, never merely assumed to survive the REPLACE.
+    // are checked here too.
     verifyRtadContract(RTAD_LEGACY_HASH)
   }
 
@@ -445,7 +486,7 @@ function restoreHumanReviewObjects() {
   if (result.threw) {
     if (bridged) {
       try {
-        dockerPsql(extractRtadCorrectedBodySql())
+        dockerPsql(rtadFlipSql(extractRtadCorrectedBodySql()))
       } catch {
         // Best-effort only -- the original 077 failure below is the
         // authoritative error; a restore-attempt failure here must never
@@ -458,7 +499,7 @@ function restoreHumanReviewObjects() {
   if (r084.threw) {
     if (bridged) {
       try {
-        dockerPsql(extractRtadCorrectedBodySql())
+        dockerPsql(rtadFlipSql(extractRtadCorrectedBodySql()))
       } catch {
         // Best-effort only -- see comment above.
       }
@@ -467,7 +508,11 @@ function restoreHumanReviewObjects() {
   }
 
   if (bridged) {
-    dockerPsql(extractRtadCorrectedBodySql())
+    // Body flip + ACL reassertion in ONE transaction -- 086's own
+    // migration replaces only the function body and issues no
+    // REVOKE/GRANT of its own for this function, so the ACL must be
+    // explicitly reasserted here too, atomically with the body.
+    dockerPsql(rtadFlipSql(extractRtadCorrectedBodySql()))
     // Full contract, not just the body hash -- this is the restoration the
     // rest of the shared stack actually depends on staying correct.
     verifyRtadContract(RTAD_CORRECTED_HASH)
