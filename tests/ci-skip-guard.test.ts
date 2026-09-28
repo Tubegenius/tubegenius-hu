@@ -66,17 +66,18 @@ describe('full mode', () => {
     expect(r.failures.join('\n')).toContain('FAILED tests/a.test.ts::a > breaks -- AssertionError: nope')
   })
 
-  it('fails on a file-level (collection) failure even when no assertion failed, and counts/labels it as zero recorded assertions (never-started tests)', () => {
+  it('fails on a file-level (collection) failure even when no assertion failed, and counts/labels it as zero recorded per-test assertions (execution not determinable from this report)', () => {
     const rep = report([file('tests/b.test.ts', [], 'failed', 'Node.js 20 detected without native WebSocket support.')])
     const r = evaluateReport(rep, options())
     expect(r.ok).toBe(false)
     expect(r.counts.failedFilesNoAssertions).toBe(1)
     expect(r.failures.join('\n')).toContain('FAILED FILE tests/b.test.ts')
-    expect(r.failures.join('\n')).toContain('0 per-test assertions recorded for this file: a hook/collection failure before any test ran')
-    expect(r.failures.join('\n')).toContain('never started and are counted neither as failed nor as skipped')
+    expect(r.failures.join('\n')).toContain('0 per-test assertions recorded for this file: no per-test result was recorded')
+    expect(r.failures.join('\n')).toContain('whether its declared tests ran cannot be determined from this report')
+    expect(r.failures.join('\n')).toContain('counted neither as failed nor as skipped')
   })
 
-  it('distinguishes a file-level failure AFTER its tests already ran (non-zero recorded assertions) from a hook/collection failure -- not counted as a zero-assertion file', () => {
+  it('distinguishes a file-level failure AFTER its tests already ran (non-zero recorded assertions) from a zero-recorded-assertions failure -- not counted as a zero-assertion file', () => {
     const rep = report([
       file('tests/c.test.ts', [assertion('c > ok', 'passed'), assertion('c > also ok', 'passed')], 'failed', 'afterAll: teardown connection leaked'),
     ])
@@ -85,7 +86,7 @@ describe('full mode', () => {
     expect(r.counts.failedFilesNoAssertions).toBe(0)
     expect(r.failures.join('\n')).toContain('FAILED FILE tests/c.test.ts')
     expect(r.failures.join('\n')).toContain("2 per-test assertion(s) recorded, none with status 'failed'")
-    expect(r.failures.join('\n')).not.toContain('never started')
+    expect(r.failures.join('\n')).not.toContain('cannot be determined from this report')
   })
 
   it('fails on an unknown skip', () => {
@@ -139,7 +140,7 @@ describe('renderSummary', () => {
     const r = evaluateReport(rep, options())
     const summary = renderSummary(r, 'full', 'linux')
     expect(summary).toContain('failed files with zero recorded per-test assertions')
-    expect(summary).toContain('hook/collection failure -- their declared tests never started')
+    expect(summary).toContain('whether their declared tests ran cannot be determined from this report')
     expect(summary).toMatch(/failed files with zero recorded per-test assertions[^:]*: 1/)
     expect(summary).toContain('verdict: FAIL')
   })

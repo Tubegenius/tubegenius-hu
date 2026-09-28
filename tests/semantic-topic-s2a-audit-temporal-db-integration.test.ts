@@ -169,7 +169,7 @@ function verifyRtadContract(expectedHash: string): void {
       md5(replace(p.prosrc, E'\\r\\n', E'\\n')) || '|' ||
       r.rolname || '|' ||
       p.prosecdef::text || '|' ||
-      p.provolatile || '|' ||
+      p.provolatile::text || '|' ||
       coalesce((select string_agg(cfg, ';') from unnest(p.proconfig) cfg), '') || '|' ||
       has_function_privilege('service_role', p.oid, 'EXECUTE')::text || '|' ||
       has_function_privilege('anon', p.oid, 'EXECUTE')::text || '|' ||
