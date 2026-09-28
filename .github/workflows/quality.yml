@@ -1,13 +1,28 @@
 name: Quality
 
 # Deterministic test gates.
-#   unit        fast, database-free feedback (stack-gated tests skip by design;
-#               the guard verifies that ONLY stack-gated files skip).
-#   regression  the full suite against a clean local Supabase stack (Docker on
-#               the GitHub-hosted runner). Zero failures and zero unknown skips
-#               are required: the closed allowlist in
-#               .github/ci/skip-allowlist.json is the only place a skip may be
-#               declared, and stale allowlist entries fail the job too.
+#   unit          fast, database-free feedback (stack-gated tests skip by
+#                 design; the guard verifies that ONLY stack-gated files skip).
+#   regression    the full suite (MINUS the one file stateful-076 owns, see
+#                 below) against a clean local Supabase stack (Docker on the
+#                 GitHub-hosted runner). Zero failures and zero unknown skips
+#                 are required: the closed allowlist in
+#                 .github/ci/skip-allowlist.json is the only place a skip may
+#                 be declared, and stale allowlist entries fail the job too.
+#   stateful-076  tests/semantic-topic-canonical-input-timestamp-v2-db-
+#                 integration.test.ts's "migration 076 -- dual-function
+#                 hash-gate" scenarios make REAL, non-rolled-back writes
+#                 (function-body REPLACE/REVOKE/GRANT cycles) -- see that
+#                 file's own header comment for why it is never allowed to
+#                 run against regression's shared stack, or any other job's:
+#                 it gets its OWN fresh, disposable Supabase stack, on its own
+#                 runner, renamed away from the shared default container name
+#                 so tests/lib/db-integration-guard.ts's denylist cannot be
+#                 mistaken for it, used by nothing else, and torn down after.
+#                 PFM_STATEFUL_DB_REQUIRED=1 there means a missing
+#                 authorization or an incomplete schema is a hard job FAILURE,
+#                 never a silent skip -- see that env var's own doc comment in
+#                 tests/lib/db-integration-guard.ts.
 # Typecheck and build live in ci.yml and are independent jobs, so they always
 # run even when a test job fails.
 # No production or repository secrets are used anywhere. The local stack's
@@ -173,7 +188,18 @@ jobs:
         run: |
           set +x
           set -o pipefail
-          npx vitest run --reporter=default --reporter=json \
+          # tests/semantic-topic-canonical-input-timestamp-v2-db-integration.
+          # test.ts is EXCLUDED here on purpose: its stateful scenarios make
+          # real, non-rolled-back writes and must never run against this
+          # job's shared stack (also used by every other DB-integration
+          # file) -- it has its own dedicated, disposable-stack job
+          # (stateful-076) below. Without this exclusion it would still just
+          # skip here (no PFM_STATEFUL_DB_TARGET set), which would trip the
+          # guard's "unknown skip" check below for no benefit -- excluding it
+          # outright is the correct, explicit statement of ownership, not a
+          # workaround.
+          npx vitest run --exclude tests/semantic-topic-canonical-input-timestamp-v2-db-integration.test.ts \
+            --reporter=default --reporter=json \
             --outputFile.json="$RUNNER_TEMP/vitest-full.json" 2>&1 | sed -E -u "$JWT_SCRUB"
 
       - name: Guard (failures, unknown skips, stale allowlist)
@@ -207,3 +233,243 @@ jobs:
           remaining="$(docker ps -aq --filter 'name=supabase_' | wc -l)"
           echo "remaining supabase containers: $remaining"
           [ "$remaining" = "0" ]
+
+  stateful-076:
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      # actions/setup-node v6.5.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # supabase/setup-cli v2.1.1
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Authenticate and verify GHCR image pull
+        timeout-minutes: 5
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set +x
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin > /dev/null
+          image="ghcr.io/supabase/postgres-meta:v0.99.0"
+          if ! docker pull "$image"; then
+            echo "::error title=Authenticated GHCR image pull failed::Could not pull $image before Supabase stack startup"
+            exit 1
+          fi
+          echo "authenticated GHCR image pull succeeded: $image"
+
+      - name: Start a fresh, disposable Supabase stack (this job's own, shared with nothing else)
+        timeout-minutes: 20
+        run: |
+          set +x
+          if ! supabase start -x logflare,vector,studio > "$RUNNER_TEMP/supabase-start.log" 2>&1; then
+            echo "::error title=Supabase stack startup failed::The authenticated image pull passed, but the local Supabase stack did not start"
+            echo "redacted tail of the start log:"
+            tail -n 80 "$RUNNER_TEMP/supabase-start.log" | sed -E "$JWT_SCRUB"
+            exit 1
+          fi
+          while IFS='=' read -r key value; do
+            case "$key" in
+              ANON_KEY|SERVICE_ROLE_KEY|PUBLISHABLE_KEY|SECRET_KEY|JWT_SECRET|DB_URL|S3_PROTOCOL_ACCESS_KEY_ID|S3_PROTOCOL_ACCESS_KEY_SECRET)
+                value="${value%\"}"; value="${value#\"}"
+                [ -n "$value" ] && echo "::add-mask::$value"
+                ;;
+            esac
+          done < <(supabase status -o env 2>/dev/null)
+          echo "local disposable stack started"
+
+      - name: Record this run's exact container ids for precise, name-independent cleanup later
+        run: |
+          set +x
+          # Captured by name NOW, right after this job's own `supabase
+          # start` and before anything is renamed -- reliable at this exact
+          # moment because this is a brand-new, single-purpose runner (never
+          # shared with any other job or a developer's machine), so nothing
+          # else could match this name pattern here. The final cleanup step
+          # below does NOT repeat this name-based lookup -- it only acts on
+          # the exact ids recorded right here, so it stays correct even
+          # after the DB container is renamed, and touches nothing this job
+          # itself did not just create.
+          ids="$(docker ps -aq --filter 'name=supabase_')"
+          if [ -z "$ids" ]; then
+            echo "::error title=No supabase_* containers found right after start::Cannot record precise cleanup targets"
+            exit 1
+          fi
+          echo "$ids" > "$RUNNER_TEMP/pfm-disposable-container-ids.txt"
+          echo "recorded $(echo "$ids" | wc -l) container id(s) for this run:"
+          docker ps -a --filter 'name=supabase_' --format '  {{.ID}}  {{.Names}}'
+
+      - name: Rename the DB container to an explicitly disposable, run-scoped name
+        run: |
+          set +x
+          # `supabase start` always names the DB container
+          # supabase_db_WillViralFinal (derived from the project, not
+          # randomized) -- that is exactly the name tests/lib/
+          # db-integration-guard.ts's denylist refuses, on purpose, because
+          # it is also the long-lived local dev stack's name. Renaming to a
+          # run-id-suffixed name here, on THIS job's own fresh runner (never
+          # shared with a developer's machine or any other job), is what
+          # makes this target genuinely, verifiably disposable rather than
+          # merely happening to share a name with something that is not.
+          disposable_name="pfm_ci_disposable_076_${{ github.run_id }}_${{ github.run_attempt }}"
+          docker rename supabase_db_WillViralFinal "$disposable_name"
+          echo "PFM_DISPOSABLE_DB_CONTAINER=$disposable_name" >> "$GITHUB_ENV"
+          echo "renamed DB container to $disposable_name"
+
+      - name: Wait for the disposable database
+        timeout-minutes: 5
+        run: |
+          set +x
+          for attempt in $(seq 1 60); do
+            if docker exec "$PFM_DISPOSABLE_DB_CONTAINER" pg_isready -U postgres >/dev/null 2>&1; then
+              echo "database ready (attempt $attempt)"; break
+            fi
+            sleep 2
+          done
+
+      - name: Verify migration files match the clean stack history
+        run: |
+          set +x
+          export LC_ALL=C
+          expected="$(find supabase/migrations -maxdepth 1 -name '*.sql' -printf '%f\n' | sed -E 's#^([0-9]+)_.*#\1#' | sort)"
+          applied="$(docker exec "$PFM_DISPOSABLE_DB_CONTAINER" psql -U postgres -d postgres -X -A -t \
+            -c 'select version from supabase_migrations.schema_migrations order by version' | sort)"
+          echo "migration files: $(echo "$expected" | wc -l), applied history rows: $(echo "$applied" | wc -l)"
+          if ! diff <(echo "$expected") <(echo "$applied"); then
+            echo "migration files and stack history differ (diff above: '<' file only, '>' history only)"
+            exit 1
+          fi
+          echo "migration history matches the repository files"
+
+      - name: Run the stateful 076 DB-integration tests (required -- must not skip)
+        timeout-minutes: 10
+        env:
+          # The exact contract tests/lib/db-integration-guard.ts enforces --
+          # see that file for the full rationale. REQUIRED=1 means a missing
+          # authorization or an incomplete schema is a hard failure of THIS
+          # step, not a silent skip: this job exists specifically to prove
+          # these tests ran for real.
+          PFM_STATEFUL_DB_TARGET: ${{ env.PFM_DISPOSABLE_DB_CONTAINER }}
+          PFM_STATEFUL_DB_CONFIRM: yes-mutate-disposable-target
+          PFM_STATEFUL_DB_REQUIRED: '1'
+        run: |
+          set +x
+          set -o pipefail
+          npx vitest run tests/semantic-topic-canonical-input-timestamp-v2-db-integration.test.ts \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/vitest-076.json" 2>&1 | sed -E -u "$JWT_SCRUB"
+
+      - name: Verify the stateful scenarios actually executed (exact expected count, not silently short, nothing skipped)
+        if: always()
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = '$RUNNER_TEMP/vitest-076.json';
+            // A missing report is a hard FAIL, same as every other guard
+            // step here -- it must never be read as '0 tests, nothing to
+            // complain about'.
+            if (!fs.existsSync(path)) { console.error('FAIL: no vitest report found at ' + path + ' -- the run step itself likely failed before producing one'); process.exit(1); }
+            const r = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const total = r.numTotalTests ?? 0;
+            const passed = r.numPassedTests ?? 0;
+            const failed = r.numFailedTests ?? 0;
+            const pending = r.numPendingTests ?? 0;
+            const todo = r.numTodoTests ?? 0;
+            console.log('stateful-076 report: total=' + total + ' passed=' + passed + ' failed=' + failed + ' pending=' + pending + ' todo=' + todo);
+            // Exact expected count for
+            // tests/semantic-topic-canonical-input-timestamp-v2-db-integration.test.ts
+            // as of this workflow revision (confirmed by direct \`vitest run\`
+            // against this file: 5 REPLACE branch through completed-cache-
+            // guard tests * ... -- 25 total, 20 of them normally
+            // describeIfLocalDb-gated + 5 always-on DB-free 'v1 production
+            // run' tests). A COUNT below this, even with zero pending/todo,
+            // means collection silently came up short (e.g. a crash mid-
+            // collection, a filter, a future edit to this step) -- update
+            // this number ONLY together with a matching, deliberate edit to
+            // that test file, never to make a shortfall go away.
+            const EXPECTED_TOTAL = 25;
+            if (total !== EXPECTED_TOTAL) { console.error('FAIL: expected exactly ' + EXPECTED_TOTAL + ' collected tests, got ' + total); process.exit(1); }
+            if (pending > 0 || todo > 0) { console.error('FAIL: ' + (pending + todo) + ' test(s) were skipped/todo -- this job must run every stateful scenario for real, never skip'); process.exit(1); }
+            if (passed + failed !== total) { console.error('FAIL: passed+failed (' + (passed + failed) + ') does not account for all collected tests (' + total + ')'); process.exit(1); }
+            console.log('confirmed: all ' + total + ' (of the expected ' + EXPECTED_TOTAL + ') stateful-076 tests actually executed');
+          "
+
+      - name: Guard (failures, unknown skips, stale allowlist -- this job's own, minimal, always-empty allowlist)
+        if: always()
+        run: |
+          node scripts/ci-skip-guard.ts --report "$RUNNER_TEMP/vitest-076.json" \
+            --mode full --allowlist .github/ci/stateful-076-allowlist.json \
+            --summary-dir "$RUNNER_TEMP/ci-summary-076"
+
+      - name: Publish redacted summary
+        if: always()
+        run: |
+          f="$RUNNER_TEMP/ci-summary-076/summary-full.md"
+          if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+
+      # actions/upload-artifact v6.0.0
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: stateful-076-summary
+          path: ${{ runner.temp }}/ci-summary-076
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop and remove this run's disposable stack (explicit, id-scoped -- not just supabase stop's own name/label lookup)
+        if: always()
+        run: |
+          set +x
+          # Best-effort "normal" shutdown first -- may or may not still find
+          # the renamed DB container (via its own compose-project label
+          # lookup); this is a supplementary attempt, never the sole or
+          # trusted mechanism.
+          supabase stop --no-backup > /dev/null 2>&1 || true
+
+          ids_file="$RUNNER_TEMP/pfm-disposable-container-ids.txt"
+          fail=0
+          if [ ! -f "$ids_file" ]; then
+            # The stack never reached the point of recording its own ids
+            # (i.e. it never actually started) -- nothing this job created
+            # exists to explicitly clean up.
+            echo "no recorded container ids ($ids_file missing) -- stack presumably never started; nothing to explicitly remove"
+          else
+            # Explicit, id-scoped removal -- acts ONLY on the exact
+            # container ids this job itself recorded right after its own
+            # `supabase start`, above. Never a name pattern (unreliable
+            # after the rename), never anything else on this runner: no
+            # `docker system prune`, no broader filter.
+            while IFS= read -r id; do
+              [ -n "$id" ] || continue
+              if docker inspect "$id" > /dev/null 2>&1; then
+                echo "removing recorded container $id"
+                docker rm -f "$id" > /dev/null 2>&1 || { echo "::error::failed to remove recorded container $id"; fail=1; }
+              fi
+            done < "$ids_file"
+
+            # Verification by the SAME recorded ids -- not a name filter.
+            while IFS= read -r id; do
+              [ -n "$id" ] || continue
+              if docker inspect "$id" > /dev/null 2>&1; then
+                echo "::error::recorded container $id is still present after cleanup"
+                fail=1
+              fi
+            done < "$ids_file"
+          fi
+
+          # Informational only, not the pass/fail signal (the rename means a
+          # name-pattern count here is not authoritative either way).
+          remaining_by_name="$(docker ps -aq --filter 'name=supabase_' | wc -l)"
+          echo "remaining supabase_*-named containers (informational): $remaining_by_name"
+          [ "$fail" = "0" ]

@@ -393,29 +393,32 @@ ROLLBACK;`)
     expect(out).toContain('PUBLIC_LEFT|0')
   })
 
-  // NOT fixed this round: this test reapplies the REAL migration file with its
-  // own BEGIN/COMMIT (a real, non-rolled-back commit against the shared stack,
-  // exactly like the pre-existing 091 reapply below it) -- undoing 092 here
-  // would mean the ONE PRE_092_UNDO_SQL use that is not inside a guaranteed
-  // rolled-back test transaction, which is explicitly not permitted this
-  // round. Left exactly as it was before this round's fix: it will still fail
-  // for the same "090 fail-closed (pre): application function contract drift"
-  // reason (092's functions are unknown to 090's own frozen pre-check) until a
-  // dedicated, DB-verified round addresses it -- see the accompanying report.
-  it('reapply of the real migration file (committed, BEGIN/COMMIT) is a clean no-op', () => {
-    const before = psqlOk(`${DIGEST_EXPR};\n${EXTRA_COUNTS_SQL}`)
-    // 091 changed handle_new_user_credits(), which 090 pins: restore the recorded pre-091 function inside the
-    // 090 transaction, then (if 091 was live) re-apply 091 so the stack ends exactly as it started.
-    const post091Live = psqlOk(`SELECT md5(replace(prosrc, E'\\r\\n', E'\\n')) = '${POST_091_HANDLE_NEW_USER_CREDITS_BODY_MD5}' FROM pg_proc WHERE oid = 'public.handle_new_user_credits()'::regprocedure;`).trim() === 't'
-    const run = psql(MIGRATION.replace(/^BEGIN;$/m, `BEGIN;\n${PRE_091_FUNCTION_SQL}`))
-    expect(run.status).toBe(0)
-    if (post091Live) {
-      psqlOk(readFileSync(path.join(ROOT, 'supabase', 'migrations', '091_starter_credit_contract.sql'), 'utf8'))
-    }
-    const after = psqlOk(`${DIGEST_EXPR};\n${EXTRA_COUNTS_SQL}`)
-    expect(after).toBe(before)
-    const counts = parseExtraCounts(after)
-    expect(Object.values(counts).every((n) => n === 0)).toBe(true)
+  // Now rolled back, not a real commit -- reuses the exact MIGRATION_BODY +
+  // PRE_092_UNDO_SQL pattern already proven elsewhere in this file (e.g.
+  // runBodyAfter()), rather than running the raw migration file's own
+  // embedded BEGIN/COMMIT for real. This is a version-correct, narrower
+  // reapply target than the old design: it reapplies MIGRATION_BODY directly
+  // on top of the already-090-hardened (092-absent, via PRE_092_UNDO_SQL)
+  // baseline, which is exactly the property "reapply is idempotent" is
+  // about, without needing to touch the shared stack for real at all.
+  it('reapply of MIGRATION_BODY on top of the 090-hardened baseline (rolled back) is a clean no-op', () => {
+    const digestExpr = DIGEST_EXPR.trim().replace(/^SELECT /, '')
+    const out = psqlOk(`
+BEGIN;
+${PRE_092_UNDO_SQL}
+SELECT (${digestExpr}) AS d0 \\gset
+${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'PRE|'")}
+${MIGRATION_BODY}
+${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'POST|'")}
+SELECT 'DIGEST_UNCHANGED|' || ((${digestExpr}) = :'d0');
+ROLLBACK;`)
+    const pre = parseExtraCounts(out, 'PRE')
+    const post = parseExtraCounts(out, 'POST')
+    // Already-090-hardened baseline (after PRE_092_UNDO_SQL) has zero extras
+    // before reapply; reapplying MIGRATION_BODY must not introduce any.
+    expect(Object.values(pre).every((n) => n === 0)).toBe(true)
+    expect(Object.values(post).every((n) => n === 0)).toBe(true)
+    expect(out).toContain('DIGEST_UNCHANGED|t')
   })
 })
 

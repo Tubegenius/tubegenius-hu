@@ -19,6 +19,33 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { buildNormalizedExtractionInput } from '@/lib/semantic-topic/normalize'
+import { isStatefulDbRequired, resolveStatefulDbTarget } from './lib/db-integration-guard'
+
+// This file's "migration 076 -- dual-function hash-gate" scenarios make
+// REAL, non-rolled-back writes (function-body REPLACE/REVOKE/GRANT cycles,
+// not just disposable data rows) -- see that describe block's own comment.
+// Every DB call in this file, including the plain data-fixture tests below
+// it, is therefore gated behind the SAME explicit target+confirmation
+// check, not just the hardcoded container name the rest of this codebase's
+// *-db-integration.test.ts files use: on 2026-09-28, running this file
+// against whatever local dev stack happened to be up (no explicit opt-in
+// asked or given) left it cycling through legacy/tampered function bodies
+// for real, only discovered later via a CI diff. See tests/lib/
+// db-integration-guard.ts for the exact env-var contract and
+// tests/db-integration-guard.test.ts for its own DB-free proof.
+const STATEFUL_TARGET = resolveStatefulDbTarget()
+const DB_CONTAINER = STATEFUL_TARGET.allowed ? STATEFUL_TARGET.container! : null
+// Set ONLY by the dedicated CI job that starts its own disposable stack for
+// exactly this file (never by a developer's shell, never by the shared
+// `regression` job, which excludes this file entirely -- see
+// .github/workflows/quality.yml's `stateful-076` job and its exclusion of
+// this path from `regression`'s own run). In that job, silently skipping
+// would hide the fact these tests never ran; here it is a hard, immediate
+// module-load failure instead.
+const STATEFUL_REQUIRED = isStatefulDbRequired()
+if (STATEFUL_REQUIRED && !STATEFUL_TARGET.allowed) {
+  throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the stateful DB target is not authorized: ${STATEFUL_TARGET.reason}`)
+}
 
 // child_process.execFile's async form does NOT support an `input` option
 // (that only exists on the *Sync variants) -- stdin has to be written and
@@ -26,8 +53,9 @@ import { buildNormalizedExtractionInput } from '@/lib/semantic-topic/normalize'
 // child process that still pipes SQL in over stdin the same way
 // dockerPsql()'s execSync call does.
 function dockerPsqlAsync(sql: string): Promise<{ ok: boolean; out: string }> {
+  if (!DB_CONTAINER) throw new Error('dockerPsqlAsync called without an authorized DB_CONTAINER -- this must never happen (callers are gated behind describeIfLocalDb)')
   return new Promise(resolve => {
-    const child = spawn('docker', ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-q', '-v', 'ON_ERROR_STOP=1', '-f', '-'])
+    const child = spawn('docker', ['exec', '-i', DB_CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-q', '-v', 'ON_ERROR_STOP=1', '-f', '-'])
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', d => { stdout += d })
@@ -63,15 +91,26 @@ function extractLegacyReserveBodySql(): string {
   return migrationText.slice(start, bodyEnd).replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
 }
 
+// Every one of these throws BEFORE attempting any Docker call at all when
+// the explicit target+confirmation gate is not satisfied -- see
+// STATEFUL_TARGET/DB_CONTAINER above. describeIfLocalDb below already
+// short-circuits to describe.skip in that case, so these throws are a
+// defense-in-depth backstop (e.g. against a future caller added outside a
+// describeIfLocalDb block), not the primary mechanism.
+function requireContainer(): string {
+  if (!DB_CONTAINER) throw new Error(`stateful DB-integration call attempted without authorization: ${STATEFUL_TARGET.reason}`)
+  return DB_CONTAINER
+}
+
 function dockerPsql(sql: string): string {
-  return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+  return execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
     input: sql,
     encoding: 'utf-8',
   })
 }
 function dockerPsqlExpectError(sql: string): string {
   try {
-    execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+    execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
       input: sql,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -87,7 +126,7 @@ function runFile(path: string): { out: string; threw: boolean } {
   // 079/069-file comments elsewhere in this test suite for why.
   const sql = readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
   try {
-    const out = execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1', {
+    const out = execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`, {
       input: sql,
       encoding: 'utf8',
     })
@@ -97,12 +136,51 @@ function runFile(path: string): { out: string; threw: boolean } {
   }
 }
 
+// Every table/function this file's helpers ever write to (dockerPsql calls
+// throughout cleanupTestData, the insert*/callExtractionRpc/callReserveRpc
+// helpers, and the hash-gate's own REPLACE/REVOKE/GRANT cycling) -- checked
+// ONCE, read-only, up front, before stackAvailable can become true, i.e.
+// before this file allows ANY write. Incomplete schema -- confirmed on
+// 2026-09-28: a long-lived local dev stack that never had migrations
+// 073/075 fully replayed was missing these -- means zero writes, full stop
+// (see the per-statement to_regclass guards in cleanupTestData() for
+// additional, redundant defense-in-depth on top of this single gate).
+const REQUIRED_TABLES = ['ai_provider_budget_reservations', 'ai_provider_daily_budgets', 'topic_extraction_runs', 'ai_extraction_control', 'signal_evidence', 'signal_sources', 'signal_runs']
+const REQUIRED_FUNCTIONS = ['record_topic_extraction_run', 'reserve_ai_provider_units']
+
+function verifyRequiredSchema(): { ok: boolean; missing: string[] } {
+  const tablesSql = REQUIRED_TABLES.map((t) => `'${t}'`).join(',')
+  const fnsSql = REQUIRED_FUNCTIONS.map((f) => `'${f}'`).join(',')
+  const out = dockerPsql(`
+    SELECT 'MISSING_TABLE|' || t FROM unnest(ARRAY[${tablesSql}]) t WHERE to_regclass('public.' || t) IS NULL
+    UNION ALL
+    SELECT 'MISSING_FUNCTION|' || f FROM unnest(ARRAY[${fnsSql}]) f
+      WHERE NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = f);
+  `).trim()
+  const missing = out ? out.split('\n').map((l) => l.trim()).filter(Boolean) : []
+  return { ok: missing.length === 0, missing }
+}
+
+// The target+confirmation gate is checked FIRST, before any Docker call is
+// even attempted -- on a normal developer machine (or any CI job that
+// hasn't explicitly opted in), DB_CONTAINER is null and stackAvailable
+// stays false without ever touching Docker, let alone this file's
+// state-mutating scenarios. When authorized, connectivity AND schema
+// completeness are BOTH required before stackAvailable becomes true.
 let stackAvailable = false
-try {
-  dockerPsql('select 1;')
-  stackAvailable = true
-} catch {
-  stackAvailable = false
+if (DB_CONTAINER) {
+  try {
+    dockerPsql('select 1;')
+    const schema = verifyRequiredSchema()
+    stackAvailable = schema.ok
+    if (!schema.ok && STATEFUL_REQUIRED) {
+      throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the target's schema is incomplete -- missing: ${schema.missing.join(', ')}. Zero writes will be attempted.`)
+    }
+    // else (not required, schema incomplete): stackAvailable stays false, i.e. skip (zero writes), not a hard failure.
+  } catch (e) {
+    if (STATEFUL_REQUIRED) throw e // required mode: connectivity/schema failures must fail the run, not silently skip.
+    stackAvailable = false
+  }
 }
 const describeIfLocalDb = stackAvailable ? describe : describe.skip
 
@@ -192,15 +270,40 @@ function ensureBothCorrected(): void {
   }
 }
 
+// Every statement is existence-guarded (to_regclass IS NOT NULL) rather than
+// assumed present. All four tables here (ai_provider_budget_reservations,
+// ai_provider_daily_budgets, topic_extraction_runs, ai_extraction_control)
+// ARE genuinely created by migrations 073/075 -- confirmed by direct git
+// grep, not a rename to any signal_* table (a DIFFERENT, earlier, unrelated
+// subsystem: 058/059/062 create signal_provider_daily_budgets/
+// signal_provider_budget_reservations/signal_collection_control for a
+// different purpose). A 2026-09-28 read-only incident check found them
+// missing on one specific long-lived local dev stack even though no
+// migration ever drops them -- i.e. an incomplete local schema (073/075
+// never fully replayed there), not a stale reference in this file. Guarding
+// each statement lets cleanup do its real job on a fully-migrated stack
+// (e.g. CI's fresh one) while degrading to a safe no-op -- not a hard
+// failure that aborts every other test in the file -- on an incomplete one.
+// Every delete stays scoped to this file's own 'sti-v2ts-%' marker rows
+// only; the ai_extraction_control update resets a single shared control
+// flag this file's own enableControl() turns on, not row-owned test data.
 function cleanupTestData() {
+  const guarded = (table: string, statement: string) => `
+    IF to_regclass('public.${table}') IS NOT NULL THEN
+      ${statement}
+    END IF;`
   dockerPsql(`
-    delete from ai_provider_budget_reservations where signal_evidence_id in (select id from signal_evidence where external_ref like 'sti-v2ts-%');
-    delete from ai_provider_daily_budgets where provider='anthropic' and usage_type='semantic_topic_extraction';
-    delete from topic_extraction_runs where signal_evidence_id in (select id from signal_evidence where external_ref like 'sti-v2ts-%');
-    delete from signal_evidence where external_ref like 'sti-v2ts-%';
-    delete from signal_sources where external_id like 'sti-v2ts-%';
-    delete from signal_runs where idempotency_key like 'sti-v2ts-%';
-    update ai_extraction_control set enabled = false where id = 1;
+    DO $cleanup$
+    BEGIN
+      ${guarded('ai_provider_budget_reservations', `DELETE FROM ai_provider_budget_reservations WHERE signal_evidence_id IN (SELECT id FROM signal_evidence WHERE external_ref LIKE 'sti-v2ts-%');`)}
+      ${guarded('ai_provider_daily_budgets', `DELETE FROM ai_provider_daily_budgets WHERE provider='anthropic' AND usage_type='semantic_topic_extraction';`)}
+      ${guarded('topic_extraction_runs', `DELETE FROM topic_extraction_runs WHERE signal_evidence_id IN (SELECT id FROM signal_evidence WHERE external_ref LIKE 'sti-v2ts-%');`)}
+      ${guarded('signal_evidence', `DELETE FROM signal_evidence WHERE external_ref LIKE 'sti-v2ts-%';`)}
+      ${guarded('signal_sources', `DELETE FROM signal_sources WHERE external_id LIKE 'sti-v2ts-%';`)}
+      ${guarded('signal_runs', `DELETE FROM signal_runs WHERE idempotency_key LIKE 'sti-v2ts-%';`)}
+      ${guarded('ai_extraction_control', `UPDATE ai_extraction_control SET enabled = false WHERE id = 1;`)}
+    END
+    $cleanup$;
   `)
 }
 
@@ -281,7 +384,45 @@ function canonicalInputFor(publishedAtIso: string): string {
 // leak, pinning this block to written order under --sequence.shuffle.tests
 // is correct, not a workaround.
 ;(stackAvailable ? describe : describe.skip)('migration 076 -- dual-function (record_topic_extraction_run + reserve_ai_provider_units) hash-gate', { shuffle: false }, () => {
-  beforeAll(() => ensureBothLegacy())
+  // Defense-in-depth beyond the target gate above and {shuffle:false}
+  // ordering: this describe block's safety must not depend on every
+  // individual `it` below happening to succeed and happening to call its
+  // own restoration helper -- that is exactly the gap a 2026-09-28 incident
+  // exposed (an interrupted run left the shared stack in a "legacy" state
+  // that a LATER-running, unrelated test file's own contract-drift check
+  // then observed and failed on). Two guarantees, both reusing the
+  // already-proven ensureBothLegacy()/ensureBothCorrected() helpers (no new,
+  // unverified transaction/isolation mechanism introduced here):
+  //   - beforeAll fails LOUDLY, before touching anything, if the entry state
+  //     is neither clean baseline (legacy or already-corrected) -- silently
+  //     forcing to legacy would erase the evidence of exactly this kind of
+  //     prior contamination instead of surfacing it.
+  //   - afterAll ALWAYS runs (a vitest guarantee, independent of which/how
+  //     many `it`s above passed, failed, or threw) and re-verifies the
+  //     restored state itself, rather than trusting that some earlier `it`'s
+  //     own ensureBothCorrected() call happened to run and succeed.
+  beforeAll(() => {
+    const entry = currentHashes()
+    const isCleanEntry =
+      (entry.rter === RTER_LEGACY_HASH || entry.rter === RTER_CORRECTED_HASH) &&
+      (entry.reserve === RESERVE_LEGACY_HASH || entry.reserve === RESERVE_CORRECTED_HASH)
+    if (!isCleanEntry) {
+      throw new Error(
+        `migration 076 hash-gate: refusing to start -- entry state is neither legacy nor corrected for at least one function ` +
+        `(rter=${entry.rter}, reserve=${entry.reserve}). This means an earlier run left the shared target mid-narrative or ` +
+        `tampered; investigate before forcing a reset (which would erase that evidence).`,
+      )
+    }
+    ensureBothLegacy()
+  })
+
+  afterAll(() => {
+    ensureBothCorrected()
+    const after = currentHashes()
+    if (after.rter !== RTER_CORRECTED_HASH || after.reserve !== RESERVE_CORRECTED_HASH) {
+      throw new Error(`migration 076 hash-gate: afterAll restoration verification FAILED -- left at ${JSON.stringify(after)}, expected both corrected. The shared target is now in a bad state; do not rely on it for other tests.`)
+    }
+  })
 
   it('REPLACE branch: both legacy -> both corrected v2, byte-exact, in one transaction', () => {
     const before = currentHashes()
