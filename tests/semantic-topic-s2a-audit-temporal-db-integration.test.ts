@@ -1,27 +1,66 @@
 // Semantic Topic Identity v0 -- S2A writerless audit/provenance schema +
 // temporal non-overlap hardening, REAL local DB integration tests.
 //
-// Same pattern as the 072 suite: uses the existing local Docker Supabase
-// stack (supabase_db_WillViralFinal), skips entirely (not a failure) when
-// unavailable, direct postgres-privileged psql fixture inserts (no writer
-// RPC exists yet -- S2A is still fully writerless), SET ROLE for real
-// grant-boundary checks.
+// Same pattern as the 072 suite: direct postgres-privileged psql fixture
+// inserts (no writer RPC exists yet -- S2A is still fully writerless), SET
+// ROLE for real grant-boundary checks.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 30000 })
 import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isStatefulDbRequired, resolveStatefulDbTarget } from './lib/db-integration-guard'
+
+// This file's "global topology gate" tests DROP the shared 077 human-review
+// tables (dropS2AObjects() -> dropHumanReviewObjects()) as part of proving
+// historical/partial-migration topology rejection, and its own restoration
+// path used to re-apply 077 in a way that could fail closed against a
+// perfectly correct, already-086-advanced record_topic_assignment_decision
+// (see restoreHumanReviewObjects()'s own header comment below) -- gated
+// behind the same explicit target+confirmation check as 074's/075's/076's
+// DB-integration suites, not the hardcoded long-lived dev-container name
+// the rest of this codebase's *-db-integration.test.ts files still use: on
+// 2026-09-28, running this file against whatever local dev stack happened
+// to be up left the 4 human-review tables permanently missing for the rest
+// of that run's shared stack, only discovered later via a cascade of
+// unrelated-looking downstream test failures. See tests/lib/
+// db-integration-guard.ts for the exact env-var contract and
+// tests/db-integration-guard.test.ts for its own DB-free proof.
+const STATEFUL_TARGET = resolveStatefulDbTarget()
+const DB_CONTAINER = STATEFUL_TARGET.allowed ? STATEFUL_TARGET.container! : null
+// Set ONLY by the dedicated CI job that starts its own disposable stack for
+// exactly this file (never by a developer's shell, never by the shared
+// `regression` job, which excludes this file entirely -- see
+// .github/workflows/quality.yml). In that job, silently skipping would
+// hide the fact these tests never ran; here it is a hard, immediate
+// module-load failure instead.
+const STATEFUL_REQUIRED = isStatefulDbRequired()
+if (STATEFUL_REQUIRED && !STATEFUL_TARGET.allowed) {
+  throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the stateful DB target is not authorized: ${STATEFUL_TARGET.reason}`)
+}
 
 const MIGRATION_PATH = join(process.cwd(), 'supabase/migrations/073_semantic_topic_s2a_audit_and_temporal_hardening.sql')
+const MIGRATION_074_PATH = join(process.cwd(), 'supabase/migrations/074_semantic_topic_s2b_writer_rpcs.sql')
 const MIGRATION_077_PATH = join(process.cwd(), 'supabase/migrations/077_semantic_topic_human_review_schema_foundation.sql')
 // 078 (record_topic_assignment_review_decision) is deliberately never
 // re-applied by this file's restoreHumanReviewObjects() -- see that
 // function's own header comment for why.
 const MIGRATION_084_PATH = join(process.cwd(), 'supabase/migrations/084_semantic_topic_attach_duplicate_outcome_contract.sql')
+const MIGRATION_086_PATH = join(process.cwd(), 'supabase/migrations/086_semantic_topic_eligible_source_identity_correctness.sql')
+
+// Every one of these throws BEFORE attempting any Docker call at all when
+// the explicit target+confirmation gate is not satisfied -- see
+// STATEFUL_TARGET/DB_CONTAINER above. describeIfLocalDb below already
+// short-circuits to describe.skip in that case, so this throw is a
+// defense-in-depth backstop, not the primary mechanism.
+function requireContainer(): string {
+  if (!DB_CONTAINER) throw new Error(`stateful DB-integration call attempted without authorization: ${STATEFUL_TARGET.reason}`)
+  return DB_CONTAINER
+}
 
 function dockerPsql(sql: string): string {
-  return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+  return execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
     input: sql,
     encoding: 'utf-8',
   })
@@ -29,7 +68,7 @@ function dockerPsql(sql: string): string {
 
 function dockerPsqlExpectError(sql: string): string {
   try {
-    execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+    execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
       input: sql,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -44,7 +83,7 @@ function runMigration(): { out: string; threw: boolean } {
   const migrationSql = readFileSync(MIGRATION_PATH, 'utf8')
   try {
     const out = execSync(
-      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      `docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`,
       { input: migrationSql, encoding: 'utf8' },
     )
     return { out, threw: false }
@@ -57,7 +96,7 @@ function runMigration077(): { out: string; threw: boolean } {
   const migrationSql = readFileSync(MIGRATION_077_PATH, 'utf8')
   try {
     const out = execSync(
-      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      `docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`,
       { input: migrationSql, encoding: 'utf8' },
     )
     return { out, threw: false }
@@ -70,7 +109,7 @@ function runMigrationAtPath(path: string): { out: string; threw: boolean } {
   const migrationSql = readFileSync(path, 'utf8')
   try {
     const out = execSync(
-      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      `docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`,
       { input: migrationSql, encoding: 'utf8' },
     )
     return { out, threw: false }
@@ -79,12 +118,126 @@ function runMigrationAtPath(path: string): { out: string; threw: boolean } {
   }
 }
 
+// record_topic_assignment_decision (074) hash bridge -- see
+// restoreHumanReviewObjects()'s own header comment for the exact bug this
+// closes. Both bodies extracted verbatim from their OWNING migration's own
+// source (never retyped -- a retyped copy risks a whitespace difference
+// that would change body_hash and silently defeat this bridge), the same
+// technique already proven in tests/semantic-topic-s2b-writer-rpcs-db-
+// integration.test.ts's extractLegacyRtadBodySql() and tests/semantic-
+// topic-canonical-input-timestamp-v2-db-integration.test.ts's extractLegacy*
+// helpers. Neither 077's nor 086's own shipped migration file is modified.
+const RTAD_LEGACY_HASH = '759de5ab474c9a7aa105564ca95541cc'
+const RTAD_CORRECTED_HASH = '9e681c94870719a0a7cb4605de458baf'
+
+function extractRtadLegacyBodySql(): string {
+  const migrationText = readFileSync(MIGRATION_074_PATH, 'utf8')
+  const start = migrationText.indexOf('CREATE FUNCTION public.record_topic_assignment_decision(')
+  if (start === -1) throw new Error('extractRtadLegacyBodySql: CREATE FUNCTION record_topic_assignment_decision not found in 074')
+  const bodyEnd = migrationText.indexOf('$rpc$;', start)
+  if (bodyEnd === -1) throw new Error('extractRtadLegacyBodySql: closing $rpc$; not found')
+  return migrationText.slice(start, bodyEnd + '$rpc$;'.length).replace('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION')
+}
+function extractRtadCorrectedBodySql(): string {
+  const migrationText = readFileSync(MIGRATION_086_PATH, 'utf8')
+  const start = migrationText.indexOf('CREATE OR REPLACE FUNCTION public.record_topic_assignment_decision(')
+  if (start === -1) throw new Error('extractRtadCorrectedBodySql: CREATE OR REPLACE FUNCTION record_topic_assignment_decision not found in 086')
+  const bodyEnd = migrationText.indexOf('$rpc$;', start)
+  if (bodyEnd === -1) throw new Error('extractRtadCorrectedBodySql: closing $rpc$; not found')
+  return migrationText.slice(start, bodyEnd + '$rpc$;'.length)
+}
+function currentRtadHash(): string {
+  return dockerPsql(
+    `select md5(replace(prosrc, E'\\r\\n', E'\\n')) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_topic_assignment_decision';`,
+  ).trim()
+}
+
+// A CREATE OR REPLACE FUNCTION never resets owner or ACL on an
+// already-existing function -- only the body/signature/volatility/
+// SECURITY/search_path clauses in extractRtadLegacy/CorrectedBodySql()'s
+// own extracted CREATE OR REPLACE statement are re-applied. This is
+// verified explicitly after EVERY bridge flip below (never merely assumed)
+// so a genuine corruption anywhere -- of the body, or of owner/ACL/
+// SECURITY DEFINER/search_path, which CREATE OR REPLACE does NOT touch --
+// is caught here rather than silently left in place. Mirrors exactly the
+// properties 086's own migration gate checks before it will REPLACE this
+// function (owner=postgres, SECURITY DEFINER, volatile, search_path=
+// public,pg_temp, EXECUTE granted to service_role only).
+function verifyRtadContract(expectedHash: string): void {
+  const row = dockerPsql(`
+    select
+      md5(replace(p.prosrc, E'\\r\\n', E'\\n')) || '|' ||
+      r.rolname || '|' ||
+      p.prosecdef::text || '|' ||
+      p.provolatile || '|' ||
+      coalesce((select string_agg(cfg, ';') from unnest(p.proconfig) cfg), '') || '|' ||
+      has_function_privilege('service_role', p.oid, 'EXECUTE')::text || '|' ||
+      has_function_privilege('anon', p.oid, 'EXECUTE')::text || '|' ||
+      has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_roles r on r.oid = p.proowner
+    where n.nspname = 'public' and p.proname = 'record_topic_assignment_decision';
+  `).trim()
+  const [hash, owner, secdef, volatility, searchPath, svcExec, anonExec, authExec] = row.split('|')
+  const problems: string[] = []
+  if (hash !== expectedHash) problems.push(`body_hash=${hash} (expected ${expectedHash})`)
+  if (owner !== 'postgres') problems.push(`owner=${owner} (expected postgres)`)
+  if (secdef !== 'true') problems.push(`secdef=${secdef} (expected true)`)
+  if (volatility !== 'v') problems.push(`volatility=${volatility} (expected v)`)
+  if (searchPath !== 'search_path=public, pg_temp') problems.push(`search_path="${searchPath}" (expected "search_path=public, pg_temp")`)
+  if (svcExec !== 't') problems.push('service_role is missing EXECUTE')
+  if (anonExec !== 'f') problems.push('anon unexpectedly has EXECUTE')
+  if (authExec !== 'f') problems.push('authenticated unexpectedly has EXECUTE')
+  if (problems.length > 0) {
+    throw new Error(`restoreHumanReviewObjects: record_topic_assignment_decision contract check failed after a bridge flip -- ${problems.join('; ')}`)
+  }
+}
+
+// Every table/function this file's helpers ever write to or depend on:
+// its own 073 audit/temporal objects, the 4 human-review tables it
+// drops/restores (dropHumanReviewObjects/restoreHumanReviewObjects), and
+// record_topic_assignment_decision (074/086), whose hash this file's own
+// restoration bridge inspects -- checked ONCE, read-only, up front, before
+// stackAvailable can become true, i.e. before this file allows ANY write.
+const REQUIRED_TABLES = [
+  'signal_evidence', 'signal_sources', 'signal_runs', 'topic_extraction_runs', 'topic_assignment_decisions',
+  'semantic_topic_membership', 'semantic_topic_membership_events', 'semantic_topics',
+  'topic_assignment_review_requests', 'topic_assignment_review_events', 'semantic_topic_reviewers', 'semantic_topic_reviewer_events',
+]
+const REQUIRED_FUNCTIONS = ['record_topic_assignment_decision']
+
+function verifyRequiredSchema(): { ok: boolean; missing: string[] } {
+  const tablesSql = REQUIRED_TABLES.map((t) => `'${t}'`).join(',')
+  const fnsSql = REQUIRED_FUNCTIONS.map((f) => `'${f}'`).join(',')
+  const out = dockerPsql(`
+    SELECT 'MISSING_TABLE|' || t FROM unnest(ARRAY[${tablesSql}]) t WHERE to_regclass('public.' || t) IS NULL
+    UNION ALL
+    SELECT 'MISSING_FUNCTION|' || f FROM unnest(ARRAY[${fnsSql}]) f
+      WHERE NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = f);
+  `).trim()
+  const missing = out ? out.split('\n').map((l) => l.trim()).filter(Boolean) : []
+  return { ok: missing.length === 0, missing }
+}
+
+// The target+confirmation gate is checked FIRST, before any Docker call is
+// even attempted -- on a normal developer machine (or any CI job that
+// hasn't explicitly opted in), DB_CONTAINER is null and stackAvailable
+// stays false without ever touching Docker. When authorized, connectivity
+// AND schema completeness are BOTH required before stackAvailable becomes
+// true.
 let stackAvailable = false
-try {
-  dockerPsql('select 1;')
-  stackAvailable = true
-} catch {
-  stackAvailable = false
+if (DB_CONTAINER) {
+  try {
+    dockerPsql('select 1;')
+    const schema = verifyRequiredSchema()
+    stackAvailable = schema.ok
+    if (!schema.ok && STATEFUL_REQUIRED) {
+      throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the target's schema is incomplete -- missing: ${schema.missing.join(', ')}. Zero writes will be attempted.`)
+    }
+    // else (not required, schema incomplete): stackAvailable stays false, i.e. skip (zero writes), not a hard failure.
+  } catch (e) {
+    if (STATEFUL_REQUIRED) throw e // required mode: connectivity/schema failures must fail the run, not silently skip.
+    stackAvailable = false
+  }
 }
 
 const describeIfLocalDb = stackAvailable ? describe : describe.skip
@@ -254,13 +407,70 @@ function restoreHumanReviewObjects() {
   if (out === '4') {
     return
   }
+
+  // record_topic_assignment_decision version bridge (test-environment-only
+  // -- 077's and 086's own shipped migrations/hash-gates are NEVER
+  // modified). 077's and 084's own final self-checks hard-pin this
+  // function's expected body to 074's ORIGINAL legacy hash, written before
+  // 086 existed and never updated for 086's later, legitimate REPLACE. On
+  // a fully-migrated stack (086 always runs after 077/084) the function is
+  // normally already in 086's corrected state by the time this helper
+  // needs to re-apply 077+084 in isolation -- which would otherwise fail
+  // closed on a perfectly correct body (confirmed live via CI on
+  // 2026-09-28: "077 CRITICAL: record_topic_assignment_decision body hash
+  // changed (got 9e681c94..., expected 759de5ab...)"), aborting this
+  // helper before the 4 tables were recreated and leaving them
+  // permanently missing for the rest of that run's shared stack. Bracket
+  // the 077+084 re-apply with a byte-exact, never-retyped flip to 074's
+  // legacy body and back to 086's corrected body afterward, so every
+  // other file in this shared stack still finds the function in its
+  // normal steady state. A genuinely unrecognized third state is never
+  // silently bridged over.
+  const rtadHashBefore = currentRtadHash()
+  if (rtadHashBefore !== RTAD_LEGACY_HASH && rtadHashBefore !== RTAD_CORRECTED_HASH) {
+    throw new Error(
+      `restoreHumanReviewObjects: record_topic_assignment_decision is in neither the known 074 legacy (${RTAD_LEGACY_HASH}) nor 086 corrected (${RTAD_CORRECTED_HASH}) body hash (got ${rtadHashBefore}) -- refusing to bridge blindly over a genuinely unrecognized state.`,
+    )
+  }
+  const bridged = rtadHashBefore === RTAD_CORRECTED_HASH
+  if (bridged) {
+    dockerPsql(extractRtadLegacyBodySql())
+    // Full contract, not just the body hash -- see verifyRtadContract()'s
+    // own header comment for exactly why owner/ACL/SECURITY/search_path
+    // are checked here too, never merely assumed to survive the REPLACE.
+    verifyRtadContract(RTAD_LEGACY_HASH)
+  }
+
   const result = runMigration077()
   if (result.threw) {
+    if (bridged) {
+      try {
+        dockerPsql(extractRtadCorrectedBodySql())
+      } catch {
+        // Best-effort only -- the original 077 failure below is the
+        // authoritative error; a restore-attempt failure here must never
+        // mask it.
+      }
+    }
     throw new Error(`restoreHumanReviewObjects: 077 re-apply failed -- ${result.out}`)
   }
   const r084 = runMigrationAtPath(MIGRATION_084_PATH)
   if (r084.threw) {
+    if (bridged) {
+      try {
+        dockerPsql(extractRtadCorrectedBodySql())
+      } catch {
+        // Best-effort only -- see comment above.
+      }
+    }
     throw new Error(`restoreHumanReviewObjects: 084 re-apply failed -- ${r084.out}`)
+  }
+
+  if (bridged) {
+    dockerPsql(extractRtadCorrectedBodySql())
+    // Full contract, not just the body hash -- this is the restoration the
+    // rest of the shared stack actually depends on staying correct.
+    verifyRtadContract(RTAD_CORRECTED_HASH)
   }
 }
 

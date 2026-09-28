@@ -3,31 +3,34 @@ name: Quality
 # Deterministic test gates.
 #   unit          fast, database-free feedback (stack-gated tests skip by
 #                 design; the guard verifies that ONLY stack-gated files skip).
-#   regression    the full suite (MINUS the three files stateful-tests owns,
+#   regression    the full suite (MINUS the four files stateful-tests owns,
 #                 see below) against a clean local Supabase stack (Docker on
 #                 the GitHub-hosted runner). Zero failures and zero unknown
 #                 skips are required: the closed allowlist in
 #                 .github/ci/skip-allowlist.json is the only place a skip may
 #                 be declared, and stale allowlist entries fail the job too.
-#   stateful-tests (matrix: 074 / 075 / 076) -- three DB-integration files
-#                 whose own test logic makes REAL, non-rolled-back writes
-#                 that can leave shared function/table state mutated for
-#                 other files in the same run (074's and 075's own
-#                 "artificial body drift..." tests DROP + recreate RPC
-#                 functions as part of proving fail-closed drift rejection;
-#                 076's "migration 076 -- dual-function hash-gate" scenarios
-#                 do function-body REPLACE/REVOKE/GRANT cycles) -- see each
-#                 file's own header comment for why none of them may ever run
-#                 against regression's shared stack, or against each other's:
-#                 each matrix leg gets its OWN fresh, disposable Supabase
-#                 stack, on its own runner, renamed away from the shared
-#                 default container name so tests/lib/db-integration-guard.ts's
-#                 denylist cannot be mistaken for it, used by nothing else,
-#                 and torn down after. PFM_STATEFUL_DB_REQUIRED=1 there means
-#                 a missing authorization or an incomplete schema is a hard
-#                 job FAILURE, never a silent skip -- see that env var's own
-#                 doc comment in tests/lib/db-integration-guard.ts.
-#                 fail-fast is disabled for this matrix so all three legs
+#   stateful-tests (matrix: s2a / 074 / 075 / 076) -- four DB-integration
+#                 files whose own test logic makes REAL, non-rolled-back
+#                 writes that can leave shared function/table state mutated
+#                 for other files in the same run (s2a's "global topology
+#                 gate" tests DROP the 4 shared 077 human-review tables as
+#                 part of proving historical-topology rejection; 074's and
+#                 075's own "artificial body drift..." tests DROP + recreate
+#                 RPC functions as part of proving fail-closed drift
+#                 rejection; 076's "migration 076 -- dual-function hash-gate"
+#                 scenarios do function-body REPLACE/REVOKE/GRANT cycles) --
+#                 see each file's own header comment for why none of them may
+#                 ever run against regression's shared stack, or against each
+#                 other's: each matrix leg gets its OWN fresh, disposable
+#                 Supabase stack, on its own runner, renamed away from the
+#                 shared default container name so tests/lib/
+#                 db-integration-guard.ts's denylist cannot be mistaken for
+#                 it, used by nothing else, and torn down after.
+#                 PFM_STATEFUL_DB_REQUIRED=1 there means a missing
+#                 authorization or an incomplete schema is a hard job
+#                 FAILURE, never a silent skip -- see that env var's own doc
+#                 comment in tests/lib/db-integration-guard.ts.
+#                 fail-fast is disabled for this matrix so all four legs
 #                 always report their own independent result even if one
 #                 fails first.
 # Typecheck and build live in ci.yml and are independent jobs, so they always
@@ -195,7 +198,7 @@ jobs:
         run: |
           set +x
           set -o pipefail
-          # These three files are EXCLUDED here on purpose: each one's
+          # These four files are EXCLUDED here on purpose: each one's
           # stateful scenarios make real, non-rolled-back writes (see the
           # header comment near the top of this workflow) and must never run
           # against this job's shared stack (also used by every other
@@ -207,6 +210,7 @@ jobs:
           # outright is the correct, explicit statement of ownership, not a
           # workaround.
           npx vitest run \
+            --exclude tests/semantic-topic-s2a-audit-temporal-db-integration.test.ts \
             --exclude tests/semantic-topic-s2b-writer-rpcs-db-integration.test.ts \
             --exclude tests/semantic-topic-s3a-ai-quota-db-integration.test.ts \
             --exclude tests/semantic-topic-canonical-input-timestamp-v2-db-integration.test.ts \
@@ -254,11 +258,21 @@ jobs:
     timeout-minutes: 30
     strategy:
       # Each leg gets its own fresh runner + disposable stack; one leg
-      # failing must never hide or cancel the other two legs' own
-      # independent, required result.
+      # failing must never hide or cancel the other legs' own independent,
+      # required result.
       fail-fast: false
       matrix:
         include:
+          - slug: s2a
+            file: tests/semantic-topic-s2a-audit-temporal-db-integration.test.ts
+            # Exact expected count as of this workflow revision (66 static
+            # `it(` declarations + 12 generated by 4 separate
+            # `it.each(tables)` calls sharing the same 3-element `tables`
+            # array, in the "security / grant matrix" describe block --
+            # confirmed by static source inspection, never by executing
+            # this file). Update ONLY together with a matching, deliberate
+            # edit to that test file, never to make a shortfall go away.
+            expected_total: 78
           - slug: '074'
             file: tests/semantic-topic-s2b-writer-rpcs-db-integration.test.ts
             # Exact expected count as of this workflow revision (69 static

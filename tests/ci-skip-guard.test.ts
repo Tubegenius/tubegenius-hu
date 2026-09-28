@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { evaluateReport, main, parseAllowlist, redact, type AllowEntry, type GuardOptions } from '../scripts/ci-skip-guard'
+import { evaluateReport, main, parseAllowlist, redact, renderSummary, type AllowEntry, type GuardOptions } from '../scripts/ci-skip-guard'
 
 const ROOT = path.resolve('/repo')
 const abs = (rel: string) => path.join(ROOT, rel)
@@ -66,11 +66,26 @@ describe('full mode', () => {
     expect(r.failures.join('\n')).toContain('FAILED tests/a.test.ts::a > breaks -- AssertionError: nope')
   })
 
-  it('fails on a file-level (collection) failure even when no assertion failed', () => {
+  it('fails on a file-level (collection) failure even when no assertion failed, and counts/labels it as zero recorded assertions (never-started tests)', () => {
     const rep = report([file('tests/b.test.ts', [], 'failed', 'Node.js 20 detected without native WebSocket support.')])
     const r = evaluateReport(rep, options())
     expect(r.ok).toBe(false)
+    expect(r.counts.failedFilesNoAssertions).toBe(1)
     expect(r.failures.join('\n')).toContain('FAILED FILE tests/b.test.ts')
+    expect(r.failures.join('\n')).toContain('0 per-test assertions recorded for this file: a hook/collection failure before any test ran')
+    expect(r.failures.join('\n')).toContain('never started and are counted neither as failed nor as skipped')
+  })
+
+  it('distinguishes a file-level failure AFTER its tests already ran (non-zero recorded assertions) from a hook/collection failure -- not counted as a zero-assertion file', () => {
+    const rep = report([
+      file('tests/c.test.ts', [assertion('c > ok', 'passed'), assertion('c > also ok', 'passed')], 'failed', 'afterAll: teardown connection leaked'),
+    ])
+    const r = evaluateReport(rep, options())
+    expect(r.ok).toBe(false)
+    expect(r.counts.failedFilesNoAssertions).toBe(0)
+    expect(r.failures.join('\n')).toContain('FAILED FILE tests/c.test.ts')
+    expect(r.failures.join('\n')).toContain("2 per-test assertion(s) recorded, none with status 'failed'")
+    expect(r.failures.join('\n')).not.toContain('never started')
   })
 
   it('fails on an unknown skip', () => {
@@ -115,6 +130,18 @@ describe('full mode', () => {
     const r = evaluateReport(rep, options())
     expect(r.failures.join('\n')).not.toContain(jwt)
     expect(r.failures.join('\n')).toContain('[REDACTED]')
+  })
+})
+
+describe('renderSummary', () => {
+  it('surfaces the failed-files-with-zero-recorded-assertions count in the header block', () => {
+    const rep = report([file('tests/b.test.ts', [], 'failed', 'Node.js 20 detected without native WebSocket support.')])
+    const r = evaluateReport(rep, options())
+    const summary = renderSummary(r, 'full', 'linux')
+    expect(summary).toContain('failed files with zero recorded per-test assertions')
+    expect(summary).toContain('hook/collection failure -- their declared tests never started')
+    expect(summary).toMatch(/failed files with zero recorded per-test assertions[^:]*: 1/)
+    expect(summary).toContain('verdict: FAIL')
   })
 })
 
