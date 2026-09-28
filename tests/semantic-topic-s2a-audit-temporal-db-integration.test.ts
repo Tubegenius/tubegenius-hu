@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isStatefulDbRequired, resolveStatefulDbTarget } from './lib/db-integration-guard'
+import { checkRtadContract, parseRtadContractRow } from './lib/rtad-contract'
 
 // This file's "global topology gate" tests DROP the shared 077 human-review
 // tables (dropS2AObjects() -> dropHumanReviewObjects()) as part of proving
@@ -152,23 +153,34 @@ function currentRtadHash(): string {
   ).trim()
 }
 
-// CORRECTED CLAIM (this file previously asserted, incorrectly, that a bare
-// CREATE OR REPLACE FUNCTION on an already-existing function never resets
-// its ACL, and that re-applying it here therefore needed no explicit
-// GRANT -- confirmed live via CI on 2026-09-28 to be wrong in this exact
-// path: after extractRtadLegacyBodySql()'s bare REPLACE, anon and
-// authenticated ended up WITH EXECUTE and service_role WITHOUT it).
-// Whatever the precise mechanism, 074's OWN migration -- in the branch
-// that originally creates this function -- never relies on that
-// assumption either: immediately after its own CREATE FUNCTION, 074
-// explicitly runs REVOKE ALL ... FROM PUBLIC, anon, authenticated; GRANT
-// EXECUTE ... TO service_role (supabase/migrations/074_..._writer_rpcs.sql,
-// right after this function's closing $rpc$;). This bridge does the same,
-// explicitly, after EVERY flip below -- both the legacy-flip (074's exact
-// arg-type list, matching 074's own applied REVOKE/GRANT above) and the
+// CORRECTED CLAIM, second pass: an earlier version of this comment
+// asserted that CI had disproven Postgres's documented ACL-preservation
+// guarantee for CREATE OR REPLACE FUNCTION on an already-existing
+// function. That was wrong -- Postgres's guarantee was never actually
+// disproven. The real bug (root-caused via direct source reading of this
+// file at commit 55183bc, confirmed live via CI on 2026-09-28) was in
+// verifyRtadContract() itself: has_function_privilege(...)::text produces
+// the literal text 'true'/'false' (Postgres's own boolean-to-text cast),
+// never psql's `-A -t` display abbreviation ('t'/'f') -- that check was
+// comparing svcExec/anonExec/authExec against 't'/'f' while comparing
+// secdef, built via the exact same `::text` cast, against 'true'/'false'
+// in the very same function -- an internal inconsistency, now fixed by
+// moving parsing/validation into tests/lib/rtad-contract.ts (see that
+// file's own PARSE FORMAT NOTE, and its DB-free unit test).
+//
+// The explicit REVOKE/GRANT below, and running it atomically with each
+// body flip, are KEPT regardless: not because CI proved them necessary to
+// fix this particular bug, but because 074's OWN migration -- in the
+// branch that originally creates this function -- never relies on
+// implicit ACL preservation either: immediately after its own CREATE
+// FUNCTION, 074 explicitly runs REVOKE ALL ... FROM PUBLIC, anon,
+// authenticated; GRANT EXECUTE ... TO service_role
+// (supabase/migrations/074_..._writer_rpcs.sql, right after this
+// function's closing $rpc$;). This bridge does the same, explicitly,
+// after EVERY flip below -- both the legacy-flip (074's exact arg-type
+// list, matching 074's own applied REVOKE/GRANT above) and the
 // corrected-restore (086 replaces the body only; it issues no REVOKE/GRANT
-// of its own, so the ACL must be explicitly reasserted here too) -- using
-// 090's own pinned, currently-authoritative contract
+// of its own) -- using 090's own pinned, currently-authoritative contract
 // (supabase/migrations/090_public_schema_privilege_hardening.sql: `acl=
 // postgres:EXECUTE,service_role:EXECUTE`), not a blind copy of 074's
 // historical grant text. rtadGrantContractSql() below is the single
@@ -198,7 +210,10 @@ function rtadFlipSql(bodySql: string): string {
 // is caught here rather than silently left in place. Mirrors exactly the
 // properties 086's own migration gate checks before it will REPLACE this
 // function (owner=postgres, SECURITY DEFINER, volatile, search_path=
-// public,pg_temp, EXECUTE granted to service_role only).
+// public,pg_temp, EXECUTE granted to service_role only). Parsing/
+// validation itself lives in tests/lib/rtad-contract.ts (pure, DB-free,
+// covered by its own unit test) -- only the actual Docker/psql round-trip
+// stays here.
 function verifyRtadContract(expectedHash: string): void {
   const row = dockerPsql(`
     select
@@ -212,17 +227,8 @@ function verifyRtadContract(expectedHash: string): void {
       has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace join pg_roles r on r.oid = p.proowner
     where n.nspname = 'public' and p.proname = 'record_topic_assignment_decision';
-  `).trim()
-  const [hash, owner, secdef, volatility, searchPath, svcExec, anonExec, authExec] = row.split('|')
-  const problems: string[] = []
-  if (hash !== expectedHash) problems.push(`body_hash=${hash} (expected ${expectedHash})`)
-  if (owner !== 'postgres') problems.push(`owner=${owner} (expected postgres)`)
-  if (secdef !== 'true') problems.push(`secdef=${secdef} (expected true)`)
-  if (volatility !== 'v') problems.push(`volatility=${volatility} (expected v)`)
-  if (searchPath !== 'search_path=public, pg_temp') problems.push(`search_path="${searchPath}" (expected "search_path=public, pg_temp")`)
-  if (svcExec !== 't') problems.push('service_role is missing EXECUTE')
-  if (anonExec !== 'f') problems.push('anon unexpectedly has EXECUTE')
-  if (authExec !== 'f') problems.push('authenticated unexpectedly has EXECUTE')
+  `)
+  const problems = checkRtadContract(parseRtadContractRow(row), expectedHash)
   if (problems.length > 0) {
     throw new Error(`restoreHumanReviewObjects: record_topic_assignment_decision contract check failed after a bridge flip -- ${problems.join('; ')}`)
   }
