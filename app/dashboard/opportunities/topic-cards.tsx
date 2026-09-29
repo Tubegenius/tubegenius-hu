@@ -404,8 +404,14 @@ export function TopicCard({ topic, index, onReplace, hasPool, onSimilarResult, r
     event.preventDefault()
     setPackageError(null)
     if (!paidResultId) {
-      storeOpportunityPackageContext(topic, displayTitle)
-      window.location.href = packageUrl
+      // Sose navigáljunk csendben bizonyíték nélkül -- ez a döntés (2026-09-29
+      // QA) kizárólag a "Folytatás bizonyíték nélkül" gombon, explicit
+      // user-kattintásra hozható meg, ugyanúgy, mint egy sikertelen
+      // evidence-snapshot POST után. Hiányzó paidResultId nem jelenti
+      // automatikusan, hogy nincs bizonyíték -- lehet, hogy csak a szülő
+      // állapot (pl. egy imént megnyitott korábbi eredmény) nem kapta meg
+      // helyesen -- ezért ez a fail-closed alapeset.
+      setPackageError({ kind: 'degradable', message: 'Nincs elérhető szerveroldali bizonyíték ehhez az ajánláshoz.' })
       return
     }
     setPackageLoading(true)
@@ -989,8 +995,14 @@ export function DiscoveryLaneCard({ topic, onSearch, paidResultId }: {
     event.preventDefault()
     setPackageError(null)
     if (!paidResultId) {
-      storeOpportunityPackageContext(topic, displayTitle)
-      window.location.href = packageUrl
+      // Sose navigáljunk csendben bizonyíték nélkül -- ez a döntés (2026-09-29
+      // QA) kizárólag a "Folytatás bizonyíték nélkül" gombon, explicit
+      // user-kattintásra hozható meg, ugyanúgy, mint egy sikertelen
+      // evidence-snapshot POST után. Hiányzó paidResultId nem jelenti
+      // automatikusan, hogy nincs bizonyíték -- lehet, hogy csak a szülő
+      // állapot (pl. egy imént megnyitott korábbi eredmény) nem kapta meg
+      // helyesen -- ezért ez a fail-closed alapeset.
+      setPackageError({ kind: 'degradable', message: 'Nincs elérhető szerveroldali bizonyíték ehhez az ajánláshoz.' })
       return
     }
     setPackageLoading(true)

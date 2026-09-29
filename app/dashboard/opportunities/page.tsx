@@ -42,10 +42,15 @@ export default function OpportunitiesPage() {
   // The server-stored id of the CURRENTLY DISPLAYED result set -- the only
   // thing the client sends to resolve an evidence snapshot server-side
   // (see lib/opportunity-evidence/evidence-service.ts). Null whenever the
-  // current topics came from a source with no stable paid_results row
-  // (e.g. cache_only miss with a live candidate preview) -- the direct-
-  // create and save-to-memory paths both degrade to the pre-snapshot
-  // behaviour in that case, not a fabricated pointer.
+  // current topics came from a source with no stable paid_results row (e.g.
+  // cache_only miss with a live candidate preview). MUST be kept in sync
+  // with `topics`/`poolTopics` by every setter of those two -- every call
+  // site below either sets it alongside them or explicitly resets it to
+  // null, so a stale id from a PREVIOUS result set can never be sent for a
+  // DIFFERENT, currently displayed one. A null value no longer causes a
+  // silent no-evidence continuation (2026-09-29 QA finding): TopicCard/
+  // DiscoveryLaneCard's "Készíts csomagot" surfaces an explicit "Folytatás
+  // bizonyíték nélkül" choice instead -- see topic-cards.tsx.
   const [lastPaidResultId, setLastPaidResultId] = useState<string | null>(null)
   const [poolTopics, setPoolTopics] = useState<ExtendedTopic[]>([])
   const [cached, setCached] = useState(false)
@@ -94,6 +99,11 @@ export default function OpportunitiesPage() {
     prof: CreatorProfile | null,
     explicitPaidResultId?: string,
   ): Promise<boolean> {
+    // Defense-in-depth: sose maradjon bent egy KORÁBBI hívásból származó
+    // paid_result azonosító, mielőtt ennek a hívásnak a saját (esetleg
+    // hiányzó) eredménye eldőlne -- ld. a "Készíts csomagot" gomb 2026-09-29
+    // QA-n talált csendes bizonyíték-nélküli-navigáció hibáját lejjebb.
+    setLastPaidResultId(null)
     try {
       const cacheRes = await fetch('/api/opportunity', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -110,6 +120,14 @@ export default function OpportunitiesPage() {
         setTopics(cacheData.topics || [])
         setPoolTopics(cacheData.pool_topics || [])
         setCached(true)
+        // A hiányzó sor volt a gyökérok: a paidResultId-vel történő explicit
+        // történeti újranyitás (openStaleSavedResult "testvér" útja) a
+        // topics/poolTopics-ot beállította, de a TopicCard/DiscoveryLaneCard-
+        // nak átadott paidResultId prop -- ami a "Készíts csomagot" szerver-
+        // oldali bizonyíték-feloldásához kell -- null maradt. Enélkül a gomb
+        // csendben a régi, bizonyíték nélküli útra esett vissza egy olyan
+        // eredménynél is, aminek ténylegesen van szerveroldali snapshotja.
+        setLastPaidResultId(cacheData.paid_result_id || null)
         return true
       }
       // Lejárt mentett/cache-elt eredmény VAGY teljes cache-miss: NE induljon
@@ -155,6 +173,9 @@ export default function OpportunitiesPage() {
             const candidate = JSON.parse(raw) as ExtendedTopic
             setHighlightTopic(candidate)
             setTopics([candidate])
+            // Élő, dashboard-átadott jelölt -- nincs hozzá saját paid_results
+            // sor, tehát nincs szerveroldali bizonyíték-pointer sem.
+            setLastPaidResultId(null)
             setNiche(prof?.niche || '')
             return
           }

@@ -186,6 +186,34 @@ describe('opportunities/page.tsx — mount never auto-generates a real search (P
     expect(fnBody).toMatch(/setStaleState\(\{\s*kind:\s*'miss'/)
   })
 
+  // 2026-09-29 QA finding: a historical (paidResultId-driven) reopen via
+  // tryCacheOnlyLookup populated topics/poolTopics but never lastPaidResultId,
+  // so "Készíts csomagot" silently fell back to the no-evidence path even for
+  // a result with a real, resolvable server-side snapshot. Fixed by (1)
+  // resetting lastPaidResultId at the top of every call -- so a PREVIOUS
+  // result's id can never leak into a newly displayed, different one -- and
+  // (2) setting it from the response on the actual cache/paid_result hit.
+  it('resets lastPaidResultId at the very start of every call, before the fetch -- no stale id from a previous result can leak into this one', () => {
+    const fnIdx = src.indexOf('async function tryCacheOnlyLookup(')
+    expect(fnIdx).toBeGreaterThan(-1)
+    const tryIdx = src.indexOf('try {', fnIdx)
+    expect(tryIdx).toBeGreaterThan(fnIdx)
+    const preamble = src.slice(fnIdx, tryIdx)
+    expect(preamble).toContain('setLastPaidResultId(null)')
+  })
+
+  it('sets lastPaidResultId from the response on a successful cache/paid_result hit, right alongside setTopics/setPoolTopics/setCached', () => {
+    const fnIdx = src.indexOf('async function tryCacheOnlyLookup(')
+    const fnEndIdx = src.indexOf('\n\n  // Keresési előzmény visszaállítása', fnIdx)
+    const fnBody = src.slice(fnIdx, fnEndIdx)
+    const successIdx = fnBody.indexOf('setCached(true)')
+    expect(successIdx).toBeGreaterThan(-1)
+    const afterSuccess = fnBody.slice(successIdx, successIdx + 900)
+    expect(afterSuccess).toContain("setLastPaidResultId(cacheData.paid_result_id || null)")
+    // Must still be inside the SAME success branch, before the branch's own return.
+    expect(afterSuccess.indexOf('setLastPaidResultId')).toBeLessThan(afterSuccess.indexOf('return true'))
+  })
+
   it('the nicheParam mount branch calls tryCacheOnlyLookup and nothing else — no inline fetch, no auto-generate fallback', () => {
     const idx = src.indexOf('if (nicheParam) {')
     expect(idx).toBeGreaterThan(-1)

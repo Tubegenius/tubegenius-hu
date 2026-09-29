@@ -165,7 +165,7 @@ describe('TopicCard -- real rendered click → save → navigation', () => {
     restore()
   })
 
-  it('no paidResultId at all: click goes straight to the plain package URL, no fetch attempted', async () => {
+  it('no paidResultId at all: NO silent navigation, no fetch attempted — only the explicit "Folytatás bizonyíték nélkül" click navigates (2026-09-29 QA fix: this used to silently navigate)', async () => {
     const fetchSpy = vi.fn()
     const restore = installFetchRouter(async (url) => { fetchSpy(url); return undefined })
     const topic = makeTopic()
@@ -180,6 +180,12 @@ describe('TopicCard -- real rendered click → save → navigation', () => {
     const button = screen.getByRole('link', { name: /Videócsomag/i })
     fireEvent.click(button)
 
+    const bypass = await screen.findByText('Folytatás bizonyíték nélkül')
+    // The missing-id click alone must NOT navigate or call the server.
+    expect(window.location.href).toBe('')
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes('/api/opportunity/evidence-snapshot'))).toBe(false)
+
+    fireEvent.click(bypass)
     await waitFor(() => expect(window.location.href).toContain('/dashboard/video-package'))
     expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes('/api/opportunity/evidence-snapshot'))).toBe(false)
     restore()
@@ -244,6 +250,26 @@ describe('DiscoveryLaneCard -- real rendered click → save → navigation (iden
 
     const bypass = await screen.findByText('Folytatás bizonyíték nélkül')
     expect(window.location.href).toBe('')
+    fireEvent.click(bypass)
+    await waitFor(() => expect(window.location.href).toContain('/dashboard/video-package'))
+    restore()
+  })
+
+  it('no paidResultId at all: identical contract to TopicCard — no silent navigation, explicit bypass required', async () => {
+    const fetchSpy = vi.fn()
+    const restore = installFetchRouter(async (url) => { fetchSpy(url); return undefined })
+    const topic = makeTopic({ id: 'discovery-topic-4' })
+    render(withCreditProvider(
+      React.createElement(DiscoveryLaneCard, { topic, onSearch: () => {}, paidResultId: null }),
+    ))
+
+    const button = screen.getByRole('link', { name: /Videócsomag/i })
+    fireEvent.click(button)
+
+    const bypass = await screen.findByText('Folytatás bizonyíték nélkül')
+    expect(window.location.href).toBe('')
+    expect(fetchSpy.mock.calls.some((c) => String(c[0]).includes('/api/opportunity/evidence-snapshot'))).toBe(false)
+
     fireEvent.click(bypass)
     await waitFor(() => expect(window.location.href).toContain('/dashboard/video-package'))
     restore()
