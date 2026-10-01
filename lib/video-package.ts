@@ -11,6 +11,67 @@ import { MODELS } from '@/lib/models'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import type { QualityStatus } from '@/lib/fact-safety'
 
+// 2026-10-01 incident fix -- generateCreativeCore's non-streamed, 6000-max-
+// token Sonnet call didn't finish within the shared client's 60s timeout
+// (observed: ~38.7 output tok/s, two Error-499 attempts at 2,275/2,332
+// tokens in 59.44-59.60s -- Anthropic's own Console Logs confirm the
+// provider was actively generating, not rejecting). Fix is scoped to THIS
+// route's two AI calls only -- no other caller's timeout/retry changes.
+//
+// Core: streaming (so progress isn't capped by the SDK's header-arrival-only
+// `timeout` -- see ai-provider-service.ts's AICallInput doc comment) with
+// our OWN absolute deadline, maxRetries:0 (a timed-out generation must never
+// silently restart). 200s covers the full 6000-token worst case with real
+// margin (6000 / 38.7 tok/s ≈ 155s) while still fitting the route's overall
+// budget -- see the budget line below.
+export const CORE_STREAM_DEADLINE_MS = 200_000
+// Packaging: same 60s duration as before (unchanged value -- Haiku,
+// 3500 tokens, historically 1-8s), but maxRetries:0 so a timeout here also
+// can't silently double the wall-clock cost.
+export const PACKAGING_TIMEOUT_MS = 60_000
+// Worst-case route budget -- ESTIMATE, not a proven/measured worst case:
+// the ~16s overhead figure is the real incident's own ~7.8s PRE-call
+// overhead (auth/ownership/snapshot/lock/cache-check, actually observed)
+// PLUS an UNVALIDATED ~8s guess for the POST-call writes (2x logUsage,
+// chargeFeature, savePaidResult, lock release) -- the incident itself never
+// reached that code path, so that half of the number has no direct
+// measurement behind it. On that basis: 200s (core) + 60s (packaging, no
+// retry) + ~16s overhead ≈ 276s, vs. the route's actual Vercel ceiling
+// (confirmed from the incident's own Vercel log: "Execution Duration /
+// Maximum: 2m 5s / 5m") of 300s -- ≈24s estimated margin for lock-release
+// and savePaidResult. Treat both the ≈276s and the ≈24s margin as estimates
+// pending a real near-worst-case run, not as a verified bound.
+
+// Remaining-time guard (2026-10-01 incident fix, follow-up): a slow core
+// generation must not be allowed to run packaging, and a slow
+// core+packaging pair must not be allowed to charge a credit, if what's
+// left of the route's own execution budget isn't comfortably enough to
+// finish safely. Without this, a near-worst-case run could start
+// generatePackaging() or chargeFeature() with too little time left, get cut
+// off by the platform mid-flight, and -- in the charge case -- leave the
+// user charged with no saved result (a NEW, timing-triggered variant of the
+// pre-existing, independently-tracked chargeFeature/savePaidResult gap).
+//
+// ROUTE_BUDGET_MS is the confirmed Vercel "Maximum Duration" from the
+// incident's own log -- the platform/account ceiling, not something
+// measured per-request. The two margins below are DELIBERATELY GENEROUS,
+// CHOSEN estimates, not measured or guaranteed minimums -- the actual
+// post-AI DB-write cost (logUsage/chargeFeature/savePaidResult/lock
+// release) has never been measured under a real near-worst-case run (see
+// the budget comment above). Treat a request that trips either guard as
+// "we chose not to risk it", not as proof the request would have failed.
+export const ROUTE_BUDGET_MS = 300_000
+export const PACKAGING_SAFETY_MARGIN_MS = 20_000
+export const CHARGE_SAVE_SAFETY_MARGIN_MS = 20_000
+
+export function hasTimeBudgetForPackaging(elapsedMs: number): boolean {
+  return ROUTE_BUDGET_MS - elapsedMs >= PACKAGING_TIMEOUT_MS + PACKAGING_SAFETY_MARGIN_MS
+}
+
+export function hasTimeBudgetForChargeAndSave(elapsedMs: number): boolean {
+  return ROUTE_BUDGET_MS - elapsedMs >= CHARGE_SAVE_SAFETY_MARGIN_MS
+}
+
 export const STYLE_PROMPTS: Record<string, string> = {
   mrbeast: 'MrBeast stilus: eros hook, gyors tempo, nagy tet, kozvetlen. Hiteles, nem gyerekes.',
   bright_side: 'Bright Side: pozitiv, informativ, listicle-alapu. Baratsagos, nyugodt hang.',
@@ -202,6 +263,18 @@ Valaszolj KIZAROLAG valid JSON-ban:
     messages: [{ role: 'user', content: prompt }],
     promptTemplateId: isShorts ? 'video_package_core_shorts' : 'video_package_core_long',
     promptVersion: 'v1',
+    stream: true,
+    maxRetries: 0,
+    streamDeadlineMs: CORE_STREAM_DEADLINE_MS,
+    // The SDK's own per-call `timeout` only bounds time-to-headers (see the
+    // AICallInput doc comment in ai-provider-service.ts), but WITHOUT this
+    // override it still falls back to the shared client's 60s default
+    // (getAnthropicClient()) for that header wait -- a second, shorter
+    // mechanism than our streamDeadlineMs abort above, and not the one
+    // intended to govern this call. Setting it equal to the stream deadline
+    // means the header-wait ceiling can never fire before, or instead of,
+    // our own full-stream deadline.
+    timeoutMs: CORE_STREAM_DEADLINE_MS,
   })
 
   const parsed = extractJson<Record<string, unknown>>(aiCall.text)
@@ -488,6 +561,8 @@ Keszitsd el magyarul, KIZAROLAG valid JSON-ban:
     messages: [{ role: 'user', content: prompt }],
     promptTemplateId: 'video_package_packaging',
     promptVersion: 'v2',
+    maxRetries: 0,
+    timeoutMs: PACKAGING_TIMEOUT_MS,
   })
 
   const parsed = extractJson<Record<string, unknown>>(aiCall.text)

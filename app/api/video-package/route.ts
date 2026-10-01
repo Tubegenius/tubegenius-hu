@@ -27,6 +27,8 @@ import {
   generateCreativeCore,
   generatePackaging,
   extractPlatformChecklist,
+  hasTimeBudgetForPackaging,
+  hasTimeBudgetForChargeAndSave,
 } from '@/lib/video-package'
 import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
@@ -50,6 +52,10 @@ interface VideoPackageRequestBody {
 }
 
 export async function POST(request: NextRequest) {
+  // Remaining-time guard reference point -- see hasTimeBudgetForPackaging/
+  // hasTimeBudgetForChargeAndSave in lib/video-package.ts for why this is
+  // measured from here, not from the AI calls themselves.
+  const routeStartedAt = Date.now()
   try {
     const parsedBody: unknown = await request.json().catch(() => null)
     if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody, 100_000)) return NextResponse.json({ error: 'Érvénytelen vagy túl nagy kérés.' }, { status: 400 })
@@ -299,12 +305,32 @@ export async function POST(request: NextRequest) {
       contentType, strictFactMode, sourceVideoMode,
     })
 
+    // Usage logging is unconditional from here on, independent of whether
+    // we go on to charge/save below -- the provider tokens were genuinely
+    // spent, so the measurement must never be lost just because a later
+    // remaining-time guard decides not to proceed (see guards below).
+    await logUsage(userId, feature, MODELS.primary, coreResult.inputTokens, coreResult.outputTokens, { topic, platform, video_length, sub_step: 'core', content_type: contentType })
+
+    const elapsedBeforePackagingMs = Date.now() - routeStartedAt
+    if (!hasTimeBudgetForPackaging(elapsedBeforePackagingMs)) {
+      console.error(`[VideoPackage] Hátralévőidő-védelem: packaging indítása előtt nincs elegendő biztonságos tartalék (eltelt=${elapsedBeforePackagingMs}ms). Nincs levonás, nincs mentés, nincs automatikus retry.`)
+      return NextResponse.json({ error: 'A generálás a biztonságos időkereten belül nem fejeződött volna be. Kredit nem került levonásra. Próbáld újra.' }, { status: 504 })
+    }
+
     const packagingResult = await generatePackaging({
       topic, isShorts, platform,
       hook: coreResult.parsed.hook as string,
       narration: coreResult.parsed.narration as string,
       niche: creatorContext, uploadTimes, strictFactMode, qualityStatus,
     })
+
+    await logUsage(userId, feature, MODELS.fast, packagingResult.inputTokens, packagingResult.outputTokens, { topic, platform, video_length, sub_step: 'packaging' })
+
+    const elapsedBeforeChargeMs = Date.now() - routeStartedAt
+    if (!hasTimeBudgetForChargeAndSave(elapsedBeforeChargeMs)) {
+      console.error(`[VideoPackage] Hátralévőidő-védelem: kreditlevonás előtt nincs elegendő biztonságos tartalék (eltelt=${elapsedBeforeChargeMs}ms). Nincs levonás, nincs mentés, nincs automatikus retry.`)
+      return NextResponse.json({ error: 'A generálás elkészült, de a biztonságos mentéshez már nem maradt elég idő. Kredit nem került levonásra. Próbáld újra.' }, { status: 504 })
+    }
 
     const polishedCore = polishHungarianOutput(coreResult.parsed) as Record<string, unknown>
     const polishedPackaging = polishHungarianOutput(packagingResult.parsed) as Record<string, unknown>
@@ -362,9 +388,6 @@ export async function POST(request: NextRequest) {
       opportunity_evidence_source: opportunityEvidenceSource,
       opportunity_evidence_captured_at: opportunityEvidenceCapturedAt,
     }
-
-    await logUsage(userId, feature, MODELS.primary, coreResult.inputTokens, coreResult.outputTokens, { topic, platform, video_length, sub_step: 'core', content_type: contentType })
-    await logUsage(userId, feature, MODELS.fast, packagingResult.inputTokens, packagingResult.outputTokens, { topic, platform, video_length, sub_step: 'packaging' })
 
     const chargeResult = await chargeFeature(userId, feature, { topic, platform, video_length })
     if (!chargeResult.success) {

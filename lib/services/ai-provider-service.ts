@@ -31,6 +31,26 @@ export interface AICallInput {
   maxTokens: number
   promptTemplateId?: string
   promptVersion?: string
+  // Per-call overrides of the shared Anthropic client's defaults
+  // (60s timeout, maxRetries:1 -- see getAnthropicClient()). Optional and
+  // unused by every caller that doesn't set them, so nothing changes for
+  // any existing route. Added for the Video Package core-generation timeout
+  // fix (2026-10-01 incident: generateCreativeCore's 6000-token completion
+  // didn't finish within 60s -- see lib/video-package.ts).
+  maxRetries?: number
+  timeoutMs?: number
+  // Streaming path -- requires streamDeadlineMs when true. The SDK's own
+  // `timeoutMs`/client-level `timeout` only bounds the time to receive
+  // response HEADERS (confirmed from the installed v0.30.1 source,
+  // node_modules/@anthropic-ai/sdk/src/core.ts: fetchWithTimeout's timer is
+  // cleared as soon as the fetch() Promise settles, which for a streaming
+  // response happens right after headers arrive -- NOT after the body is
+  // fully read). It is NOT an idle/total-duration timeout for the stream
+  // itself. streamDeadlineMs is therefore a SEPARATE, OUR-OWN absolute
+  // wall-clock cap for the entire streamed response, enforced via a
+  // dedicated AbortController/setTimeout, independent of timeoutMs.
+  stream?: boolean
+  streamDeadlineMs?: number
 }
 
 export interface AICallResult {
@@ -58,6 +78,7 @@ export function validateAICallInput(input: AICallInput): void {
   const totalCharacters = messageCharacters + (input.system?.length || 0)
   if (totalCharacters > MAX_PROMPT_CHARACTERS) throw new Error('AI prompt is too large')
   if (!input.promptTemplateId?.trim() || !input.promptVersion?.trim()) throw new Error('Every AI call must declare a versioned prompt template')
+  if (input.stream && (!input.streamDeadlineMs || input.streamDeadlineMs <= 0)) throw new Error('stream:true requires a positive streamDeadlineMs')
 }
 
 export function assertAICompletion(stopReason: string | null, text: string, inputTokens: number, outputTokens: number, maxTokens: number): void {
@@ -75,14 +96,49 @@ function getAnthropicClient(): Anthropic {
   return anthropicClient
 }
 
-async function callAnthropic(input: AICallInput): Promise<AICallResult> {
-  const client = getAnthropicClient()
-  const message = await client.messages.create({
+// Resolves the raw Anthropic Message, either via the plain blocking
+// create() call (every existing caller, unchanged) or, when input.stream is
+// set, via the SDK's streaming API with OUR OWN absolute deadline -- see
+// AICallInput's streamDeadlineMs doc comment for why this is required
+// (the SDK's `timeout` cannot do this for a streamed response). Either path
+// returns ONLY a complete, final Message -- stream.finalMessage() rejects
+// (never resolves with a partial Message) both on our deadline abort and on
+// the underlying connection ending without a message_stop event, so there
+// is no code path here that can hand back a truncated/partial result.
+async function fetchAnthropicMessage(
+  client: Anthropic,
+  input: AICallInput,
+  requestOptions: Anthropic.RequestOptions,
+): Promise<Anthropic.Message> {
+  const body = {
     model: input.model,
     max_tokens: input.maxTokens,
     ...(input.system ? { system: input.system } : {}),
     messages: input.messages,
-  })
+  }
+  if (!input.stream) {
+    return client.messages.create(body, requestOptions)
+  }
+  const controller = new AbortController()
+  const deadlineTimer = setTimeout(() => controller.abort(), input.streamDeadlineMs!)
+  try {
+    const stream = client.messages.stream(body, { ...requestOptions, signal: controller.signal })
+    return await stream.finalMessage()
+  } finally {
+    clearTimeout(deadlineTimer)
+  }
+}
+
+async function callAnthropic(input: AICallInput): Promise<AICallResult> {
+  const client = getAnthropicClient()
+  // Empty keys here fall back to the shared client's own defaults
+  // (60s timeout, maxRetries:1) -- identical to today's behaviour for every
+  // caller that doesn't set maxRetries/timeoutMs.
+  const requestOptions: Anthropic.RequestOptions = {}
+  if (input.maxRetries !== undefined) requestOptions.maxRetries = input.maxRetries
+  if (input.timeoutMs !== undefined) requestOptions.timeout = input.timeoutMs
+
+  const message = await fetchAnthropicMessage(client, input, requestOptions)
 
   const text = message.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
