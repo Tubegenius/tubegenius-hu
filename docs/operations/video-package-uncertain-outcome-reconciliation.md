@@ -31,7 +31,7 @@ Korábbi tervezet egy `pg_stat_activity` lekérdezést használt lezártsági ka
 - **Nem lát mindent.** A tranzakciós pooleren, a PostgREST-en vagy a hálózaton még várakozó, az adatbázist *még el nem ért* kérés ott sehol sem szerepel; a már lezárult backend szintén nem. A „nincs sor" tehát nem zárja ki, hogy a kérés *később* ér oda és commitol.
 - A teljes `query` szöveg láthatósága és csonkolása szerepfüggő (`track_activity_query_size`, jogosultság).
 
-Egyetlen, **csak pozitív irányban használható** jelzés létezik: az RPC a tranzakció elején `pg_advisory_xact_lock(hashtext(operation_id::text))`-ot vesz, ahol `operation_id = uuid_generate_v5('7d9e9b1a-f3c4-4b8e-9a2d-6c1f0e5d8a3b', user_id::text || ':video_package:' || input_hash)`. Ha egy ilyen advisory lock **látszik** a `pg_locks`-ban, akkor az eredeti művelet nagy valószínűséggel még fut → várj.
+Egyetlen, **csak pozitív irányban használható** jelzés létezik: az RPC a tranzakció elején `pg_advisory_xact_lock(hashtext(operation_id::text))`-ot vesz, ahol `operation_id = extensions.uuid_generate_v5('7d9e9b1a-f3c4-4b8e-9a2d-6c1f0e5d8a3b', user_id::text || ':video_package:' || input_hash)`. Ha egy ilyen advisory lock **látszik** a `pg_locks`-ban, akkor az eredeti művelet nagy valószínűséggel még fut → várj.
 
 ```sql
 -- csak pozitív jelzés: találat = valószínűleg még fut; NINCS találat = semmit nem bizonyít
@@ -43,8 +43,9 @@ SELECT l.pid, l.granted, l.locktype
 FROM pg_locks l, k
 WHERE l.locktype = 'advisory' AND l.objsubid = 1
   AND ((l.classid::bigint << 32) | l.objid::bigint) = k.key;
--- (a függvény sémája telepítésenként eltérhet: extensions.uuid_generate_v5 vagy uuid_generate_v5;
---  ez a lekérdezés lokálisan SEM futott -- első éles használat előtt egy tesztfelhasználóval ellenőrizendő)
+-- (az RPC is a séma-minősített extensions.uuid_generate_v5-öt hívja; a képlet azonos:
+--  namespace, összefűzés, operation_id, lock-kulcs. Ez a lekérdezés lokálisan SEM futott --
+--  első éles használat előtt egy tesztfelhasználóval ellenőrizendő)
 ```
 
 Korlátok: a lock csak a 0. lépés (feature/cost ellenőrzés) *után* jön létre, tehát a korai szakaszban nem látszik; a kulcs 32 bites hash, ütközhet; a nem látszó lock semmit sem jelent. **Ezért a művelet lezártsága bizonyíthatatlan marad**; csak az eltelt időt lehet óvatos *becslésként* figyelembe venni (a `attemptStartedAt + elapsedMs` óta legalább néhány perc), és ez sosem garancia.

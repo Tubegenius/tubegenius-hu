@@ -4,6 +4,7 @@
 // preflight job's target/count/env, and the strict skip-guard stay in
 // agreement; it never weakens the guard.
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path, { join } from 'node:path'
@@ -170,5 +171,73 @@ describe('093 preflight guard allowlist (DB-free contract)', () => {
       expect(run(F093, [as('093 > race', 'failed', ['boom'])], DEDICATED), 'test failure').toBe(1)
       expect(run(F090, [], DEDICATED, 'failed'), 'file-level failure').toBe(1)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// UUIDv5 dependency + pinned function-body hash (DB-free). The first
+// disposable-stack preflight showed the unqualified uuid_generate_v5 call does
+// not resolve under the RPC's pinned search_path. These checks keep the
+// qualified call, the 090 pin and the next disposable run's real-RPC coverage
+// in agreement without touching a database.
+// ---------------------------------------------------------------------------
+describe('093 RPC UUIDv5 qualification, 090 body pin and real-RPC coverage (DB-free contract)', () => {
+  const migration = read('supabase/migrations/093_video_package_atomic_charge_save.sql')
+  const test090 = read('tests/090-public-schema-privilege-hardening-db-integration.test.ts')
+  const runbook = read('docs/operations/video-package-uncertain-outcome-reconciliation.md')
+
+  // The RPC's own source (prosrc): text between its dollar-quote delimiters.
+  // Same extraction as used to pin the live-confirmed md5 in the 090 test.
+  function rpcBody(): string {
+    const start = migration.indexOf('AS $$\n') + 'AS $$'.length
+    const end = migration.indexOf('\n$$;', start) + 1
+    expect(start).toBeGreaterThan('AS $$'.length)
+    expect(end).toBeGreaterThan(start)
+    return migration.slice(start, end)
+  }
+
+  it('the RPC body calls uuid_generate_v5 only schema-qualified (extensions.), once, with the unchanged namespace and concatenation', () => {
+    const body = rpcBody()
+    const calls = body.match(/[A-Za-z_.]*uuid_generate_v5\(/g) || []
+    expect(calls).toEqual(['extensions.uuid_generate_v5('])
+    expect(body).toContain("v_namespace CONSTANT UUID := '7d9e9b1a-f3c4-4b8e-9a2d-6c1f0e5d8a3b';")
+    expect(body).toContain("v_operation_id := extensions.uuid_generate_v5(v_namespace, p_user_id::text || ':' || p_tool_type || ':' || p_input_hash);")
+    expect(body).toContain('v_lock_key := hashtext(v_operation_id::text);')
+    expect(body).toContain('PERFORM pg_advisory_xact_lock(v_lock_key);')
+    // search_path stays pinned as before (the fix is the qualification, not a wider path)
+    expect(migration).toContain('LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp\nAS $$')
+  })
+
+  it('the migration fails closed at apply time if extensions.uuid_generate_v5(uuid,text) is missing or not executable', () => {
+    const closing = migration.slice(migration.indexOf('-- ── Closing self-check'))
+    expect(closing).toContain("to_regprocedure('extensions.uuid_generate_v5(uuid,text)') IS NULL")
+    expect(closing).toContain("has_function_privilege(current_user, 'extensions.uuid_generate_v5(uuid,text)', 'EXECUTE')")
+  })
+
+  it('the 090 pin for the 093 function equals the md5 of the CURRENT RPC body (same method the live catalog confirmed), with no stale hash left behind', () => {
+    const md5 = createHash('md5').update(rpcBody(), 'utf8').digest('hex')
+    const pinned = (/spend_credits_and_save_paid_result\(p_user_id uuid[^']*\|body=([0-9a-f]{32})'/.exec(test090) || [])[1]
+    expect(pinned).toBe(md5)
+    // the previous (unqualified-call) revision's hash must be gone
+    expect(test090).not.toContain('fa94a807a3ef5df8fdba211c89f3cf92')
+  })
+
+  it('the runbook uses the same qualified formula (and states no unqualified variant)', () => {
+    expect(runbook).toContain("operation_id = extensions.uuid_generate_v5('7d9e9b1a-f3c4-4b8e-9a2d-6c1f0e5d8a3b', user_id::text || ':video_package:' || input_hash)")
+    expect(runbook).not.toMatch(/(^|[^.])uuid_generate_v5\(/m)
+    expect(runbook).not.toContain('telepítésenként eltérhet')
+  })
+
+  it('the next disposable run exercises the REAL RPC: the integration file checks the qualified UUIDv5 dependency, makes a real service_role call, and races the unmodified RPC; the SQL file calls it too', () => {
+    expect(testSource).toContain("to_regprocedure('extensions.uuid_generate_v5(uuid,text)')")
+    expect(testSource).toContain('SET LOCAL ROLE service_role;')
+    // direct, positional call of the real function in BOTH the smoke call and the race (no re-implemented steps)
+    const rpcCalls = testSource.match(/SELECT public\.spend_credits_and_save_paid_result\(/g) || []
+    expect(rpcCalls.length).toBeGreaterThanOrEqual(2)
+    // the trigger instrumentation never redefines or wraps the production function
+    expect(testSource).not.toMatch(/CREATE (OR REPLACE )?FUNCTION public\.spend_credits_and_save_paid_result/)
+    expect(read('supabase/tests/093_spend_credits_and_save_paid_result.test.sql')).toContain('spend_credits_and_save_paid_result(')
+    // and the preflight really runs that file with an exact, matching count (checked above) and no skips tolerated
+    expect(preflight).toContain(`npx vitest run ${TEST_FILE}`)
   })
 })

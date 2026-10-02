@@ -127,11 +127,20 @@ DROP FUNCTION IF EXISTS public.spend_credits_and_save_paid_result(uuid, text, nu
 // file with a small extraction script, and cross-validated by applying the
 // IDENTICAL extraction method to all 5 PIN_092_APP entries above and
 // confirming all 5 reproduce their already-recorded md5 exactly, before
-// trusting it for this new entry. NOT independently confirmed against a
-// live catalog this round (no DB access authorized) -- see the accompanying
-// report for this residual gap.
+// trusting it for this new entry. That method WAS later confirmed live: the
+// first recorded value (fa94a807...) matched the real catalog in this very
+// test on the disposable CI stack (preflight run 36995065326 and the
+// regression job).
+// REVISION 2026-10-02: the function body changed in exactly one place -- the
+// uuid_generate_v5 call became extensions.uuid_generate_v5, after that
+// preflight showed the unqualified name does not resolve under
+// search_path = public, pg_temp. The new value (49a647a0...) was recomputed
+// with the same extraction method, which had reproduced fa94a807... on the
+// previous file revision just before the edit. It is NOT yet confirmed
+// against a live catalog -- the next disposable run does that, and a
+// mismatch must fail, never be loosened.
 const PIN_093_APP = [
-  'spend_credits_and_save_paid_result(p_user_id uuid, p_feature text, p_cost numeric, p_charge_metadata jsonb, p_tool_type text, p_input_hash text, p_normalized_input text, p_original_input text, p_region text, p_language text, p_platform text, p_result_json jsonb, p_summary_json jsonb, p_credit_cost numeric, p_fresh_until timestamp with time zone, p_provider text, p_model text, p_prompt_template_id text, p_prompt_version text, p_estimated_cost numeric, p_source_run_id text, p_linked_video_idea_id uuid, p_main_category text, p_specific_focus text)|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE,service_role:EXECUTE|body=fa94a807a3ef5df8fdba211c89f3cf92',
+  'spend_credits_and_save_paid_result(p_user_id uuid, p_feature text, p_cost numeric, p_charge_metadata jsonb, p_tool_type text, p_input_hash text, p_normalized_input text, p_original_input text, p_region text, p_language text, p_platform text, p_result_json jsonb, p_summary_json jsonb, p_credit_cost numeric, p_fresh_until timestamp with time zone, p_provider text, p_model text, p_prompt_template_id text, p_prompt_version text, p_estimated_cost numeric, p_source_run_id text, p_linked_video_idea_id uuid, p_main_category text, p_specific_focus text)|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE,service_role:EXECUTE|body=49a647a0ed71dbb251c6121212e542fc',
 ]
 
 function psql(sql: string, user = 'postgres'): PsqlResult {

@@ -5,7 +5,8 @@
 // PFM_STATEFUL_DB_CONFIRM are both explicitly set to a non-denylisted
 // (i.e. renamed, genuinely disposable) container.
 //
-// This file owns TWO real, non-rolled-back-by-design surfaces, which is
+// This file owns THREE real, non-rolled-back-by-design surfaces (the UUIDv5
+// dependency check + real service_role RPC smoke call below is the third), which is
 // exactly why it needs this stricter gate rather than the older, simpler
 // `stackAvailable` check some pre-076 DB-integration files still use:
 //   1. Runs supabase/tests/093_spend_credits_and_save_paid_result.test.sql
@@ -124,6 +125,77 @@ describeIfLocalDb('093 SQL test file (supabase/tests/093_spend_credits_and_save_
   })
 })
 
+
+// ============================================================
+// 1b. The UUIDv5 dependency of the RPC. The FIRST disposable-stack preflight
+// (2026-10-02) showed that the RPC's unqualified uuid_generate_v5(...) call does
+// not resolve under its pinned `search_path = public, pg_temp`; the call is now
+// the schema-qualified extensions.uuid_generate_v5(...). These two checks make
+// that dependency explicit on every disposable run, and the second one is a
+// REAL call of the unmodified RPC (as service_role, the role the app uses), so a
+// regression cannot hide behind the SQL test file or the trigger-instrumented
+// race alone.
+// ============================================================
+describeIfLocalDb('093 UUIDv5 dependency -- resolvable where the RPC looks for it, and a REAL RPC call as service_role works end to end', () => {
+  const USER_ID = randomUUID()
+  const HASH = '__test093_uuidv5_smoke__'
+  const NAMESPACE = '7d9e9b1a-f3c4-4b8e-9a2d-6c1f0e5d8a3b'
+
+  afterAll(() => {
+    dockerPsql(`
+      DELETE FROM public.paid_operations WHERE user_id = '${USER_ID}'::uuid;
+      DELETE FROM public.paid_results WHERE user_id = '${USER_ID}'::uuid;
+      DELETE FROM public.credit_ledger WHERE user_id = '${USER_ID}'::uuid;
+      DELETE FROM public.ai_usage_logs WHERE user_id = '${USER_ID}'::uuid;
+      DELETE FROM public.user_credits WHERE user_id = '${USER_ID}'::uuid;
+      DELETE FROM auth.users WHERE id = '${USER_ID}'::uuid;
+    `)
+  })
+
+  it('extensions.uuid_generate_v5(uuid,text) exists and is executable, and the deployed RPC calls it schema-qualified (no bare call) under search_path = public, pg_temp', () => {
+    const out = dockerPsql(`
+      SELECT (to_regprocedure('extensions.uuid_generate_v5(uuid,text)') IS NOT NULL)::text
+        || '|' || has_function_privilege('postgres', 'extensions.uuid_generate_v5(uuid,text)', 'EXECUTE')::text
+        || '|' || (p.prosrc ~ 'extensions\.uuid_generate_v5\(')::text
+        || '|' || (p.prosrc !~ '(^|[^.])uuid_generate_v5\(')::text
+        || '|' || coalesce(array_to_string(p.proconfig, ';'), '')
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'spend_credits_and_save_paid_result';
+    `).trim()
+    expect(out).toBe('true|true|true|true|search_path=public, pg_temp')
+  })
+
+  it('a REAL call of the unmodified RPC as service_role succeeds (not a duplicate), debits once, and stores the operation_id from the UNCHANGED namespace/concatenation formula, linked to its ledger row', () => {
+    dockerPsql(`
+      INSERT INTO auth.users (id, email) VALUES ('${USER_ID}'::uuid, '${USER_ID}@test.local');
+      INSERT INTO public.user_credits (user_id, balance, purchased_credit_balance, subscription_credit_balance)
+        VALUES ('${USER_ID}'::uuid, 100, 100, 0)
+        ON CONFLICT (user_id) DO UPDATE SET balance = 100, purchased_credit_balance = 100, subscription_credit_balance = 0;
+    `)
+    const called = dockerPsql(`
+      BEGIN;
+      SET LOCAL ROLE service_role;
+      SELECT 'RPC|' || (r->>'duplicate') || '|' || ((r->>'total_balance')::numeric)::text
+      FROM (SELECT public.spend_credits_and_save_paid_result(
+        '${USER_ID}'::uuid, 'video_package_long', 6, '{"topic":"smoke"}'::jsonb,
+        'video_package', '${HASH}', 'norm', 'orig',
+        NULL, NULL, 'youtube', '{"hook":"smoke"}'::jsonb, '{}'::jsonb, 6, now() + interval '24 hours',
+        'anthropic', 'combined', 'video_package', 'v1', 0.15
+      ) AS r) q;
+      COMMIT;
+    `)
+    expect(called).toMatch(/^RPC\|false\|94(\.0+)?$/m)
+
+    const linked = dockerPsql(`
+      SELECT (po.operation_id = extensions.uuid_generate_v5('${NAMESPACE}'::uuid, '${USER_ID}' || ':' || 'video_package' || ':' || '${HASH}'))::text
+        || '|' || EXISTS (SELECT 1 FROM public.credit_ledger l WHERE l.id = po.credit_transaction_id AND l.external_ref = 'op:' || po.operation_id::text)::text
+        || '|' || EXISTS (SELECT 1 FROM public.paid_results r WHERE r.id = po.paid_result_id AND r.input_hash = '${HASH}')::text
+      FROM public.paid_operations po
+      WHERE po.user_id = '${USER_ID}'::uuid AND po.input_hash = '${HASH}';
+    `).trim()
+    expect(linked).toBe('true|true|true')
+  })
+})
 
 // ============================================================
 // 2. REAL two-OS-process concurrency race against the UNMODIFIED RPC.

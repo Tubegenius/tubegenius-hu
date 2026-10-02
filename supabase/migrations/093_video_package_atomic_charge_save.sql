@@ -204,7 +204,7 @@ BEGIN
       USING ERRCODE = 'P0004';
   END IF;
 
-  v_operation_id := uuid_generate_v5(v_namespace, p_user_id::text || ':' || p_tool_type || ':' || p_input_hash);
+  v_operation_id := extensions.uuid_generate_v5(v_namespace, p_user_id::text || ':' || p_tool_type || ':' || p_input_hash);
   v_lock_key := hashtext(v_operation_id::text);
   PERFORM pg_advisory_xact_lock(v_lock_key);
 
@@ -295,6 +295,19 @@ GRANT EXECUTE ON FUNCTION public.spend_credits_and_save_paid_result(
 DO $$
 DECLARE leak_count INT;
 BEGIN
+  -- The RPC pins search_path = public, pg_temp, so it must call uuid-ossp's
+  -- uuid_generate_v5 schema-qualified. The first disposable-stack preflight
+  -- (2026-10-02) showed the unqualified name does NOT resolve there. Fail the
+  -- migration (whole transaction rolls back) on any database where the
+  -- qualified function is missing or not callable by the migration role,
+  -- instead of shipping an RPC that fails on every call.
+  IF to_regprocedure('extensions.uuid_generate_v5(uuid,text)') IS NULL THEN
+    RAISE EXCEPTION '093 validate failed: extensions.uuid_generate_v5(uuid,text) does not exist -- the RPC would fail on every call';
+  END IF;
+  IF NOT has_function_privilege(current_user, 'extensions.uuid_generate_v5(uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION '093 validate failed: % cannot EXECUTE extensions.uuid_generate_v5(uuid,text)', current_user;
+  END IF;
+
   -- Function EXECUTE: service_role only.
   SELECT count(*) INTO leak_count
   FROM information_schema.role_routine_grants

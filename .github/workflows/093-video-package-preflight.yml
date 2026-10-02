@@ -257,7 +257,7 @@ jobs:
             --reporter=default --reporter=json \
             --outputFile.json="$RUNNER_TEMP/vitest-093.json" 2>&1 | sed -E -u "$JWT_SCRUB"
 
-      - name: Verify the 093 file's 2 scenarios actually executed (exact count, nothing skipped)
+      - name: Verify the 093 file's 4 scenarios actually executed (exact count, nothing skipped)
         if: always()
         env:
           REPORT_PATH: ${{ runner.temp }}/vitest-093.json
@@ -270,15 +270,15 @@ jobs:
             const total = r.numTotalTests ?? 0, passed = r.numPassedTests ?? 0, failed = r.numFailedTests ?? 0;
             const pending = r.numPendingTests ?? 0, todo = r.numTodoTests ?? 0;
             console.log('093 report: total=' + total + ' passed=' + passed + ' failed=' + failed + ' pending=' + pending + ' todo=' + todo);
-            // Exact expected count as of this workflow revision (2 static
+            // Exact expected count as of this workflow revision (4 static
             // it( declarations -- confirmed by static source inspection,
             // never by executing the file). Update ONLY together with a
             // matching, deliberate edit to that test file.
-            const EXPECTED_TOTAL = 2;
+            const EXPECTED_TOTAL = 4;
             if (total !== EXPECTED_TOTAL) { console.error('FAIL: expected exactly ' + EXPECTED_TOTAL + ' collected tests, got ' + total); process.exit(1); }
-            if (pending > 0 || todo > 0) { console.error('FAIL: ' + (pending + todo) + ' test(s) were skipped/todo -- this run must execute both scenarios for real'); process.exit(1); }
+            if (pending > 0 || todo > 0) { console.error('FAIL: ' + (pending + todo) + ' test(s) were skipped/todo -- this run must execute all scenarios for real'); process.exit(1); }
             if (passed + failed !== total) { console.error('FAIL: passed+failed does not account for all collected tests'); process.exit(1); }
-            console.log('confirmed: both 093 scenarios actually executed');
+            console.log('confirmed: all 093 scenarios actually executed');
           "
 
       # Both guards below use the dedicated, EMPTY allowlist
