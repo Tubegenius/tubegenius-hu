@@ -44,7 +44,7 @@ export interface SkippedTest {
 export interface GuardResult {
   ok: boolean
   failures: string[]
-  counts: { passed: number; failed: number; skipped: number; failedSuites: number }
+  counts: { passed: number; failed: number; skipped: number; failedSuites: number; failedFilesNoAssertions: number }
   skipped: SkippedTest[]
 }
 
@@ -124,7 +124,7 @@ export function evaluateReport(report: unknown, options: GuardOptions): GuardRes
   const failures: string[] = []
   const skipped: SkippedTest[] = []
   const data = report as VitestReport
-  const counts = { passed: 0, failed: 0, skipped: 0, failedSuites: 0 }
+  const counts = { passed: 0, failed: 0, skipped: 0, failedSuites: 0, failedFilesNoAssertions: 0 }
 
   if (
     !data ||
@@ -152,7 +152,37 @@ export function evaluateReport(report: unknown, options: GuardOptions): GuardRes
       failures.push(`FAILED ${rel}::${a.fullName ?? a.title ?? '?'} -- ${firstLine(a.failureMessages)}`)
     }
     if (file.status === 'failed' && failedAssertions.length === 0) {
-      failures.push(`FAILED FILE ${rel} -- ${firstLine(file.message) || 'suite-level failure'}`)
+      if (assertions.length === 0) {
+        // Typically a hook (beforeAll/beforeEach/...) or collection-time
+        // failure. This report never populated a single per-test
+        // assertionResults entry for the file -- it does NOT thereby prove
+        // the tests never started (this report shape simply does not
+        // expose the file's true total test count or per-test execution
+        // state once no per-test entry was recorded); the honest claim is
+        // only that no per-test outcome exists here. Counted separately
+        // (counts.failedFilesNoAssertions) so this is never read as "N
+        // individual tests failed", and so it is visibly NOT folded into
+        // the skip/pending accounting above either.
+        counts.failedFilesNoAssertions += 1
+        failures.push(
+          `FAILED FILE ${rel} -- ${firstLine(file.message) || 'suite-level failure'} ` +
+            `(0 per-test assertions recorded for this file: no per-test result was recorded, so whether its ` +
+            `declared tests ran cannot be determined from this report; they are counted neither as failed nor ` +
+            `as skipped by this guard)`,
+        )
+      } else {
+        // A rarer shape: this report DID record per-test outcomes for the
+        // file (none of them individually 'failed'), yet the file itself
+        // is still marked failed -- e.g. an afterAll/teardown error after
+        // every one of its tests already ran and passed/skipped. Kept
+        // distinct from the zero-assertions case above, where no per-test
+        // outcome exists at all.
+        failures.push(
+          `FAILED FILE ${rel} -- ${firstLine(file.message) || 'suite-level failure'} ` +
+            `(${assertions.length} per-test assertion(s) recorded, none with status 'failed' -- the file itself ` +
+            `failed for another reason, e.g. an afterAll/teardown error after its tests already ran)`,
+        )
+      }
     }
     for (const a of assertions) {
       if (SKIP_STATUSES.has(a.status ?? '')) {
@@ -205,6 +235,7 @@ export function renderSummary(result: GuardResult, mode: GuardMode, platform: st
     `- failed: ${result.counts.failed}`,
     `- skipped: ${result.counts.skipped}`,
     `- failed suites: ${result.counts.failedSuites}`,
+    `- failed files with zero recorded per-test assertions (no per-test result recorded, so whether their declared tests ran cannot be determined from this report; not counted above as failed or skipped): ${result.counts.failedFilesNoAssertions}`,
     `- verdict: ${result.ok ? 'PASS' : 'FAIL'}`,
     '',
   ]

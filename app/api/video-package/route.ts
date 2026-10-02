@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, logUsage, CREDIT_COSTS } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, getPaidResultByHashStrict, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
+import { chargeFeatureAndSavePaidResult } from '@/lib/paid-results/atomic-charge-save'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   classifyContentType,
@@ -17,6 +18,7 @@ import {
 } from '@/lib/fact-safety'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { createAdminClient } from '@/lib/supabase-server'
+import { getOpportunityEvidenceSnapshot, verifyOwnVideoIdea } from '@/lib/opportunity-evidence/evidence-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import {
   STYLE_PROMPTS,
@@ -26,6 +28,8 @@ import {
   generateCreativeCore,
   generatePackaging,
   extractPlatformChecklist,
+  hasTimeBudgetForPackaging,
+  hasTimeBudgetForChargeAndSave,
 } from '@/lib/video-package'
 import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 
@@ -41,9 +45,18 @@ interface VideoPackageRequestBody {
   custom_prompt?: string; niche?: string; channel_context?: string; language?: string; fact_block?: string
   sources?: PackageSource[]; web_sources?: PackageSource[]; youtube_sources?: PackageSource[]
   source_video?: PackageSourceVideo; opportunity_context?: PackageOpportunityContext
+  // Owner-scoped server resolution overrides opportunity_context/web_sources/
+  // youtube_sources below when present and a snapshot exists -- see the
+  // resolution block right after auth. Never trust the client's own
+  // opportunity_context/web_sources/youtube_sources over this when it's set.
+  video_idea_id?: string
 }
 
 export async function POST(request: NextRequest) {
+  // Remaining-time guard reference point -- see hasTimeBudgetForPackaging/
+  // hasTimeBudgetForChargeAndSave in lib/video-package.ts for why this is
+  // measured from here, not from the AI calls themselves.
+  const routeStartedAt = Date.now()
   try {
     const parsedBody: unknown = await request.json().catch(() => null)
     if (!isPlainRecord(parsedBody) || !isJsonWithinLimit(parsedBody, 100_000)) return NextResponse.json({ error: 'Érvénytelen vagy túl nagy kérés.' }, { status: 400 })
@@ -52,8 +65,9 @@ export async function POST(request: NextRequest) {
     const {
       topic, platform, video_length, narration_style, intensity, goal,
       custom_prompt, niche, channel_context, language, fact_block, sources,
-      web_sources, youtube_sources, source_video, opportunity_context,
+      web_sources, youtube_sources, source_video, opportunity_context, video_idea_id,
     } = parsedBody as VideoPackageRequestBody
+    if (video_idea_id !== undefined && (typeof video_idea_id !== 'string' || !video_idea_id)) return NextResponse.json({ error: 'Érvénytelen videóötlet-azonosító.' }, { status: 400 })
 
     if (!topic || typeof topic !== 'string' || !topic.trim()) return NextResponse.json({ error: 'Téma megadása kötelező' }, { status: 400 })
     if (topicInputTooLong(topic)) return NextResponse.json({ error: topicTooLongResponseMessage() }, { status: 400 })
@@ -81,8 +95,55 @@ export async function POST(request: NextRequest) {
     const userId = await getUserId()
     if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
 
+    // Owner-scoped, server-side evidence resolution -- when video_idea_id is
+    // present and a snapshot exists for it, this OVERRIDES whatever
+    // opportunity_context/web_sources/youtube_sources the client sent for
+    // THOSE three fields specifically (never trusted from the client once a
+    // resolvable snapshot exists). Falls back to the client-supplied values
+    // unchanged when there's no video_idea_id or no snapshot for it -- this
+    // preserves the existing behaviour for the source_video-only flow and
+    // for pre-migration/snapshot-less saved ideas (see evidence-service.ts).
+    let resolvedOpportunityContext: PackageOpportunityContext | undefined = opportunity_context
+    let resolvedWebSources: PackageSource[] = web_sources || []
+    let resolvedYoutubeSources: PackageSource[] = youtube_sources || []
+    let opportunityEvidenceSource: 'server_snapshot' | 'client_supplied' | 'none' = opportunity_context ? 'client_supplied' : 'none'
+    let opportunityEvidenceCapturedAt: string | null = null
+    if (video_idea_id) {
+      const evidenceAdmin = createAdminClient()
+      // Ownership gate BEFORE anything else -- a foreign or non-existent
+      // video_idea_id must fail closed here, strictly before the request
+      // lock, checkPaidFeatureAccess, chargeFeature or any AI provider call
+      // below. getOpportunityEvidenceSnapshot() alone cannot distinguish
+      // "my own idea, no snapshot yet" from "not mine/doesn't exist" (both
+      // read as null, correctly, for a passive read) -- this is the writer-
+      // side check that makes the distinction, per verifyOwnVideoIdea()'s
+      // own documented rationale.
+      const owns = await verifyOwnVideoIdea(evidenceAdmin, { userId, videoIdeaId: video_idea_id })
+      if (!owns) {
+        return NextResponse.json({ error: 'A megadott videóötlet nem található vagy nem hozzáférhető.' }, { status: 404 })
+      }
+      const snapshot = await getOpportunityEvidenceSnapshot(evidenceAdmin, { userId, videoIdeaId: video_idea_id })
+      if (snapshot) {
+        resolvedOpportunityContext = {
+          id: video_idea_id,
+          title: snapshot.title,
+          confidence: snapshot.confidence || undefined,
+          opportunity_score: snapshot.opportunity_score ?? undefined,
+          risk_flags: Array.isArray(snapshot.risk_flags) ? snapshot.risk_flags : [],
+        }
+        resolvedWebSources = Array.isArray(snapshot.web_sources) ? snapshot.web_sources as PackageSource[] : []
+        resolvedYoutubeSources = Array.isArray(snapshot.evidence_videos) ? snapshot.evidence_videos as PackageSource[] : []
+        opportunityEvidenceSource = 'server_snapshot'
+        opportunityEvidenceCapturedAt = snapshot.captured_at
+      }
+      // video_idea_id given but no snapshot found: this is the explicit
+      // "old/snapshot-less idea, continue without evidence" case -- the
+      // resolved_* variables stay at their client-supplied fallback (set
+      // above), never a fabricated snapshot.
+    }
+
     const sourceVideoKey = source_video?.video_id || source_video?.id || source_video?.url || null
-    const opportunityKey = opportunity_context?.id || opportunity_context?.title || null
+    const opportunityKey = resolvedOpportunityContext?.id || resolvedOpportunityContext?.title || null
     const normalizedInput = normalizePaidResultInput({
       topic,
       platform,
@@ -115,10 +176,21 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-    const paid = await getPaidResultByHash({ userId, toolType: 'video_package', inputHash })
-      || (legacyInputHash !== inputHash
-        ? await getPaidResultByHash({ userId, toolType: 'video_package', inputHash: legacyInputHash })
-        : null)
+    // getPaidResultByHashStrict (unlike the generic getPaidResultByHash used
+    // by every other paid route) throws on a genuine DB read error instead
+    // of silently returning null -- a real read failure must NOT be treated
+    // as "no cached result, safe to proceed", since that would risk an AI
+    // call and a charge for an input that may already have a paid result.
+    let paid
+    try {
+      paid = await getPaidResultByHashStrict({ userId, toolType: 'video_package', inputHash })
+        || (legacyInputHash !== inputHash
+          ? await getPaidResultByHashStrict({ userId, toolType: 'video_package', inputHash: legacyInputHash })
+          : null)
+    } catch (cacheCheckError) {
+      console.error('[VideoPackage] Korábbi eredmény ellenőrzése sikertelen -- nincs AI-hívás, nincs levonás:', cacheCheckError)
+      return NextResponse.json({ error: 'Nem sikerült ellenőrizni, van-e már kész eredményed. Próbáld újra.' }, { status: 503 })
+    }
     if (paid) {
       const opened = await openPaidResult(paid)
       const polishedResult = polishHungarianOutput(opened.result_json) as Record<string, unknown>
@@ -150,8 +222,8 @@ export async function POST(request: NextRequest) {
     )
 
     // Forrasgyujtes
-    const webSourceItems = web_sources || []
-    const youtubeSourceItems = youtube_sources || []
+    const webSourceItems = resolvedWebSources
+    const youtubeSourceItems = resolvedYoutubeSources
     const sourceVideoMode = !!(source_video?.transcript_available && source_video?.raw_transcript)
     const sourceVideoSnippet = sourceVideoMode
       ? [
@@ -211,8 +283,8 @@ export async function POST(request: NextRequest) {
     }
     const uploadTimes = getUploadTimes(platform)
 
-    const opportunitySection = opportunity_context
-      ? `\nOPPORTUNITY_CONTEXT:\nStatus: ${opportunity_context.ready_to_produce_label || opportunity_context.ready_to_produce_status || 'unknown'}\nConfidence: ${opportunity_context.confidence || 'unknown'}\nOpportunity score: ${opportunity_context.opportunity_score || 'unknown'}\nRisk flags: ${Array.isArray(opportunity_context.risk_flags) ? opportunity_context.risk_flags.slice(0, 10).map(String).join(' | ') || 'none' : 'none'}\nAz OPPORTUNITY_CONTEXT csak strategiai priorizalasi metaadat, NEM tenyforras. Konkret allitast kizarolag a VERIFIED_FACT_BLOCK tamaszthat ala.`
+    const opportunitySection = resolvedOpportunityContext
+      ? `\nOPPORTUNITY_CONTEXT:\nStatus: ${resolvedOpportunityContext.ready_to_produce_label || resolvedOpportunityContext.ready_to_produce_status || 'unknown'}\nConfidence: ${resolvedOpportunityContext.confidence || 'unknown'}\nOpportunity score: ${resolvedOpportunityContext.opportunity_score || 'unknown'}\nRisk flags: ${Array.isArray(resolvedOpportunityContext.risk_flags) ? resolvedOpportunityContext.risk_flags.slice(0, 10).map(String).join(' | ') || 'none' : 'none'}\nAz OPPORTUNITY_CONTEXT csak strategiai priorizalasi metaadat, NEM tenyforras. Konkret allitast kizarolag a VERIFIED_FACT_BLOCK tamaszthat ala.`
       : ''
 
     const factSection = (sourceVideoMode && sourceVideoSnippet)
@@ -245,12 +317,32 @@ export async function POST(request: NextRequest) {
       contentType, strictFactMode, sourceVideoMode,
     })
 
+    // Usage logging is unconditional from here on, independent of whether
+    // we go on to charge/save below -- the provider tokens were genuinely
+    // spent, so the measurement must never be lost just because a later
+    // remaining-time guard decides not to proceed (see guards below).
+    await logUsage(userId, feature, MODELS.primary, coreResult.inputTokens, coreResult.outputTokens, { topic, platform, video_length, sub_step: 'core', content_type: contentType })
+
+    const elapsedBeforePackagingMs = Date.now() - routeStartedAt
+    if (!hasTimeBudgetForPackaging(elapsedBeforePackagingMs)) {
+      console.error(`[VideoPackage] Hátralévőidő-védelem: packaging indítása előtt nincs elegendő biztonságos tartalék (eltelt=${elapsedBeforePackagingMs}ms). Nincs levonás, nincs mentés, nincs automatikus retry.`)
+      return NextResponse.json({ error: 'A generálás a biztonságos időkereten belül nem fejeződött volna be. Kredit nem került levonásra. Próbáld újra.' }, { status: 504 })
+    }
+
     const packagingResult = await generatePackaging({
       topic, isShorts, platform,
       hook: coreResult.parsed.hook as string,
       narration: coreResult.parsed.narration as string,
       niche: creatorContext, uploadTimes, strictFactMode, qualityStatus,
     })
+
+    await logUsage(userId, feature, MODELS.fast, packagingResult.inputTokens, packagingResult.outputTokens, { topic, platform, video_length, sub_step: 'packaging' })
+
+    const elapsedBeforeChargeMs = Date.now() - routeStartedAt
+    if (!hasTimeBudgetForChargeAndSave(elapsedBeforeChargeMs)) {
+      console.error(`[VideoPackage] Hátralévőidő-védelem: kreditlevonás előtt nincs elegendő biztonságos tartalék (eltelt=${elapsedBeforeChargeMs}ms). Nincs levonás, nincs mentés, nincs automatikus retry.`)
+      return NextResponse.json({ error: 'A generálás elkészült, de a biztonságos mentéshez már nem maradt elég idő. Kredit nem került levonásra. Próbáld újra.' }, { status: 504 })
+    }
 
     const polishedCore = polishHungarianOutput(coreResult.parsed) as Record<string, unknown>
     const polishedPackaging = polishHungarianOutput(packagingResult.parsed) as Record<string, unknown>
@@ -294,24 +386,34 @@ export async function POST(request: NextRequest) {
       forbidden_claims: factBlock.forbidden_claims,
       // A fizetett eredmény a teljes forrássnapshotot őrzi. Így a bizonyítékok
       // paidResultId-s újranyitáskor nem a böngésző sessionStorage-ából élnek.
-      opportunity_context: opportunity_context ? {
-        ...opportunity_context,
+      // A `resolvedOpportunityContext`/`webSourceItems`/`youtubeSourceItems`
+      // itt PONTOSAN azt tükrözi, ami a generáláshoz ténylegesen felhasználásra
+      // került (szerver-oldali snapshot, ha volt video_idea_id, egyébként a
+      // kliens által küldött érték) -- ez a fagyasztott, visszakövethető
+      // másolat, függetlenül attól, hogy a forrás snapshot időközben frissül-e.
+      opportunity_context: resolvedOpportunityContext ? {
+        ...resolvedOpportunityContext,
         web_sources: webSourceItems,
         evidence_videos: youtubeSourceItems,
       } : null,
+      // Explicit eredet-jelzés: honnan jött a ténylegesen felhasznált bizonyíték.
+      opportunity_evidence_source: opportunityEvidenceSource,
+      opportunity_evidence_captured_at: opportunityEvidenceCapturedAt,
     }
 
-    await logUsage(userId, feature, MODELS.primary, coreResult.inputTokens, coreResult.outputTokens, { topic, platform, video_length, sub_step: 'core', content_type: contentType })
-    await logUsage(userId, feature, MODELS.fast, packagingResult.inputTokens, packagingResult.outputTokens, { topic, platform, video_length, sub_step: 'packaging' })
-
-    const chargeResult = await chargeFeature(userId, feature, { topic, platform, video_length })
-    if (!chargeResult.success) {
-      return NextResponse.json({ error: chargeResult.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
-    }
-
-    const responsePayload = { ...result, _credits_remaining: chargeResult.new_balance }
-    const paidSave = await savePaidResult({
+    // 2026-10-01 incident follow-up: a kreditlevonás és a paid_results mentés
+    // egyetlen, atomikus DB-tranzakcióba kerül (migráció 093,
+    // spend_credits_and_save_paid_result) -- vagy mindkettő megtörténik,
+    // vagy egyik sem. A régi, külön chargeFeature()+savePaidResult()
+    // hívások közötti "levont, de el nem mentett" ablak emiatt szerkezetileg
+    // kizárt Video Package-nél -- nincs külön refund-ág sem, mert nincs mit
+    // visszatéríteni: ha a mentés bármiért meghiúsul, a tranzakció a
+    // levonást is visszagörgeti.
+    const atomicResult = await chargeFeatureAndSavePaidResult({
       userId,
+      feature,
+      cost: CREDIT_COSTS[feature],
+      chargeMetadata: { topic, platform, video_length },
       toolType: 'video_package',
       inputHash,
       normalizedInput,
@@ -319,7 +421,7 @@ export async function POST(request: NextRequest) {
       region: language || null,
       language: language || null,
       platform: platform || null,
-      resultJson: responsePayload,
+      resultJson: result,
       summaryJson: { topic, platform, video_length, quality_status: qualityStatus },
       creditCost: CREDIT_COSTS[feature],
       freshForHours: 24,
@@ -333,14 +435,33 @@ export async function POST(request: NextRequest) {
       promptVersion: 'v1',
       estimatedCost: coreResult.estimatedCost + packagingResult.estimatedCost,
     })
-    if (!paidSave.success) {
-      console.error('[VideoPackage] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-      const refund = await refundCreditsAfterPersistenceFailure(userId, feature, CREDIT_COSTS[feature], { reason: 'paid_result_save_failed' }, chargeResult.credit_transaction_id)
-      if (!refund.success) console.error('[VideoPackage] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
-      return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
+    if (!atomicResult.success) {
+      // atomicResult.error is always set on failure (see
+      // chargeFeatureAndSavePaidResult) with an outcome-specific message --
+      // for the 'uncertain_outcome' case specifically, it does NOT claim no
+      // charge happened, since that is genuinely not known in that branch.
+      // This fallback text mirrors that: it must never assert a definite
+      // "nincs levonás" either, in case atomicResult.error is ever empty.
+      const status = atomicResult.errorCode === 'insufficient_credits' ? 402 : 500
+      return NextResponse.json({ error: atomicResult.error || 'A mentés sikertelen volt.' }, { status })
     }
 
-    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    const savedResult = atomicResult.paidResult!
+    if (atomicResult.duplicate) {
+      // A levonás ELŐTTI ellenőrzés nem ezen a kéréstárgyon futott (pl. a
+      // generálás alatt egy másik kísérlet már commitolt ugyanerre a
+      // bemenetre) -- a DB-ben MÁR mentett eredményt adjuk vissza, NEM a
+      // most feleslegesen újragenerált tartalmat, és NEM vonunk le ismét.
+      await openPaidResult(savedResult)
+      const polishedResult = polishHungarianOutput(savedResult.result_json) as Record<string, unknown>
+      const { _credits_remaining: _historicalCreditBalance, ...reopenableResult } = polishedResult
+      return NextResponse.json({
+        ...reopenableResult,
+        ...paidResultResponseMeta(savedResult),
+      })
+    }
+
+    return NextResponse.json({ ...result, _credits_remaining: atomicResult.newBalance, paid_result_id: savedResult.id })
     } finally {
       await releaseRequestLock(lock.lockId)
     }

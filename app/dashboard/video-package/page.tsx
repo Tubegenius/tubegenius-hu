@@ -198,6 +198,7 @@ interface OpportunityPackageContext {
   web_sources?: Array<{ title: string; url: string; snippet?: string; date?: string; source?: string }>
   evidence_videos?: Array<{ video_id: string; title: string; url: string; channel_title: string; thumbnail_url?: string; view_count: number; like_count: number; comment_count: number; published_at: string }>
   score_breakdown?: Record<string, number>
+  captured_at?: string
 }
 
 interface SourceVideoExtractResult {
@@ -370,12 +371,19 @@ export default function VideoPackagePage() {
   const sourceVideoUrl = searchParams.get('source_video_url') || null
   const sourceContext = searchParams.get('source_context') || null
   const opportunityId = searchParams.get('opportunity_id') || null
+  const videoIdeaId = searchParams.get('video_idea_id') || null
   const sourceMode = searchParams.get('mode') === 'source_video'
   const factBlockRef = useRef<string | null>(null)
   const sourceExtractRef = useRef<SourceVideoExtractResult | null>(null)
   const [sourceVideoInfo, setSourceVideoInfo] = useState<{ title: string; transcriptAvailable: boolean } | null>(null)
   const opportunityContextRef = useRef<OpportunityPackageContext | null>(null)
   const [opportunityContext, setOpportunityContext] = useState<OpportunityPackageContext | null>(null)
+  // 'idle' (no video_idea_id, nothing to check) | 'loading' | 'found' |
+  // 'missing' (video_idea_id present, server confirmed no snapshot --
+  // explicit, never a fabricated placeholder) | 'error' (fetch itself
+  // failed -- distinct from 'missing', shown identically to the user but
+  // logged differently, never silently treated as success).
+  const [snapshotStatus, setSnapshotStatus] = useState<'idle' | 'loading' | 'found' | 'missing' | 'error'>('idle')
   const [allowWeakOpportunityGeneration, setAllowWeakOpportunityGeneration] = useState(false)
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const pendingActionRef = useRef<(() => void) | null>(null)
@@ -473,7 +481,51 @@ export default function VideoPackagePage() {
     }
   }
 
-  function loadOpportunityContext() {
+  // Server-side, owner-scoped read (GET /api/video-ideas/[id]/opportunity-snapshot)
+  // is the PRIMARY source when video_idea_id is present -- this is what
+  // makes the evidence survive a new session/device, unlike the
+  // sessionStorage-only path below. sessionStorage is used only as a
+  // same-tab instant-display cache while the fetch is in flight, and as
+  // the sole fallback for the legacy opportunity_id-only flow (no
+  // video_idea_id at all -- an older client state or a card that couldn't
+  // reach the evidence-snapshot endpoint).
+  async function loadOpportunityContext() {
+    if (videoIdeaId) {
+      setSnapshotStatus('loading')
+      try {
+        const res = await fetch(`/api/video-ideas/${encodeURIComponent(videoIdeaId)}/opportunity-snapshot`)
+        if (!res.ok) { setSnapshotStatus('error'); return }
+        const data = await res.json()
+        if (!data.found) { setSnapshotStatus('missing'); return }
+        const s = data.snapshot
+        const parsed: OpportunityPackageContext = {
+          id: videoIdeaId,
+          title: s.title,
+          // keyword isn't stored on the snapshot row -- the topic/keyword
+          // URL params (already sent by both callers) cover the form field.
+          description: s.description || undefined,
+          confidence: s.confidence || undefined,
+          trend_source_type: s.trend_source_type || undefined,
+          trend_source_label: s.trend_source_label || undefined,
+          opportunity_score: s.opportunity_score ?? undefined,
+          risk_flags: Array.isArray(s.risk_flags) ? s.risk_flags : undefined,
+          hook_suggestion: s.hook_suggestion || undefined,
+          web_sources: Array.isArray(s.web_sources) ? s.web_sources : undefined,
+          evidence_videos: Array.isArray(s.evidence_videos) ? s.evidence_videos : undefined,
+          score_breakdown: s.score_breakdown || undefined,
+          captured_at: s.captured_at,
+        }
+        opportunityContextRef.current = parsed
+        setOpportunityContext(parsed)
+        setSnapshotStatus('found')
+        setAllowWeakOpportunityGeneration(false)
+        return
+      } catch (e) {
+        console.error('Opportunity snapshot fetch error:', e)
+        setSnapshotStatus('error')
+        return
+      }
+    }
     if (!opportunityId) return
     try {
       const cachedRaw = sessionStorage.getItem('willviral_opportunity_package_' + opportunityId)
@@ -805,6 +857,12 @@ export default function VideoPackagePage() {
             risk_flags: opportunityContextData.risk_flags || [],
             preparation_mode: opportunityPreparationMode,
           } : undefined,
+          // When present, the server re-resolves opportunity_context/
+          // web_sources/youtube_sources from its OWN owner-scoped snapshot
+          // and ignores the three fields above -- this client payload is
+          // only the fallback for the video_idea_id-less / no-snapshot case
+          // (see app/api/video-package/route.ts's resolution block).
+          video_idea_id: videoIdeaId || undefined,
           source_video: sourceExtract ? {
             video_id: sourceExtract.video_id,
             url: sourceVideoUrl,
@@ -1090,6 +1148,17 @@ export default function VideoPackagePage() {
         </div>
       )}
 
+      {snapshotStatus === 'missing' && (
+        <div role="status" className="rounded-xl px-4 py-3 mb-4"
+          style={{ background: 'rgba(148,163,184,0.06)', border: '1px solid rgba(148,163,184,0.18)' }}>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#94A3B8' }}>
+            Nincs mentett bizonyíték
+          </p>
+          <p className="text-sm" style={{ color: '#CBD5E1' }}>
+            Ehhez a korábban mentett ötlethez nincs elérhető forrás vagy indoklás (régebbi mentés, a bizonyíték-mentés bevezetése előttről). A téma és a kulcsszó megmaradt -- a forrásokat és a pontszámot a tool egy új, kredit-köteles keresésével frissítheted, ha szükséges.
+          </p>
+        </div>
+      )}
       {opportunityContext && (
         <div className="rounded-xl px-4 py-3 mb-4"
           style={{
@@ -1105,6 +1174,11 @@ export default function VideoPackagePage() {
               <p className="text-sm" style={{ color: '#F8FAFC' }}>
                 {opportunityContext.ready_to_produce_label || 'Validált téma'} · {opportunityContext.web_sources?.length || 0} webes forrás · {opportunityContext.evidence_videos?.length || 0} bizonyíték videó
               </p>
+              {opportunityContext.captured_at && (
+                <p className="text-xs mt-1" style={{ color: '#94A3B8' }}>
+                  Ez a bizonyíték {new Date(opportunityContext.captured_at).toLocaleDateString('hu-HU', { year: 'numeric', month: 'long', day: 'numeric' })}-i állapotot tükrözi -- azóta változhatott.
+                </p>
+              )}
               {opportunityNeedsValidation && (
                 <p className="text-xs mt-2" style={{ color: '#CBD5E1' }}>
                   Ez még nem elsődleges gyártási ajánlás. A prémium folyamat szerint előbb validáld a Piaci bizonyítékok vagy Virális esély oldalon.
