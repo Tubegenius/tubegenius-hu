@@ -152,6 +152,33 @@ export async function getPaidResultByHash(params: {
   }
 }
 
+// Additive, STRICT sibling of getPaidResultByHash -- does NOT replace or
+// modify it, and no other caller is switched to this. Only
+// app/api/video-package/route.ts uses this, specifically because
+// getPaidResultByHash's `catch { return null }` cannot distinguish a
+// genuine "no such row" from a real DB/network read error -- both collapse
+// to `null`, which a caller then (incorrectly) treats as "no cached result,
+// safe to proceed to a paid AI call." This version propagates a genuine
+// read error as a thrown exception instead of silently swallowing it, so
+// the caller can refuse to proceed (no AI call, no charge) rather than risk
+// re-charging for a result that may already exist.
+export async function getPaidResultByHashStrict(params: {
+  userId: string
+  toolType: PaidToolType
+  inputHash: string
+}): Promise<PaidResultRecord | null> {
+  const { data, error } = await adminClient()
+    .from('paid_results')
+    .select('*')
+    .eq('user_id', params.userId)
+    .eq('tool_type', params.toolType)
+    .eq('input_hash', params.inputHash)
+    .eq('status', 'completed')
+    .maybeSingle()
+  if (error) throw new Error(`paid_results read failed: ${error.message}`)
+  return (data as PaidResultRecord | null) ?? null
+}
+
 export async function openPaidResult(record: PaidResultRecord): Promise<PaidResultRecord> {
   try {
     const now = new Date().toISOString()

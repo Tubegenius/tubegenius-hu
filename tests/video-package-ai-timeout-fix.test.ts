@@ -548,14 +548,14 @@ describe('static structure check: the real route.ts wires the two guards in the 
     expect(startedAtIndex).toBeLessThan(tryIndex)
   })
 
-  it('calls happen in the documented order: core logUsage -> checkpoint 1 -> generatePackaging -> packaging logUsage -> checkpoint 2 -> chargeFeature', () => {
+  it('calls happen in the documented order: core logUsage -> checkpoint 1 -> generatePackaging -> packaging logUsage -> checkpoint 2 -> atomic charge+save', () => {
     const order = [
       "logUsage(userId, feature, MODELS.primary",
       'hasTimeBudgetForPackaging(',
       'generatePackaging({',
       'logUsage(userId, feature, MODELS.fast',
       'hasTimeBudgetForChargeAndSave(',
-      'chargeFeature(userId, feature,',
+      'chargeFeatureAndSavePaidResult({',
     ].map(needle => src.indexOf(needle))
     expect(order.every(i => i !== -1)).toBe(true)
     for (let i = 1; i < order.length; i++) expect(order[i]).toBeGreaterThan(order[i - 1])

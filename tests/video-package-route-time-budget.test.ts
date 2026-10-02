@@ -18,10 +18,10 @@ import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  mockGetUserId, mockCheckPaidFeatureAccess, mockChargeFeature, mockLogUsage,
-  mockRefundCreditsAfterPersistenceFailure, mockEstimateCost,
-  mockBuildPaidResultHash, mockNormalizePaidResultInput, mockSavePaidResult,
-  mockGetPaidResultByHash, mockGetPaidResultById, mockOpenPaidResult, mockPaidResultResponseMeta,
+  mockGetUserId, mockCheckPaidFeatureAccess, mockLogUsage, mockEstimateCost,
+  mockBuildPaidResultHash, mockNormalizePaidResultInput,
+  mockGetPaidResultByHashStrict, mockGetPaidResultById, mockOpenPaidResult, mockPaidResultResponseMeta,
+  mockChargeFeatureAndSavePaidResult,
   mockAcquireRequestLock, mockReleaseRequestLock,
   mockCreateAdminClient,
   mockGetOpportunityEvidenceSnapshot, mockVerifyOwnVideoIdea,
@@ -31,17 +31,15 @@ const {
 } = vi.hoisted(() => ({
   mockGetUserId: vi.fn(),
   mockCheckPaidFeatureAccess: vi.fn(),
-  mockChargeFeature: vi.fn(),
   mockLogUsage: vi.fn(),
-  mockRefundCreditsAfterPersistenceFailure: vi.fn(),
   mockEstimateCost: vi.fn(() => 0),
   mockBuildPaidResultHash: vi.fn(() => 'hash-fixed'),
   mockNormalizePaidResultInput: vi.fn((x: unknown) => x),
-  mockSavePaidResult: vi.fn(),
-  mockGetPaidResultByHash: vi.fn(),
+  mockGetPaidResultByHashStrict: vi.fn(),
   mockGetPaidResultById: vi.fn(),
   mockOpenPaidResult: vi.fn(),
   mockPaidResultResponseMeta: vi.fn(() => ({})),
+  mockChargeFeatureAndSavePaidResult: vi.fn(),
   mockAcquireRequestLock: vi.fn(),
   mockReleaseRequestLock: vi.fn(),
   mockCreateAdminClient: vi.fn(),
@@ -56,21 +54,21 @@ const {
 vi.mock('@/lib/credits', () => ({
   getUserId: mockGetUserId,
   checkPaidFeatureAccess: mockCheckPaidFeatureAccess,
-  chargeFeature: mockChargeFeature,
   logUsage: mockLogUsage,
   CREDIT_COSTS: { video_package_shorts: 2, video_package_long: 6 },
-  refundCreditsAfterPersistenceFailure: mockRefundCreditsAfterPersistenceFailure,
   estimateCost: mockEstimateCost,
 }))
 vi.mock('@/lib/daily-soft-limit', () => ({ dailySoftLimitError: vi.fn() }))
 vi.mock('@/lib/paid-results/paid-results-service', () => ({
   buildPaidResultHash: mockBuildPaidResultHash,
   normalizePaidResultInput: mockNormalizePaidResultInput,
-  savePaidResult: mockSavePaidResult,
-  getPaidResultByHash: mockGetPaidResultByHash,
+  getPaidResultByHashStrict: mockGetPaidResultByHashStrict,
   getPaidResultById: mockGetPaidResultById,
   openPaidResult: mockOpenPaidResult,
   paidResultResponseMeta: mockPaidResultResponseMeta,
+}))
+vi.mock('@/lib/paid-results/atomic-charge-save', () => ({
+  chargeFeatureAndSavePaidResult: mockChargeFeatureAndSavePaidResult,
 }))
 vi.mock('@/lib/hungarian-output-polish', () => ({ polishHungarianOutput: mockPolishHungarianOutput }))
 vi.mock('@/lib/request-lock', () => ({
@@ -146,7 +144,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockGetUserId.mockResolvedValue('user-1')
   mockCheckPaidFeatureAccess.mockResolvedValue({ allowed: true })
-  mockGetPaidResultByHash.mockResolvedValue(null)
+  mockGetPaidResultByHashStrict.mockResolvedValue(null)
   mockAcquireRequestLock.mockResolvedValue({ acquired: true, lockId: 'lock-1' })
   mockReleaseRequestLock.mockResolvedValue(undefined)
   // Every logUsage() call costs a small, fixed, illustrative amount of real
@@ -154,8 +152,10 @@ beforeEach(() => {
   mockLogUsage.mockImplementation(async () => {
     vi.setSystemTime(Date.now() + LOG_USAGE_DURATION_MS)
   })
-  mockChargeFeature.mockResolvedValue({ success: true, new_balance: 94, credit_transaction_id: 'tx-1' })
-  mockSavePaidResult.mockResolvedValue({ success: true, record: { id: 'paid-1' } })
+  mockChargeFeatureAndSavePaidResult.mockResolvedValue({
+    success: true, duplicate: false, newBalance: 94, creditTransactionId: 'tx-1',
+    paidResult: { id: 'paid-1', result_json: {} },
+  })
   mockPolishHungarianOutput.mockImplementation((x: unknown) => x)
 })
 afterEach(() => {
@@ -200,8 +200,7 @@ describe('POST /api/video-package -- real handler, checkpoint 1 (before packagin
     expect(mockLogUsage).toHaveBeenCalledWith('user-1', 'video_package_long', MODELS.primary, 2255, 5990, expect.objectContaining({ sub_step: 'core' }))
 
     expect(mockGeneratePackaging).not.toHaveBeenCalled()
-    expect(mockChargeFeature).not.toHaveBeenCalled()
-    expect(mockSavePaidResult).not.toHaveBeenCalled()
+    expect(mockChargeFeatureAndSavePaidResult).not.toHaveBeenCalled()
 
     expect(mockReleaseRequestLock).toHaveBeenCalledTimes(1)
     expect(mockReleaseRequestLock).toHaveBeenCalledWith('lock-1')
@@ -250,8 +249,7 @@ describe('POST /api/video-package -- real handler, checkpoint 2 (before charge/s
     expect(mockLogUsage).toHaveBeenNthCalledWith(1, 'user-1', 'video_package_long', MODELS.primary, 2255, 5990, expect.objectContaining({ sub_step: 'core' }))
     expect(mockLogUsage).toHaveBeenNthCalledWith(2, 'user-1', 'video_package_long', MODELS.fast, 500, 300, expect.objectContaining({ sub_step: 'packaging' }))
 
-    expect(mockChargeFeature).not.toHaveBeenCalled() // the exact risk this guard exists to prevent
-    expect(mockSavePaidResult).not.toHaveBeenCalled()
+    expect(mockChargeFeatureAndSavePaidResult).not.toHaveBeenCalled() // the exact risk this guard exists to prevent
 
     expect(mockReleaseRequestLock).toHaveBeenCalledTimes(1)
     expect(mockReleaseRequestLock).toHaveBeenCalledWith('lock-1')
@@ -282,8 +280,101 @@ describe('POST /api/video-package -- real handler, sanity: neither guard false-t
     expect(body.paid_result_id).toBe('paid-1')
 
     expect(mockLogUsage).toHaveBeenCalledTimes(2)
-    expect(mockChargeFeature).toHaveBeenCalledTimes(1)
-    expect(mockSavePaidResult).toHaveBeenCalledTimes(1)
+    expect(mockChargeFeatureAndSavePaidResult).toHaveBeenCalledTimes(1)
     expect(mockReleaseRequestLock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// 2026-10-01 incident follow-up -- atomic charge+save contract tests.
+describe('POST /api/video-package -- real handler, pre-flight cache check: completed result returns BEFORE any charge', () => {
+  it('a completed result already found by getPaidResultByHashStrict is served from the DB -- no AI call, no charge, no save attempt', async () => {
+    const cachedRecord = {
+      id: 'paid-cached-1',
+      result_json: { hook: 'cached hook from a prior run', _credits_remaining: 999 },
+      fresh_until: new Date(Date.now() + 3600_000).toISOString(),
+      last_refreshed_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    }
+    mockGetPaidResultByHashStrict.mockResolvedValueOnce(cachedRecord)
+    mockOpenPaidResult.mockResolvedValueOnce(cachedRecord)
+    mockPaidResultResponseMeta.mockReturnValueOnce({ from_paid_result: true, cache_status: 'fresh', requires_credit: false, paid_result_id: 'paid-cached-1' })
+
+    const res = await POST(buildRequest())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.hook).toBe('cached hook from a prior run')
+    expect(body._credits_remaining).toBeUndefined() // stale historical balance stripped, per existing reopen convention
+    expect(body.from_paid_result).toBe(true)
+
+    expect(mockGenerateCreativeCore).not.toHaveBeenCalled()
+    expect(mockGeneratePackaging).not.toHaveBeenCalled()
+    expect(mockChargeFeatureAndSavePaidResult).not.toHaveBeenCalled()
+    expect(mockReleaseRequestLock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('POST /api/video-package -- real handler, pre-flight cache check: a genuine DB read error must NOT be treated as a cache-miss', () => {
+  it('getPaidResultByHashStrict throwing stops the route BEFORE any AI call or charge -- explicit 503, not a silent fall-through to a fresh (re-)charge', async () => {
+    mockGetPaidResultByHashStrict.mockRejectedValueOnce(new Error('paid_results read failed: connection reset'))
+
+    const res = await POST(buildRequest())
+    const body = await res.json()
+
+    expect(res.status).toBe(503)
+    expect(body.error).toMatch(/Nem sikerült ellenőrizni/)
+
+    expect(mockGenerateCreativeCore).not.toHaveBeenCalled()
+    expect(mockGeneratePackaging).not.toHaveBeenCalled()
+    expect(mockChargeFeatureAndSavePaidResult).not.toHaveBeenCalled()
+    expect(mockReleaseRequestLock).toHaveBeenCalledTimes(1) // lock still released even on this early stop
+  })
+})
+
+describe('POST /api/video-package -- real handler, atomic RPC duplicate (idempotent replay) response', () => {
+  it('when chargeFeatureAndSavePaidResult returns duplicate:true, the route serves the DB-SAVED payload (not the just-(re)generated, freshly-discarded content), no new charge is implied by the response shape', async () => {
+    mockGenerateCreativeCore.mockResolvedValue({ parsed: coreParsedFixture, inputTokens: 2255, outputTokens: 5990, estimatedCost: 0.12 })
+    mockGeneratePackaging.mockResolvedValue({ parsed: packagingParsedFixture, inputTokens: 500, outputTokens: 300, estimatedCost: 0.01 })
+
+    const savedPayload = { hook: 'the ORIGINAL saved hook', narration: 'original narration', _credits_remaining: 123 }
+    mockChargeFeatureAndSavePaidResult.mockResolvedValueOnce({
+      success: true,
+      duplicate: true,
+      paidResult: { id: 'paid-existing-1', result_json: savedPayload, fresh_until: new Date(Date.now() + 3600_000).toISOString(), last_refreshed_at: new Date().toISOString() },
+      newBalance: 88,
+    })
+    mockOpenPaidResult.mockResolvedValueOnce({ id: 'paid-existing-1', result_json: savedPayload })
+    mockPaidResultResponseMeta.mockReturnValueOnce({ from_paid_result: true, cache_status: 'fresh', requires_credit: false, paid_result_id: 'paid-existing-1' })
+
+    const res = await POST(buildRequest())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.hook).toBe('the ORIGINAL saved hook') // from the DB, not coreParsedFixture.hook
+    expect(body._credits_remaining).toBeUndefined() // stale balance from the ORIGINAL save stripped
+    expect(body.from_paid_result).toBe(true)
+    expect(mockOpenPaidResult).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('POST /api/video-package -- real handler, uncertain-outcome RPC failure must NOT be told to the user as "try again now"', () => {
+  it('when chargeFeatureAndSavePaidResult reports errorCode:uncertain_outcome, the route surfaces ITS specific message -- the OUTER catch\'s generic "Generálás sikertelen. Próbáld újra." must never be reached for this case', async () => {
+    mockGenerateCreativeCore.mockResolvedValue({ parsed: coreParsedFixture, inputTokens: 2255, outputTokens: 5990, estimatedCost: 0.12 })
+    mockGeneratePackaging.mockResolvedValue({ parsed: packagingParsedFixture, inputTokens: 500, outputTokens: 300, estimatedCost: 0.01 })
+    mockChargeFeatureAndSavePaidResult.mockResolvedValueOnce({
+      success: false,
+      errorCode: 'uncertain_outcome',
+      error: 'A kérés állapota bizonytalan -- nem lehet megállapítani, hogy a mentés megtörtént-e. Ne indíts új kísérletet; az esetet naplóztuk, és kézi ellenőrzés szükséges.',
+    })
+
+    const res = await POST(buildRequest())
+    const body = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(body.error).toMatch(/bizonytalan/i)
+    // the specific, accurate message reached the client -- NOT the outer
+    // catch's generic retry-encouraging fallback
+    expect(body.error).not.toMatch(/Próbáld újra/i)
+    expect(body.error).not.toBe('Generálás sikertelen. Próbáld újra.')
   })
 })

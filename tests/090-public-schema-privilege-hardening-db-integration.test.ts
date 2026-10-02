@@ -106,6 +106,34 @@ const PIN_092_APP = [
   'save_opportunity_recommendation_to_memory(p_user_id uuid, p_video_idea_id uuid, p_topic text, p_search_keyword text, p_platform text, p_opportunity_score integer, p_schema_version smallint, p_captured_at timestamp with time zone, p_expires_at timestamp with time zone, p_title text, p_description text, p_hook_suggestion text, p_score_breakdown jsonb, p_confidence text, p_trend_source_type text, p_trend_source_label text, p_risk_flags jsonb, p_topic_intelligence jsonb, p_web_sources jsonb, p_evidence_videos jsonb, p_region text, p_niche text)|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE,service_role:EXECUTE|body=1626407ab670447fc40014c5ae1d2661',
 ]
 
+// Migration 093 (Video Package atomic charge+save) legitimately adds 1 new
+// public table (paid_operations, RLS-protected, no triggers) and 1 new
+// public function. Same undo/pin pattern as 092 above, layered on top of it
+// (every scenario below that undoes 092 now also undoes 093, so 090's own
+// embedded self-check keeps seeing exactly its own 090-era baseline).
+//
+// The DROP list is exhaustive and itemized against 093's actual migration
+// text (supabase/migrations/093_video_package_atomic_charge_save.sql).
+const PRE_093_UNDO_SQL = `
+DROP TABLE IF EXISTS public.paid_operations CASCADE;
+DROP FUNCTION IF EXISTS public.spend_credits_and_save_paid_result(uuid, text, numeric, jsonb, text, text, text, text, text, text, text, jsonb, jsonb, numeric, timestamptz, text, text, text, text, numeric, text, uuid, text, text);`
+
+// Itemized, audited contract for 093's 1 new application function -- same
+// line shape as PIN_092_APP above. name/argument-list/secdef/revoke-grant
+// list are syntactically certain from 093's own source. body= is the md5 of
+// the exact function source text (prosrc, i.e. the raw text between the
+// dollar-quote delimiters, CRLF-normalized the same way the live digest
+// expression does) -- computed directly from the committed 093 migration
+// file with a small extraction script, and cross-validated by applying the
+// IDENTICAL extraction method to all 5 PIN_092_APP entries above and
+// confirming all 5 reproduce their already-recorded md5 exactly, before
+// trusting it for this new entry. NOT independently confirmed against a
+// live catalog this round (no DB access authorized) -- see the accompanying
+// report for this residual gap.
+const PIN_093_APP = [
+  'spend_credits_and_save_paid_result(p_user_id uuid, p_feature text, p_cost numeric, p_charge_metadata jsonb, p_tool_type text, p_input_hash text, p_normalized_input text, p_original_input text, p_region text, p_language text, p_platform text, p_result_json jsonb, p_summary_json jsonb, p_credit_cost numeric, p_fresh_until timestamp with time zone, p_provider text, p_model text, p_prompt_template_id text, p_prompt_version text, p_estimated_cost numeric, p_source_run_id text, p_linked_video_idea_id uuid, p_main_category text, p_specific_focus text)|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE,service_role:EXECUTE|body=fa94a807a3ef5df8fdba211c89f3cf92',
+]
+
 function psql(sql: string, user = 'postgres'): PsqlResult {
   const wrapped = /^\s*BEGIN;/.test(sql) ? sql.replace('BEGIN;', `BEGIN;\n${PRE_091_FUNCTION_SQL}`) : sql
   const result = spawnSync(
@@ -220,9 +248,10 @@ function guardCount(output: string): number {
 
 function runBodyAfter(prefixSql: string, user = 'postgres', asRole?: string): PsqlResult {
   const setRole = asRole ? `SET LOCAL ROLE ${asRole};` : ''
-  // PRE_092_UNDO_SQL first (see its own comment): every MIGRATION_BODY re-run in
-  // this file must see the 090-era baseline, not today's post-092 catalog.
-  return psql(`BEGIN;\n${PRE_092_UNDO_SQL}\n${prefixSql}\n${setRole}\n${MIGRATION_BODY}\nROLLBACK;`, user)
+  // PRE_092_UNDO_SQL then PRE_093_UNDO_SQL (see their own comments): every
+  // MIGRATION_BODY re-run in this file must see the 090-era baseline, not
+  // today's post-092-and-093 catalog.
+  return psql(`BEGIN;\n${PRE_092_UNDO_SQL}\n${PRE_093_UNDO_SQL}\n${prefixSql}\n${setRole}\n${MIGRATION_BODY}\nROLLBACK;`, user)
 }
 
 const adminClient = createClient(LOCAL_URL, LOCAL_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
@@ -246,19 +275,20 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
     const out = psqlOk(GUARD)
     expect(guardViolations(out)).toEqual([])
     expect(guardCount(out)).toBe(0)
-    // 090's own 82 tables + 092's 1 new (itemized, RLS-protected) table.
-    expect(out).toMatch(/public_tables=83/)
-    // 090's own 77 app + 31 pg_trgm functions + 092's 5 new (itemized) app functions.
-    expect(out).toMatch(/public_functions=113/)
+    // 090's own 82 tables + 092's 1 new + 093's 1 new (both itemized, RLS-protected) table.
+    expect(out).toMatch(/public_tables=84/)
+    // 090's own 77 app + 31 pg_trgm functions + 092's 5 new + 093's 1 new (both itemized) app functions.
+    expect(out).toMatch(/public_functions=114/)
   })
 
   it('keeper DML sets equal the recorded sets exactly (anon/PUBLIC 0, authenticated, service_role)', () => {
     // 090's own frozen digest (c_dml_auth_digest/c_dml_service_digest, embedded
     // in the untouched 090 migration) is compared against the live set MINUS
-    // 092's own itemized addition -- so 090's baseline is verified completely
-    // unchanged, byte for byte, and 092's addition is checked separately below
-    // as an exact, closed, named expectation (not folded into a re-derived
-    // hash, which would need live-DB data this round doesn't have access to).
+    // 092's AND 093's own itemized additions -- so 090's baseline is verified
+    // completely unchanged, byte for byte, and each addition is checked
+    // separately below as an exact, closed, named expectation (not folded
+    // into a re-derived hash, which would need live-DB data this round
+    // doesn't have access to).
     const dml = (role: string) =>
       psqlOk(`
         SELECT count(*) || '|' || coalesce(md5(string_agg(t, E'\\n' ORDER BY t)), 'empty') FROM (
@@ -266,7 +296,7 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN LATERAL aclexplode(c.relacl) a
           WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND a.grantee = '${role}'::regrole
             AND a.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE')
-            AND c.relname <> 'video_idea_opportunity_snapshots') s;`).trim()
+            AND c.relname NOT IN ('video_idea_opportunity_snapshots', 'paid_operations')) s;`).trim()
     expect(dml('authenticated')).toBe(`${constant('c_dml_auth_count')}|${constant('c_dml_auth_digest')}`)
     expect(dml('service_role')).toBe(`${constant('c_dml_service_count')}|${constant('c_dml_service_digest')}`)
     const anonPublic = psqlOk(`
@@ -285,9 +315,20 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
         AND a.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE') AND c.relname = 'video_idea_opportunity_snapshots';`).trim()
     expect(opp092Dml('authenticated')).toBe('video_idea_opportunity_snapshots|SELECT')
     expect(opp092Dml('service_role')).toBe('video_idea_opportunity_snapshots|SELECT')
+
+    // 093's own itemized addition (explicit REVOKE ALL then `GRANT SELECT ON
+    // paid_operations TO authenticated, service_role`) -- exactly this one
+    // row for each role, nothing else (no INSERT/UPDATE/DELETE for either).
+    const pop093Dml = (role: string) => psqlOk(`
+      SELECT string_agg(c.relname || '|' || a.privilege_type, ',' ORDER BY a.privilege_type)
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN LATERAL aclexplode(c.relacl) a
+      WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND a.grantee = '${role}'::regrole
+        AND a.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE') AND c.relname = 'paid_operations';`).trim()
+    expect(pop093Dml('authenticated')).toBe('paid_operations|SELECT')
+    expect(pop093Dml('service_role')).toBe('paid_operations|SELECT')
   })
 
-  it('RLS is enabled on all 82+1 public tables (090 unchanged + 092 itemized) and the 090 topology digest is unaffected', () => {
+  it('RLS is enabled on all 82+1+1 public tables (090 unchanged + 092 itemized + 093 itemized) and the 090 topology digest is unaffected', () => {
     // Same subtract-then-verify-separately shape as the DML digest test above,
     // and for the same reason (090's c_rls_digest is embedded, untouched, in
     // the migration file; recomputing a combined hash needs live baseline data
@@ -296,7 +337,7 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
       SELECT count(*) || '|' || md5(string_agg(c.relname || ':' || c.relrowsecurity || ':' || c.relforcerowsecurity, E'\\n' ORDER BY c.relname))
              || '|' || count(*) FILTER (WHERE NOT c.relrowsecurity)
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'video_idea_opportunity_snapshots';`).trim()
+      WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname NOT IN ('video_idea_opportunity_snapshots', 'paid_operations');`).trim()
     expect(out).toBe(`${constant('c_rls_count')}|${constant('c_rls_digest')}|0`)
 
     // 092's own new table (migration section 3): RLS ENABLE + FORCE, both true.
@@ -311,6 +352,13 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relname = 'video_idea_opportunity_snapshots';`).trim()
     expect(opp092Rls).toBe('true:true')
+
+    // 093's own new table: RLS ENABLE + FORCE, both true (same convention).
+    const pop093Rls = psqlOk(`
+      SELECT c.relrowsecurity || ':' || c.relforcerowsecurity
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'paid_operations';`).trim()
+    expect(pop093Rls).toBe('true:true')
   })
 
   it('the 31 pg_trgm functions match the allowlist exactly and are the only public functions callable by anon/PUBLIC', () => {
@@ -334,8 +382,8 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
     expect([...callable].sort()).toEqual(allow.map((l) => l.split('|')[0]).sort())
   })
 
-  it('the 77+5 application functions (090 unchanged + 092 itemized) equal the recorded contract (signature, owner, security, search_path, ACL, body) with zero anon/PUBLIC EXECUTE', () => {
-    const contract = [...pinned('pin_app'), ...PIN_092_APP]
+  it('the 77+5+1 application functions (090 unchanged + 092 itemized + 093 itemized) equal the recorded contract (signature, owner, security, search_path, ACL, body) with zero anon/PUBLIC EXECUTE', () => {
+    const contract = [...pinned('pin_app'), ...PIN_092_APP, ...PIN_093_APP]
     const live = psqlOk(`
       SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' ||
         '|owner=' || pg_get_userbyid(p.proowner) || '|kind=' || p.prokind::text || '|secdef=' || p.prosecdef ||
@@ -346,7 +394,7 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
       WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
         WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e' AND e.extname = 'pg_trgm');`)
       .split('\n').map((l) => l.trim()).filter(Boolean)
-    expect(live).toHaveLength(82)
+    expect(live).toHaveLength(83)
     // The only function 091 changes is handle_new_user_credits(): identity/owner/security/search_path/ACL must
     // still match the 090 contract exactly; its body may be the recorded 090 body OR the 091 body.
     const swap091Body = (line: string) => (line.startsWith('handle_new_user_credits()|')
@@ -368,6 +416,7 @@ describeIfLocalDb('090 hardening -- apply and reapply', () => {
     const out = psqlOk(`
 BEGIN;
 ${PRE_092_UNDO_SQL}
+${PRE_093_UNDO_SQL}
 ${digestStatement}
 ${PRE_090_STATE_SQL}
 ${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'PRE|'")}
@@ -391,6 +440,7 @@ ROLLBACK;`)
     const out = psqlOk(`
 BEGIN;
 ${PRE_092_UNDO_SQL}
+${PRE_093_UNDO_SQL}
 GRANT TRUNCATE, REFERENCES ON TABLE public.creator_memory TO PUBLIC;
 ${MIGRATION_BODY}
 SELECT 'PUBLIC_LEFT|' || count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
@@ -412,6 +462,7 @@ ROLLBACK;`)
     const out = psqlOk(`
 BEGIN;
 ${PRE_092_UNDO_SQL}
+${PRE_093_UNDO_SQL}
 SELECT (${digestExpr}) AS d0 \\gset
 ${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'PRE|'")}
 ${MIGRATION_BODY}
@@ -549,6 +600,7 @@ describeIfLocalDb('090 hardening -- fail-fast on drift (rolled back)', () => {
     const r = psql(
       `BEGIN;
 ${PRE_092_UNDO_SQL}
+${PRE_093_UNDO_SQL}
 ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
 ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
 SET LOCAL ROLE postgres;
@@ -570,7 +622,7 @@ ROLLBACK;`,
   ]
   for (const [label, user, alter] of WIDER) {
     it(`platform default ACL upper bound: ${label} is rejected`, () => {
-      const r = psql(`BEGIN;\n${PRE_092_UNDO_SQL}\n${alter}\nSET LOCAL ROLE postgres;\n${MIGRATION_BODY}\nSELECT 'MUST_NOT_REACH';\nROLLBACK;`, user)
+      const r = psql(`BEGIN;\n${PRE_092_UNDO_SQL}\n${PRE_093_UNDO_SQL}\n${alter}\nSET LOCAL ROLE postgres;\n${MIGRATION_BODY}\nSELECT 'MUST_NOT_REACH';\nROLLBACK;`, user)
       expect(r.status).not.toBe(0)
       expect(r.output).toContain('PLATFORM_OWNED_DEFAULT_ACL_RESIDUAL')
       expect(r.output).toContain('EXCEEDS')
@@ -634,7 +686,7 @@ describeIfLocalDb('090 hardening -- auth triggers, PostgREST negatives and keepe
   it('anon PostgREST cannot read or insert any public table (no 2xx)', async () => {
     const tables = psqlOk(`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') ORDER BY 1;`)
       .split('\n').map((l) => l.trim()).filter(Boolean)
-    expect(tables).toHaveLength(83) // 090's 82 + 092's video_idea_opportunity_snapshots
+    expect(tables).toHaveLength(84) // 090's 82 + 092's video_idea_opportunity_snapshots + 093's paid_operations
     const headers = { apikey: LOCAL_ANON_KEY, Authorization: `Bearer ${LOCAL_ANON_KEY}` }
     for (const table of tables) {
       const get = await fetch(`${LOCAL_URL}/rest/v1/${table}?limit=1`, { headers })
@@ -649,8 +701,10 @@ describeIfLocalDb('090 hardening -- auth triggers, PostgREST negatives and keepe
     // 092's 2 trigger functions are not PostgREST-callable RPCs at all (they are
     // trigger-type, not normal SQL-callable functions) and are excluded here for
     // that reason, not to narrow coverage; its 3 real RPCs are itemized in.
+    // 093's 1 new function IS a normal, directly callable RPC -- itemized in
+    // as-is, no filtering needed.
     const opp092Rpcs = PIN_092_APP.filter((l) => !l.startsWith('enforce_opportunity_evidence_snapshot_identity(') && !l.startsWith('touch_opportunity_evidence_snapshot_updated_at('))
-    const names = [...pinned('pin_app'), ...opp092Rpcs].map((l) => l.split('(')[0])
+    const names = [...pinned('pin_app'), ...opp092Rpcs, ...PIN_093_APP].map((l) => l.split('(')[0])
     expect(new Set(names).size).toBeGreaterThanOrEqual(70)
     for (const name of new Set(names)) {
       const res = await fetch(`${LOCAL_URL}/rest/v1/rpc/${name}`, { method: 'POST', headers, body: '{}' })

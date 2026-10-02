@@ -1,0 +1,353 @@
+name: 093 Video Package Preflight
+
+# ONE-OFF, APPROVAL-GATED preflight for migration 093 (Video Package atomic
+# charge+save). It never runs on an ordinary push or an ordinary
+# pull_request event -- merely having this file in a branch starts nothing.
+#
+# TWO activation paths, both requiring their own explicit, separate approval:
+#
+#  (a) PRE-MERGE, on the PR branch itself (needs NO prior merge of 093):
+#      a `workflow_dispatch`-only workflow cannot be run from a PR branch
+#      until the file also exists on the DEFAULT branch, so it would force
+#      the very merge this preflight is meant to precede. A `pull_request`
+#      workflow, in contrast, runs from the PR's OWN copy of the file. So the
+#      trigger is `pull_request: types: [labeled]` and the job is gated on
+#      the label `run-093-preflight` being the one just added. Nothing
+#      happens on opened/synchronize/reopened; adding the label (a
+#      deliberate act, done only after separate approval) starts exactly one
+#      run on the PR head. To run again, remove and re-add the label.
+#      Only same-repository PRs are accepted (fork PRs get no secrets
+#      anyway and no run is wanted for them).
+#  (b) POST-MERGE (or for a re-run): workflow_dispatch, once the file exists
+#      on the default branch.
+#
+# TESTED COMMIT (decided, and verified at run time): the EXACT PR HEAD.
+# A pull_request event's default checkout is NOT the PR head but a synthetic
+# merge commit (refs/pull/N/merge = PR head merged into the current base),
+# which changes whenever the base moves and is not a commit anyone reviewed.
+# This preflight is meant to prove the reviewed branch content, so the
+# checkout below pins `ref` to github.event.pull_request.head.sha (for
+# workflow_dispatch: github.sha, the dispatched ref's head), and the step
+# right after it fails the run if HEAD is not exactly that commit. Every run
+# states, in the step summary and in the uploaded artifact, BOTH SHAs:
+#   - TESTED = the PR head (what the results are about),
+#   - EVENT  = github.sha, the synthetic merge commit (NOT tested; shown so
+#              nobody mistakes it for the tested one),
+# plus the PR base SHA. Caveats, stated rather than hidden: (1) the workflow
+# DEFINITION itself is read by GitHub from the merge ref, while the code
+# under test is the PR head; (2) a green run says nothing about how the PR
+# merges with a base that has moved since -- that is for the normal CI after
+# merge/rebase; (3) the run is bound to the head at label time: a later push
+# is not covered -- remove and re-add the label to test the new head.
+#
+# This workflow uses no repository secrets and no production access; the
+# label is the approval gate, not a credential.
+#
+# Purpose: prove, on a fresh, disposable, full-schema Supabase stack that is
+# shared with nothing else (not the developer's own long-lived local Docker
+# stack, not hosted staging, not the regular `regression`/`stateful-tests`
+# jobs' own stacks), that three NOT-YET-VERIFIED surfaces actually work
+# before any of them become part of the normal, unconditional CI flow:
+#   1. supabase/tests/093_spend_credits_and_save_paid_result.test.sql --
+#      written, never executed.
+#   2. tests/090-public-schema-privilege-hardening-db-integration.test.ts --
+#      its object-inventory additions for 093 (PRE_093_UNDO_SQL/PIN_093_APP
+#      etc.) have never been run against a real migrated stack.
+#   3. tests/093-video-package-atomic-charge-save-db-integration.test.ts --
+#      the real, two-OS-process concurrency race against the unmodified
+#      spend_credits_and_save_paid_result RPC (needs its own disposable,
+#      test-only trigger on public.paid_results, created and dropped here).
+#
+# This workflow does NOT modify .github/workflows/quality.yml's existing
+# `stateful-tests` matrix -- it is intentionally separate so this one-off
+# preflight can never accidentally start on a normal push/PR, and so it
+# never risks the already-working, always-on matrix while these three
+# surfaces are still unproven.
+#
+# No production or repository secrets are used. The local stack's API keys
+# are read from the CLI, masked immediately, never printed or uploaded.
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  JWT_SCRUB: 's/eyJ[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9_-]+){0,2}/[REDACTED_JWT]/g'
+
+jobs:
+  preflight:
+    # Runs on manual dispatch, or on a pull_request ONLY when the label just
+    # added is exactly the approval label, and the PR comes from this repo.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'run-093-preflight' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Expressions are passed through env, never interpolated into scripts.
+      EVENT_NAME: ${{ github.event_name }}
+      TESTED_SHA_EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_SHA: ${{ github.sha }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      # actions/checkout v6.0.3
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify and record the commit actually under test (PR head, not the merge commit)
+        run: |
+          set +x
+          actual="$(git rev-parse HEAD)"
+          if ! printf '%s' "$TESTED_SHA_EXPECTED" | grep -Eq '^[0-9a-f]{40}$' || [ "$actual" != "$TESTED_SHA_EXPECTED" ]; then
+            echo "::error title=Wrong commit checked out::HEAD is $actual but the run must test $TESTED_SHA_EXPECTED"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            kind="exact PR head (pull_request, label-triggered)"
+            if [ "$actual" = "$EVENT_SHA" ]; then
+              echo "::error title=Tested commit equals the merge commit::A pull_request run must test the PR head, not refs/pull/N/merge"
+              exit 1
+            fi
+          else
+            kind="head of the dispatched ref (workflow_dispatch)"
+          fi
+          mkdir -p "$RUNNER_TEMP/ci-summary-sha"
+          {
+            echo "### 093 preflight - commit provenance"
+            echo ""
+            echo "| role | SHA |"
+            echo "|---|---|"
+            echo "| TESTED ($kind) | $actual |"
+            echo "| event SHA (github.sha; for pull_request this is the synthetic merge commit, NOT tested) | $EVENT_SHA |"
+            if [ -n "$PR_BASE_SHA" ]; then
+              echo "| PR base SHA at event time (informational) | $PR_BASE_SHA |"
+            fi
+            echo ""
+            echo "A green result applies to the TESTED commit only, not to its merge with a moved base."
+          } | tee "$RUNNER_TEMP/ci-summary-sha/tested-commit.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/setup-node v6.5.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # supabase/setup-cli v2.1.1
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Authenticate and verify GHCR image pull
+        timeout-minutes: 5
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set +x
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin > /dev/null
+          image="ghcr.io/supabase/postgres-meta:v0.99.0"
+          if ! docker pull "$image"; then
+            echo "::error title=Authenticated GHCR image pull failed::Could not pull $image before Supabase stack startup"
+            exit 1
+          fi
+          echo "authenticated GHCR image pull succeeded: $image"
+
+      - name: Start a fresh, disposable Supabase stack (migrations 001-093 applied automatically)
+        timeout-minutes: 20
+        run: |
+          set +x
+          if ! supabase start -x logflare,vector,studio > "$RUNNER_TEMP/supabase-start.log" 2>&1; then
+            echo "::error title=Supabase stack startup failed::The authenticated image pull passed, but the local Supabase stack did not start"
+            echo "redacted tail of the start log:"
+            tail -n 80 "$RUNNER_TEMP/supabase-start.log" | sed -E "$JWT_SCRUB"
+            exit 1
+          fi
+          while IFS='=' read -r key value; do
+            case "$key" in
+              ANON_KEY|SERVICE_ROLE_KEY|PUBLISHABLE_KEY|SECRET_KEY|JWT_SECRET|DB_URL|S3_PROTOCOL_ACCESS_KEY_ID|S3_PROTOCOL_ACCESS_KEY_SECRET)
+                value="${value%\"}"; value="${value#\"}"
+                [ -n "$value" ] && echo "::add-mask::$value"
+                ;;
+            esac
+          done < <(supabase status -o env 2>/dev/null)
+          echo "disposable preflight stack started"
+
+      - name: Record this run's exact container ids for precise, name-independent cleanup later
+        run: |
+          set +x
+          ids="$(docker ps -aq --filter 'name=supabase_')"
+          if [ -z "$ids" ]; then
+            echo "::error title=No supabase_* containers found right after start::Cannot record precise cleanup targets"
+            exit 1
+          fi
+          echo "$ids" > "$RUNNER_TEMP/preflight-container-ids.txt"
+          docker ps -a --filter 'name=supabase_' --format '  {{.ID}}  {{.Names}}'
+
+      - name: Wait for the database
+        timeout-minutes: 5
+        run: |
+          set +x
+          for attempt in $(seq 1 60); do
+            if docker exec supabase_db_WillViralFinal pg_isready -U postgres >/dev/null 2>&1; then
+              echo "database ready (attempt $attempt)"; break
+            fi
+            sleep 2
+          done
+
+      - name: Verify migration files match the clean stack history (includes 093)
+        run: |
+          set +x
+          export LC_ALL=C
+          expected="$(find supabase/migrations -maxdepth 1 -name '*.sql' -printf '%f\n' | sed -E 's#^([0-9]+)_.*#\1#' | sort)"
+          applied="$(docker exec supabase_db_WillViralFinal psql -U postgres -d postgres -X -A -t \
+            -c 'select version from supabase_migrations.schema_migrations order by version' | sort)"
+          echo "migration files: $(echo "$expected" | wc -l), applied history rows: $(echo "$applied" | wc -l)"
+          if ! diff <(echo "$expected") <(echo "$applied"); then
+            echo "migration files and stack history differ (diff above: '<' file only, '>' history only)"
+            exit 1
+          fi
+          echo "migration history matches the repository files, including 093"
+
+      # Run BEFORE the container rename below, so this file's own hardcoded
+      # `supabase_db_WillViralFinal` container name (its established,
+      # existing mechanism -- unmodified here) correctly refers to THIS
+      # leg's own fresh, disposable, not-yet-renamed stack.
+      - name: Run the updated 090 DB-integration test against this fresh stack
+        timeout-minutes: 20
+        run: |
+          set +x
+          set -o pipefail
+          npx vitest run tests/090-public-schema-privilege-hardening-db-integration.test.ts \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/vitest-090.json" 2>&1 | sed -E -u "$JWT_SCRUB"
+
+      - name: Rename the DB container to an explicitly disposable, run-scoped name (for the 093-gated file below)
+        run: |
+          set +x
+          disposable_name="preflight093_disposable_${{ github.run_id }}_${{ github.run_attempt }}"
+          docker rename supabase_db_WillViralFinal "$disposable_name"
+          echo "PFM_DISPOSABLE_DB_CONTAINER=$disposable_name" >> "$GITHUB_ENV"
+          echo "renamed DB container to $disposable_name"
+
+      - name: Run the 093 SQL test file and the real concurrency race (db-integration-guard.ts gated)
+        timeout-minutes: 15
+        env:
+          PFM_STATEFUL_DB_TARGET: ${{ env.PFM_DISPOSABLE_DB_CONTAINER }}
+          PFM_STATEFUL_DB_CONFIRM: yes-mutate-disposable-target
+          PFM_STATEFUL_DB_REQUIRED: '1'
+        run: |
+          set +x
+          set -o pipefail
+          npx vitest run tests/093-video-package-atomic-charge-save-db-integration.test.ts \
+            --reporter=default --reporter=json \
+            --outputFile.json="$RUNNER_TEMP/vitest-093.json" 2>&1 | sed -E -u "$JWT_SCRUB"
+
+      - name: Verify the 093 file's 2 scenarios actually executed (exact count, nothing skipped)
+        if: always()
+        env:
+          REPORT_PATH: ${{ runner.temp }}/vitest-093.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = process.env.REPORT_PATH;
+            if (!fs.existsSync(path)) { console.error('FAIL: no vitest report found at ' + path); process.exit(1); }
+            const r = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const total = r.numTotalTests ?? 0, passed = r.numPassedTests ?? 0, failed = r.numFailedTests ?? 0;
+            const pending = r.numPendingTests ?? 0, todo = r.numTodoTests ?? 0;
+            console.log('093 report: total=' + total + ' passed=' + passed + ' failed=' + failed + ' pending=' + pending + ' todo=' + todo);
+            // Exact expected count as of this workflow revision (2 static
+            // it( declarations -- confirmed by static source inspection,
+            // never by executing the file). Update ONLY together with a
+            // matching, deliberate edit to that test file.
+            const EXPECTED_TOTAL = 2;
+            if (total !== EXPECTED_TOTAL) { console.error('FAIL: expected exactly ' + EXPECTED_TOTAL + ' collected tests, got ' + total); process.exit(1); }
+            if (pending > 0 || todo > 0) { console.error('FAIL: ' + (pending + todo) + ' test(s) were skipped/todo -- this run must execute both scenarios for real'); process.exit(1); }
+            if (passed + failed !== total) { console.error('FAIL: passed+failed does not account for all collected tests'); process.exit(1); }
+            console.log('confirmed: both 093 scenarios actually executed');
+          "
+
+      # Both guards below use the dedicated, EMPTY allowlist
+      # .github/ci/preflight-093-allowlist.json -- NOT the repo-wide
+      # skip-allowlist.json. That file lists skips of 39 OTHER test files; on
+      # these two single-file partial runs every one of its entries would be
+      # reported stale (never observed) and fail the guard for the wrong
+      # reason. The guard itself stays fully strict (--mode full): any test
+      # failure, file-level failure, malformed report, or ANY skip fails,
+      # because nothing is allowlisted for these runs. If a legitimate skip
+      # ever appears, it must be added to that file deliberately, with a reason.
+      - name: Guard (failures, unknown skips) -- 090 run
+        if: always()
+        run: |
+          node scripts/ci-skip-guard.ts --report "$RUNNER_TEMP/vitest-090.json" \
+            --mode full --allowlist .github/ci/preflight-093-allowlist.json --summary-dir "$RUNNER_TEMP/ci-summary-090"
+
+      - name: Guard (failures, unknown skips) -- 093 run
+        if: always()
+        run: |
+          node scripts/ci-skip-guard.ts --report "$RUNNER_TEMP/vitest-093.json" \
+            --mode full --allowlist .github/ci/preflight-093-allowlist.json --summary-dir "$RUNNER_TEMP/ci-summary-093"
+
+      - name: Publish redacted summaries
+        if: always()
+        run: |
+          # (the commit-provenance table was already written to the step
+          # summary right after checkout, so it is there even if a later step fails)
+          for f in "$RUNNER_TEMP/ci-summary-090/summary-full.md" "$RUNNER_TEMP/ci-summary-093/summary-full.md"; do
+            [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # actions/upload-artifact v6.0.0
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        if: always()
+        with:
+          name: 093-preflight-summary
+          path: |
+            ${{ runner.temp }}/ci-summary-sha
+            ${{ runner.temp }}/ci-summary-090
+            ${{ runner.temp }}/ci-summary-093
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop and remove this run's disposable stack (explicit, id-scoped)
+        if: always()
+        run: |
+          set +x
+          supabase stop --no-backup > /dev/null 2>&1 || true
+          ids_file="$RUNNER_TEMP/preflight-container-ids.txt"
+          fail=0
+          if [ ! -f "$ids_file" ]; then
+            echo "no recorded container ids -- stack presumably never started; nothing to explicitly remove"
+          else
+            while IFS= read -r id; do
+              [ -n "$id" ] || continue
+              if docker inspect "$id" > /dev/null 2>&1; then
+                echo "removing recorded container $id"
+                docker rm -f "$id" > /dev/null 2>&1 || { echo "::error::failed to remove recorded container $id"; fail=1; }
+              fi
+            done < "$ids_file"
+            while IFS= read -r id; do
+              [ -n "$id" ] || continue
+              if docker inspect "$id" > /dev/null 2>&1; then
+                echo "::error::recorded container $id is still present after cleanup"
+                fail=1
+              fi
+            done < "$ids_file"
+          fi
+          remaining_by_name="$(docker ps -aq --filter 'name=supabase_' | wc -l)"
+          echo "remaining supabase_*-named containers (informational): $remaining_by_name"
+          [ "$fail" = "0" ]

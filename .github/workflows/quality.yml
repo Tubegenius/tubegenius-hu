@@ -209,11 +209,26 @@ jobs:
           # "unknown skip" check below for no benefit -- excluding them
           # outright is the correct, explicit statement of ownership, not a
           # workaround.
+          #
+          # OWNERSHIP of tests/093-video-package-atomic-charge-save-db-integration.test.ts
+          # (also excluded below): it makes real writes (a fixture user, a
+          # test-only trigger on public.paid_results) and, without a
+          # disposable target, skips both of its tests -- which this job's
+          # strict skip guard would reject as unknown skips. The guard is NOT
+          # weakened and nothing is allowlisted. The file is owned by exactly
+          # one place instead: the opt-in
+          # .github/workflows/093-video-package-preflight.yml job, which runs
+          # it on a disposable stack with an exact expected count and its own
+          # zero-skip check. Until a later, separately approved promotion into
+          # the stateful-tests matrix it is NOT part of the default CI.
+          # tests/093-ci-ownership-contract.test.ts keeps this exclusion and
+          # that workflow in agreement.
           npx vitest run \
             --exclude tests/semantic-topic-s2a-audit-temporal-db-integration.test.ts \
             --exclude tests/semantic-topic-s2b-writer-rpcs-db-integration.test.ts \
             --exclude tests/semantic-topic-s3a-ai-quota-db-integration.test.ts \
             --exclude tests/semantic-topic-canonical-input-timestamp-v2-db-integration.test.ts \
+            --exclude tests/093-video-package-atomic-charge-save-db-integration.test.ts \
             --reporter=default --reporter=json \
             --outputFile.json="$RUNNER_TEMP/vitest-full.json" 2>&1 | sed -E -u "$JWT_SCRUB"
 

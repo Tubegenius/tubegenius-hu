@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
+import { getUserId, checkPaidFeatureAccess, logUsage, CREDIT_COSTS } from '@/lib/credits'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
-import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
+import { buildPaidResultHash, normalizePaidResultInput, getPaidResultByHashStrict, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
+import { chargeFeatureAndSavePaidResult } from '@/lib/paid-results/atomic-charge-save'
 import { polishHungarianOutput } from '@/lib/hungarian-output-polish'
 import {
   classifyContentType,
@@ -175,10 +176,21 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-    const paid = await getPaidResultByHash({ userId, toolType: 'video_package', inputHash })
-      || (legacyInputHash !== inputHash
-        ? await getPaidResultByHash({ userId, toolType: 'video_package', inputHash: legacyInputHash })
-        : null)
+    // getPaidResultByHashStrict (unlike the generic getPaidResultByHash used
+    // by every other paid route) throws on a genuine DB read error instead
+    // of silently returning null -- a real read failure must NOT be treated
+    // as "no cached result, safe to proceed", since that would risk an AI
+    // call and a charge for an input that may already have a paid result.
+    let paid
+    try {
+      paid = await getPaidResultByHashStrict({ userId, toolType: 'video_package', inputHash })
+        || (legacyInputHash !== inputHash
+          ? await getPaidResultByHashStrict({ userId, toolType: 'video_package', inputHash: legacyInputHash })
+          : null)
+    } catch (cacheCheckError) {
+      console.error('[VideoPackage] Korábbi eredmény ellenőrzése sikertelen -- nincs AI-hívás, nincs levonás:', cacheCheckError)
+      return NextResponse.json({ error: 'Nem sikerült ellenőrizni, van-e már kész eredményed. Próbáld újra.' }, { status: 503 })
+    }
     if (paid) {
       const opened = await openPaidResult(paid)
       const polishedResult = polishHungarianOutput(opened.result_json) as Record<string, unknown>
@@ -389,14 +401,19 @@ export async function POST(request: NextRequest) {
       opportunity_evidence_captured_at: opportunityEvidenceCapturedAt,
     }
 
-    const chargeResult = await chargeFeature(userId, feature, { topic, platform, video_length })
-    if (!chargeResult.success) {
-      return NextResponse.json({ error: chargeResult.error || 'Nincs elég kredited ehhez a művelethez.' }, { status: 402 })
-    }
-
-    const responsePayload = { ...result, _credits_remaining: chargeResult.new_balance }
-    const paidSave = await savePaidResult({
+    // 2026-10-01 incident follow-up: a kreditlevonás és a paid_results mentés
+    // egyetlen, atomikus DB-tranzakcióba kerül (migráció 093,
+    // spend_credits_and_save_paid_result) -- vagy mindkettő megtörténik,
+    // vagy egyik sem. A régi, külön chargeFeature()+savePaidResult()
+    // hívások közötti "levont, de el nem mentett" ablak emiatt szerkezetileg
+    // kizárt Video Package-nél -- nincs külön refund-ág sem, mert nincs mit
+    // visszatéríteni: ha a mentés bármiért meghiúsul, a tranzakció a
+    // levonást is visszagörgeti.
+    const atomicResult = await chargeFeatureAndSavePaidResult({
       userId,
+      feature,
+      cost: CREDIT_COSTS[feature],
+      chargeMetadata: { topic, platform, video_length },
       toolType: 'video_package',
       inputHash,
       normalizedInput,
@@ -404,7 +421,7 @@ export async function POST(request: NextRequest) {
       region: language || null,
       language: language || null,
       platform: platform || null,
-      resultJson: responsePayload,
+      resultJson: result,
       summaryJson: { topic, platform, video_length, quality_status: qualityStatus },
       creditCost: CREDIT_COSTS[feature],
       freshForHours: 24,
@@ -418,14 +435,33 @@ export async function POST(request: NextRequest) {
       promptVersion: 'v1',
       estimatedCost: coreResult.estimatedCost + packagingResult.estimatedCost,
     })
-    if (!paidSave.success) {
-      console.error('[VideoPackage] KRITIKUS: paid_results mentés sikertelen, a user már fizetett érte:', paidSave.error)
-      const refund = await refundCreditsAfterPersistenceFailure(userId, feature, CREDIT_COSTS[feature], { reason: 'paid_result_save_failed' }, chargeResult.credit_transaction_id)
-      if (!refund.success) console.error('[VideoPackage] KRITIKUS: automatikus kredit-visszatérítés sikertelen')
-      return NextResponse.json({ error: refund.success ? 'Az eredmény mentése sikertelen volt, a kreditet visszaadtuk.' : 'Az eredmény mentése és a kredit-visszatérítés sikertelen. Az esetet naplóztuk.' }, { status: 500 })
+    if (!atomicResult.success) {
+      // atomicResult.error is always set on failure (see
+      // chargeFeatureAndSavePaidResult) with an outcome-specific message --
+      // for the 'uncertain_outcome' case specifically, it does NOT claim no
+      // charge happened, since that is genuinely not known in that branch.
+      // This fallback text mirrors that: it must never assert a definite
+      // "nincs levonás" either, in case atomicResult.error is ever empty.
+      const status = atomicResult.errorCode === 'insufficient_credits' ? 402 : 500
+      return NextResponse.json({ error: atomicResult.error || 'A mentés sikertelen volt.' }, { status })
     }
 
-    return NextResponse.json({ ...responsePayload, paid_result_id: paidSave.record?.id || null })
+    const savedResult = atomicResult.paidResult!
+    if (atomicResult.duplicate) {
+      // A levonás ELŐTTI ellenőrzés nem ezen a kéréstárgyon futott (pl. a
+      // generálás alatt egy másik kísérlet már commitolt ugyanerre a
+      // bemenetre) -- a DB-ben MÁR mentett eredményt adjuk vissza, NEM a
+      // most feleslegesen újragenerált tartalmat, és NEM vonunk le ismét.
+      await openPaidResult(savedResult)
+      const polishedResult = polishHungarianOutput(savedResult.result_json) as Record<string, unknown>
+      const { _credits_remaining: _historicalCreditBalance, ...reopenableResult } = polishedResult
+      return NextResponse.json({
+        ...reopenableResult,
+        ...paidResultResponseMeta(savedResult),
+      })
+    }
+
+    return NextResponse.json({ ...result, _credits_remaining: atomicResult.newBalance, paid_result_id: savedResult.id })
     } finally {
       await releaseRequestLock(lock.lockId)
     }
