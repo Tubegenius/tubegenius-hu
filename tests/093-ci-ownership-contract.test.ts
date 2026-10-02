@@ -241,3 +241,37 @@ describe('093 RPC UUIDv5 qualification, 090 body pin and real-RPC coverage (DB-f
     expect(preflight).toContain(`npx vitest run ${TEST_FILE}`)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Static (DB-free) guards for the two defects the second disposable run found
+// in the 093 DB-integration test itself. They cannot prove the SQL runs -- only
+// a disposable database can -- but they keep those exact mistakes from coming
+// back unnoticed.
+// ---------------------------------------------------------------------------
+describe('093 DB-integration test: regression guards for the 2nd-run test defects (DB-free)', () => {
+  it('no SQL regex is built inside a JS template literal for the prosrc check (a `\.`/`\(` escape there is eaten by JS); counts are used instead', () => {
+    expect(testSource).not.toMatch(/prosrc\s+!?~/)
+    expect(testSource).toContain("'uuid_generate_v5('")
+    expect(testSource).toContain("'extensions.uuid_generate_v5('")
+    // the expected, still-strict outcome: 1 call in total, that 1 call qualified, pinned search_path
+    expect(testSource).toContain("'true|true|1|1|search_path=public, pg_temp'")
+  })
+
+  it('the race test records a ledger baseline that expects exactly the 091 starter row, then proves no spend/op: row and an unchanged baseline -- not "zero ledger rows"', () => {
+    expect(testSource).toContain("external_ref = 'initial:${TEST_USER_ID}' AND reason = 'initial_credit'")
+    expect(testSource).toContain('const ledgerBaseline = ledgerDigest()')
+    expect(testSource).toContain("(reason = 'credit_spend' OR external_ref LIKE 'op:%')")
+    expect(testSource).toContain('expect(ledgerDigest(),')
+    expect(testSource).toContain(').toBe(ledgerBaseline)')
+    // the old, wrong blanket assertion is gone
+    expect(testSource).not.toMatch(/count\(\*\) FROM public\.credit_ledger WHERE user_id = '\$\{TEST_USER_ID\}'::uuid;`\)\.trim\(\)\s*\n\s*expect\(ledgerCount/)
+    expect(testSource).not.toContain('const ledgerCount')
+  })
+
+  it('the other post-race assertions stay strict: balance unchanged, zero ai_usage_logs, zero paid_operations, exactly the winner paid_results row', () => {
+    expect(testSource).toContain('expect(balanceAfter).toBe(balanceBefore)')
+    expect(testSource).toMatch(/usageCount[\s\S]{0,260}\.toBe\('0'\)/)
+    expect(testSource).toMatch(/opCount[\s\S]{0,260}\.toBe\('0'\)/)
+    expect(testSource).toContain("expect(resultsRow).toBe('1|B won the race')")
+  })
+})

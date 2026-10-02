@@ -153,16 +153,24 @@ describeIfLocalDb('093 UUIDv5 dependency -- resolvable where the RPC looks for i
   })
 
   it('extensions.uuid_generate_v5(uuid,text) exists and is executable, and the deployed RPC calls it schema-qualified (no bare call) under search_path = public, pg_temp', () => {
+    // No regular expressions here on purpose: backslash escapes inside a JS
+    // template literal are consumed by JS before the SQL ever sees them (the
+    // first version of this check lost its `\.`/`\(` that way and Postgres
+    // rejected the pattern). Plain substring COUNTS are used instead, and the
+    // stated strictness is unchanged: exactly one call of the function in the
+    // RPC body, and that one call is the schema-qualified one -- i.e. the
+    // number of qualified calls equals the number of ALL calls, and both are 1.
     const out = dockerPsql(`
       SELECT (to_regprocedure('extensions.uuid_generate_v5(uuid,text)') IS NOT NULL)::text
         || '|' || has_function_privilege('postgres', 'extensions.uuid_generate_v5(uuid,text)', 'EXECUTE')::text
-        || '|' || (p.prosrc ~ 'extensions\.uuid_generate_v5\(')::text
-        || '|' || (p.prosrc !~ '(^|[^.])uuid_generate_v5\(')::text
+        || '|' || ((length(p.prosrc) - length(replace(p.prosrc, 'uuid_generate_v5(', ''))) / length('uuid_generate_v5('))::text
+        || '|' || ((length(p.prosrc) - length(replace(p.prosrc, 'extensions.uuid_generate_v5(', ''))) / length('extensions.uuid_generate_v5('))::text
         || '|' || coalesce(array_to_string(p.proconfig, ';'), '')
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public' AND p.proname = 'spend_credits_and_save_paid_result';
     `).trim()
-    expect(out).toBe('true|true|true|true|search_path=public, pg_temp')
+    // function exists | executable | total calls = 1 | qualified calls = 1 | pinned search_path
+    expect(out).toBe('true|true|1|1|search_path=public, pg_temp')
   })
 
   it('a REAL call of the unmodified RPC as service_role succeeds (not a duplicate), debits once, and stores the operation_id from the UNCHANGED namespace/concatenation formula, linked to its ledger row', () => {
@@ -331,12 +339,53 @@ $poll$;`
     `)
   }
 
+  // All of this user's ledger rows, as one comparable string (id, ref, reason,
+  // delta, balance_after, bucket, created_at, metadata), ordered by id.
+  function ledgerDigest(): string {
+    return dockerPsql(`
+      SELECT coalesce(string_agg(
+        l.id::text || '|' || l.external_ref || '|' || l.reason || '|' || l.delta::text || '|' || l.balance_after::text
+          || '|' || coalesce(l.credit_bucket::text, '') || '|' || l.created_at::text || '|' || l.metadata::text,
+        ';' ORDER BY l.id), '')
+      FROM public.credit_ledger l WHERE l.user_id = '${TEST_USER_ID}'::uuid;
+    `).trim()
+  }
+
+  // Rows that only a spend (the RPC's nested spend_credits) can create.
+  function spendRowCount(): string {
+    return dockerPsql(`
+      SELECT count(*) FROM public.credit_ledger
+      WHERE user_id = '${TEST_USER_ID}'::uuid AND (reason = 'credit_spend' OR external_ref LIKE 'op:%');
+    `).trim()
+  }
+
   afterAll(() => dropTriggerAndFixture())
 
   it('A (real RPC) refuses to start until B\'s lock is observed, collides AFTER its debit with B\'s committed row, fully rolls back, and left no ledger/audit/usage rows behind', async () => {
     setupFixtureAndTrigger()
 
     const balanceBefore = dockerPsql(`SELECT balance FROM public.user_credits WHERE user_id = '${TEST_USER_ID}'::uuid;`).trim()
+
+    // LEDGER BASELINE. A fresh auth.users row is NOT ledger-empty: migration
+    // 091's starter-grant trigger writes exactly one 'initial_credit' row keyed
+    // 'initial:<user_id>' at signup. The first version of this test expected
+    // zero ledger rows and failed on that fixture row (1 != 0), not on anything
+    // A did. So: record the full ledger state first, require that the ONLY
+    // thing in it is that starter row, and later prove (a) A left no spend
+    // rows and (b) the baseline rows are byte-for-byte unchanged.
+    const ledgerBaseline = ledgerDigest()
+    expect(
+      dockerPsql(`SELECT count(*) FROM public.credit_ledger WHERE user_id = '${TEST_USER_ID}'::uuid AND external_ref = 'initial:${TEST_USER_ID}' AND reason = 'initial_credit';`).trim(),
+      'precondition: the 091 starter-grant row initial:<user_id> must exist exactly once in the baseline',
+    ).toBe('1')
+    expect(
+      spendRowCount(),
+      'precondition: no credit_spend / op: ledger row may exist before the race starts',
+    ).toBe('0')
+    expect(
+      dockerPsql(`SELECT count(*) FROM public.credit_ledger WHERE user_id = '${TEST_USER_ID}'::uuid;`).trim(),
+      'precondition: the baseline ledger must contain ONLY the starter row',
+    ).toBe('1')
 
     const sessionA = () => dockerPsqlAsync(`
       SET statement_timeout = '30s';
@@ -372,14 +421,14 @@ $poll$;`
     expect(resultA.ok, `session A unexpectedly succeeded -- the collision never happened: ${resultA.stderr}`).toBe(false)
     expect(resultA.stderr).toMatch(/idx_paid_results_user_tool_hash|duplicate key value violates unique constraint/i)
 
-    // The debit (and ledger/audit inserts) from A's attempt are fully
-    // rolled back -- the user is fresh, created only for this test, so any
-    // row below is unambiguously from A's rolled-back attempt.
+    // The debit (and ledger/audit inserts) from A's attempt are fully rolled
+    // back. The user is fresh and used only by this test; the only ledger row
+    // that legitimately exists is the 091 starter grant captured in the baseline.
     const balanceAfter = dockerPsql(`SELECT balance FROM public.user_credits WHERE user_id = '${TEST_USER_ID}'::uuid;`).trim()
     expect(balanceAfter).toBe(balanceBefore)
 
-    const ledgerCount = dockerPsql(`SELECT count(*) FROM public.credit_ledger WHERE user_id = '${TEST_USER_ID}'::uuid;`).trim()
-    expect(ledgerCount, 'A\'s debit must leave NO credit_ledger row -- the whole transaction rolled back').toBe('0')
+    expect(spendRowCount(), "A's debit must leave NO credit_spend / op: ledger row -- the whole transaction rolled back").toBe('0')
+    expect(ledgerDigest(), 'the baseline ledger (the 091 starter row) must be unchanged and no other row may exist').toBe(ledgerBaseline)
 
     const usageCount = dockerPsql(`SELECT count(*) FROM public.ai_usage_logs WHERE user_id = '${TEST_USER_ID}'::uuid;`).trim()
     expect(usageCount, 'A\'s charge-audit row must NOT exist -- it was inside the same rolled-back transaction').toBe('0')
