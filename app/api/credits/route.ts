@@ -4,7 +4,7 @@ import { starterCreditRpcArgs } from '@/lib/starter-credit'
 import { resolveAuthWith } from '@/lib/auth/resolve-auth'
 import { authUnavailableResponse, unauthenticatedResponse } from '@/lib/http/api-error'
 
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   // Backend error contract (wave 1): only a PROVEN missing/invalid session is a 401
   // (the client turns a 401 from this endpoint into a logout redirect); a Supabase
   // network/gateway/unknown failure is a 503 and must never sign the user out.

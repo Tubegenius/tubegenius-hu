@@ -95,7 +95,4 @@ describe('GET /api/credits -- authenticated path is unchanged', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ balance: 40, total_available_credits: 40, plan: 'beta' })
   })
-  it('works when called without a request argument (the shape the existing tests use)', async () => {
-    expect((await GET()).status).toBe(200)
-  })
 })
