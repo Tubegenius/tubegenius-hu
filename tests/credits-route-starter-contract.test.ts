@@ -20,8 +20,10 @@ const state = {
   rpcCalls: [] as Array<{ name: string; args: unknown }>,
 }
 
+vi.mock('next/headers', () => ({ cookies: () => ({ getAll: () => [], set: () => {} }) }))
+vi.mock('@supabase/ssr', () => ({ createServerClient: () => ({ auth: { getUser: async () => ({ data: { user: state.user } }) } }) }))
 vi.mock('@/lib/supabase-server', () => ({
-  createServerSupabaseClient: () => ({ auth: { getUser: async () => ({ data: { user: state.user } }) } }),
+  // The route resolves auth through lib/auth/resolve-session-auth (next/headers cookies + @supabase/ssr client).
   createAdminClient: () => ({
     from: () => ({
       select: () => ({ eq: () => ({ single: async () => state.selects.shift() ?? { data: null, error: { code: 'PGRST116' } } }) }),

@@ -12,8 +12,10 @@ const state = {
   row: { balance: 40, subscription_credit_balance: 40, purchased_credit_balance: 0, total_used: 10, plan: 'beta', monthly_allowance: 50, renews_at: null, subscription_status: 'free', stripe_customer_id: null },
 }
 
+vi.mock('next/headers', () => ({ cookies: () => ({ getAll: () => [], set: () => {} }) }))
+vi.mock('@supabase/ssr', () => ({ createServerClient: () => ({ auth: { getUser: () => state.getUser() } }) }))
 vi.mock('@/lib/supabase-server', () => ({
-  createServerSupabaseClient: () => ({ auth: { getUser: () => state.getUser() } }),
+  // The route resolves auth through lib/auth/resolve-session-auth (next/headers cookies + @supabase/ssr client).
   createAdminClient: () => {
     state.adminTouched += 1
     return {
@@ -54,7 +56,7 @@ describe('GET /api/credits -- 401 only for a proven missing/invalid session', ()
   })
 })
 
-describe('GET /api/credits -- a Supabase failure is a 503 and can NEVER sign the user out', () => {
+describe('GET /api/credits -- a Supabase failure is a 503 (status/body only; the browser-cookie side effect is covered by auth-session-cookie-persistence.test.ts)', () => {
   it.each([
     ['network error', new AuthRetryableFetchError('fetch failed', 0)],
     ['gateway 502', new AuthRetryableFetchError('bad gateway', 502)],

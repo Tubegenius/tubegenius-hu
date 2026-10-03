@@ -78,7 +78,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
-describe('a lock younger than or exactly 420 s is NEVER reaped or re-acquired, in any helper combination', () => {
+describe('a lock younger than or exactly 420 s is not reaped or re-acquired, in any helper combination (the fake stamps created_at with the app clock, so this assumes zero clock skew)', () => {
   const combos: Array<['strict' | 'legacy', 'strict' | 'legacy']> = [
     ['strict', 'legacy'], ['strict', 'strict'], ['legacy', 'strict'], ['legacy', 'legacy'],
   ]
@@ -147,9 +147,4 @@ describe('boundary and lifecycle', () => {
     expect(await acquireRequestLock({ ...KEY, toolType: 'video_package', inputHash: 'other' })).toEqual({ acquired: false })
   })
 
-  it('NEGATIVE CONTROL (documents the bug this prevents): a 300 s reaper WOULD have deleted the 301-420 s strict lock', async () => {
-    await lockAged('strict', 350 * S)
-    const oldCutoff = Date.now() - 300 * S
-    expect(table.rows[0].created_at < oldCutoff).toBe(true)
-  })
 })

@@ -177,10 +177,30 @@ export async function acquireRequestLockStrict(key: RequestLockKey): Promise<Req
   }
 }
 
+// Releasing is best-effort and runs in a `finally` AFTER the paid work. What this function guarantees:
+//   * a release that FAILS (an `{ error }` result, including the `{ error: { code: '' } }` the real
+//     postgrest-js returns for a rejected fetch) or THROWS is logged and swallowed, so it does not turn an
+//     already-built, charged response into an error; the user-wide lock then stays until the TTL expires,
+//     blocking every paid tool for that user;
+//   * only the Postgres/PostgREST error CODE (or the thrown error's class name) is logged -- never the lock
+//     id, user id, hashes, message, details, hint or URL.
+// What it does NOT guarantee -- OPEN PAID-PATH RISK (deliberately not changed here): a DELETE that never
+// settles. adminClient() sets no timeout / abort signal and the callers `await` this in a `finally` before
+// the response leaves the handler, so a hanging DELETE would hold an already-charged response until the
+// platform kills the function (300 s). Verified offline with the installed postgrest-js 2.108.1 (fake fetch):
+// without a signal the call never settles; with `.abortSignal(AbortSignal.timeout(ms))` it RESOLVES (does not
+// throw) with `{ error: { code: '' } }` after the timeout; an abort cannot tell whether the server already
+// executed the DELETE; DELETE is not retried. NOT verified: real Vercel/undici/PostgREST abort behaviour and
+// whether a timeout would leave the lock for the full TTL more often than it saves a hung response.
 export async function releaseRequestLock(lockId?: string | null): Promise<void> {
   if (!lockId) return
-  const admin = adminClient()
-  await admin.from('in_flight_requests').delete().eq('id', lockId)
+  try {
+    const admin = adminClient()
+    const { error } = (await admin.from('in_flight_requests').delete().eq('id', lockId)) ?? {}
+    if (error) console.error(`[RequestLock] release failed code=${(error as { code?: string }).code || '-'} -- the lock stays until the TTL expires`)
+  } catch (thrown) {
+    console.error(`[RequestLock] release threw ${thrown instanceof Error ? thrown.name : 'non-error'} -- the lock stays until the TTL expires`)
+  }
 }
 
 export const REQUEST_IN_PROGRESS_ERROR = 'Már folyamatban van egy generálásod egy másik lapon vagy eszközön. Kérlek várj, amíg befejeződik, mielőtt újat indítasz.'

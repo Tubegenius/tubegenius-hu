@@ -1,14 +1,22 @@
 import { NextResponse } from 'next/server'
-import { createServerSupabaseClient, createAdminClient } from '@/lib/supabase-server'
+import { createAdminClient } from '@/lib/supabase-server'
 import { starterCreditRpcArgs } from '@/lib/starter-credit'
-import { resolveAuthWith } from '@/lib/auth/resolve-auth'
+import { resolveSessionAuth, withSessionResponseHeaders, type SessionResponseHeaders } from '@/lib/auth/resolve-session-auth'
 import { authUnavailableResponse, unauthenticatedResponse } from '@/lib/http/api-error'
 
+// The session cache headers (@supabase/ssr: Cache-Control no-store etc.) are added to this response only when
+// session cookies were actually written (lib/auth/resolve-session-auth.ts).
 export async function GET(request: Request) {
+  return withSessionResponseHeaders(session => handleGet(request, session))
+}
+
+async function handleGet(request: Request, session: SessionResponseHeaders) {
   // Backend error contract (wave 1): only a PROVEN missing/invalid session is a 401
   // (the client turns a 401 from this endpoint into a logout redirect); a Supabase
   // network/gateway/unknown failure is a 503 and must never sign the user out.
-  const auth = await resolveAuthWith(async () => createServerSupabaseClient().auth.getUser())
+  // A TRANSIENT failure must also not delete the browser's session cookie, a successful token refresh must
+  // reach the browser as a whole, and a PROVEN-invalid session is still cleared (lib/auth/resolve-session-auth.ts).
+  const auth = await resolveSessionAuth({ apiKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, persistOnInvalidSession: true }, session)
   if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
   if (auth.kind === 'unavailable') return authUnavailableResponse(auth, '/api/credits', request)
   const user = { id: auth.userId }

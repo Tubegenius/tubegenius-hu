@@ -9,13 +9,20 @@ import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
 import { acquireRequestLockStrict, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { withSessionResponseHeaders, type SessionResponseHeaders } from '@/lib/auth/resolve-session-auth'
 import { authUnavailableResponse, lockConflictResponse, lockUnavailableResponse, unauthenticatedResponse } from '@/lib/http/api-error'
 import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import { renderPromptTemplate } from '@/lib/prompts/template-registry'
 import { PROMPT_TEMPLATES } from '@/lib/prompts/catalog'
 import { dailySoftLimitError } from '@/lib/daily-soft-limit'
 
+// POST / PATCH / GET run through withSessionResponseHeaders: when a refreshed session cookie was written, the
+// @supabase/ssr cache headers are added to the response (lib/auth/resolve-session-auth.ts).
 export async function POST(request: NextRequest) {
+  return withSessionResponseHeaders(session => handlePost(request, session))
+}
+
+async function handlePost(request: NextRequest, session: SessionResponseHeaders) {
   try {
     const { topic, existing_title, platform, region, force_refresh } = await request.json()
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
@@ -29,7 +36,7 @@ export async function POST(request: NextRequest) {
     const topicValue = topic.trim()
     const existingTitle = existing_title?.trim() || undefined
 
-    const auth = await resolveUserAuth()
+    const auth = await resolveUserAuth(session)
 
     if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
 
@@ -145,6 +152,10 @@ export async function POST(request: NextRequest) {
 
 // PATCH — kivalasztott cim mentese a Video Idea title_ideas mezojebe.
 export async function PATCH(request: NextRequest) {
+  return withSessionResponseHeaders(session => handlePatch(request, session))
+}
+
+async function handlePatch(request: NextRequest, session: SessionResponseHeaders) {
   try {
     const { topic, title, platform, paid_result_id } = await request.json()
     if (typeof topic !== 'string' || !topic.trim() || topicInputTooLong(topic) || typeof title !== 'string' || !title.trim() || title.length > 100 || typeof paid_result_id !== 'string' || !paid_result_id.trim()) return NextResponse.json({ error: 'Hiányzó vagy hibás adatok' }, { status: 400 })
@@ -152,7 +163,7 @@ export async function PATCH(request: NextRequest) {
     const topicValue = topic.trim()
     const titleValue = title.trim()
 
-    const auth = await resolveUserAuth()
+    const auth = await resolveUserAuth(session)
 
     if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
 
@@ -199,8 +210,12 @@ export async function PATCH(request: NextRequest) {
 
 // GET — mentett eredmeny visszanyitasa paidResultId alapjan, kredit nelkul.
 export async function GET(request: NextRequest) {
+  return withSessionResponseHeaders(session => handleGet(request, session))
+}
+
+async function handleGet(request: NextRequest, session: SessionResponseHeaders) {
   try {
-    const auth = await resolveUserAuth()
+    const auth = await resolveUserAuth(session)
     if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
     if (auth.kind === 'unavailable') return authUnavailableResponse(auth, '/api/title-studio GET', request)
     const userId = auth.userId

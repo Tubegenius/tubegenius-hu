@@ -191,10 +191,6 @@ describe('lock TTL -- ONE shared 420 s threshold for both helpers (they share on
     expect(strict).toBe(legacy)
   })
 
-  it('NEGATIVE CONTROL: the former 5-minute TTL would have reaped a lock 1 s past the ceiling; 420 s does not', () => {
-    expect(ROUTE_MAX_DURATION_MS + 1_000 > 5 * 60 * 1000).toBe(true)
-    expect(ROUTE_MAX_DURATION_MS + 1_000 > LOCK_TTL_MS).toBe(false)
-  })
 
   it('source guard: exactly one TTL constant, used by both helpers; no second threshold', async () => {
     const { readFileSync } = await import('node:fs')

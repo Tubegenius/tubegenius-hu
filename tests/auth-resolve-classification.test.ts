@@ -46,7 +46,7 @@ describe('classifyAuthOutcome -- PROVEN missing/invalid session => unauthenticat
   })
 })
 
-describe('classifyAuthOutcome -- everything else => unavailable (503, NEVER logout-capable)', () => {
+describe('classifyAuthOutcome -- everything else => unavailable (a 503; the cookie side effect is decided in resolve-session-auth)', () => {
   it('network failure (AuthRetryableFetchError status 0)', () => {
     expect(noUser(new AuthRetryableFetchError('fetch failed', 0))).toMatchObject({ kind: 'unavailable', cause: 'network' })
   })
