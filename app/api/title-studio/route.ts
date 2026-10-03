@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { MODELS } from '@/lib/models'
-import { getUserId, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
+import { resolveUserAuth, checkPaidFeatureAccess, chargeFeature, logUsage, CREDIT_COSTS, refundCreditsAfterPersistenceFailure } from '@/lib/credits'
 import { callAIProvider, extractJson } from '@/lib/services/ai-provider-service'
 import { buildPaidResultHash, normalizePaidResultInput, savePaidResult, getPaidResultByHash, getPaidResultById, openPaidResult, paidResultResponseMeta } from '@/lib/paid-results/paid-results-service'
 import { createAdminClient } from '@/lib/supabase-server'
@@ -8,7 +8,8 @@ import { computeTitleHeuristics, buildTitleStudioPrompt, validateHungarianTitle,
 import { polishHungarianText } from '@/lib/hungarian-output-polish'
 import { ensureVideoIdea, buildVideoIdeaInputHash } from '@/lib/video-ideas/video-idea-service'
 import { resolveCreatorNicheContext } from '@/lib/creator-profile-context'
-import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { acquireRequestLockStrict, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
+import { authUnavailableResponse, lockConflictResponse, lockUnavailableResponse, unauthenticatedResponse } from '@/lib/http/api-error'
 import { topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
 import { renderPromptTemplate } from '@/lib/prompts/template-registry'
 import { PROMPT_TEMPLATES } from '@/lib/prompts/catalog'
@@ -28,8 +29,13 @@ export async function POST(request: NextRequest) {
     const topicValue = topic.trim()
     const existingTitle = existing_title?.trim() || undefined
 
-    const userId = await getUserId()
-    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+    const auth = await resolveUserAuth()
+
+    if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
+
+    if (auth.kind === 'unavailable') return authUnavailableResponse(auth, '/api/title-studio POST', request)
+
+    const userId = auth.userId
 
     const admin = createAdminClient()
     const { data: profileRow } = await admin.from('profiles').select('niche, main_category, specific_focus, channel_usage_mode').eq('user_id', userId).single()
@@ -43,10 +49,12 @@ export async function POST(request: NextRequest) {
     // Beta Hardening Test (2026-07-11): ket egyideju azonos keres (pl. ket
     // bongeszofulben) nelkule mindketto vegigfutna es kulon-kulon kreditet
     // vonna le ugyanazert az erdemi eredmenyert — lasd CREATOR_OS_PLAN_STATUS.md.
-    const lock = await acquireRequestLock({ userId, toolType: 'title_studio', inputHash })
-    if (!lock.acquired) {
-      return NextResponse.json({ error: REQUEST_IN_PROGRESS_ERROR }, { status: 409 })
-    }
+    // Backend error contract (wave 1): a REAL conflict is 409; any other lock failure
+    // (lock service / table unavailable) is a 503 returned BEFORE the cache lookup,
+    // the provider call and the charge -- fail closed on a paid route.
+    const lock = await acquireRequestLockStrict({ userId, toolType: 'title_studio', inputHash })
+    if (lock.status === 'conflict') return lockConflictResponse(REQUEST_IN_PROGRESS_ERROR, request)
+    if (lock.status === 'unavailable') return lockUnavailableResponse(request)
 
     try {
       if (!force_refresh) {
@@ -144,8 +152,13 @@ export async function PATCH(request: NextRequest) {
     const topicValue = topic.trim()
     const titleValue = title.trim()
 
-    const userId = await getUserId()
-    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+    const auth = await resolveUserAuth()
+
+    if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
+
+    if (auth.kind === 'unavailable') return authUnavailableResponse(auth, '/api/title-studio PATCH', request)
+
+    const userId = auth.userId
 
     const paid = await getPaidResultById(userId, paid_result_id)
     const paidPayload = paid?.result_json as { topic?: unknown; variations?: unknown } | null
@@ -187,8 +200,10 @@ export async function PATCH(request: NextRequest) {
 // GET — mentett eredmeny visszanyitasa paidResultId alapjan, kredit nelkul.
 export async function GET(request: NextRequest) {
   try {
-    const userId = await getUserId()
-    if (!userId) return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
+    const auth = await resolveUserAuth()
+    if (auth.kind === 'unauthenticated') return unauthenticatedResponse(request)
+    if (auth.kind === 'unavailable') return authUnavailableResponse(auth, '/api/title-studio GET', request)
+    const userId = auth.userId
 
     const paidResultId = request.nextUrl.searchParams.get('paidResultId')
     if (!paidResultId) return NextResponse.json({ error: 'paidResultId kötelező' }, { status: 400 })

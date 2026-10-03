@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { STARTER_CREDIT, starterCreditExternalRef, starterCreditRpcArgs } from '@/lib/starter-credit'
 
 const USER_ID = '22222222-2222-4222-8222-222222222222'
+// Next's route-type check requires GET to take a (non-optional) Request.
+const req = () => new Request('http://localhost/api/credits')
 
 type QueryResult = { data: unknown; error: { code?: string; message?: string } | null }
 
@@ -59,7 +61,7 @@ describe('lib/starter-credit contract constants', () => {
 describe('GET /api/credits', () => {
   it('unauthenticated -> 401, touches nothing', async () => {
     state.user = null
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(401)
     expect(state.inserts).toHaveLength(0)
     expect(state.rpcCalls).toHaveLength(0)
@@ -67,7 +69,7 @@ describe('GET /api/credits', () => {
 
   it('existing row (trigger-created, even with a 0 balance) -> returned as is, NO insert and NO grant', async () => {
     state.selects = [{ data: { ...ROW, balance: 0, subscription_credit_balance: 0 }, error: null }]
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(200)
     expect((await res.json()).balance).toBe(0)
     expect(state.inserts).toHaveLength(0)
@@ -76,7 +78,7 @@ describe('GET /api/credits', () => {
 
   it('missing row (PGRST116) -> creates the row and issues exactly ONE starter grant with the canonical arguments', async () => {
     state.selects = [{ data: null, error: { code: 'PGRST116' } }, { data: ROW, error: null }]
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(200)
     expect(state.inserts).toEqual([{ user_id: USER_ID }])
     expect(state.rpcCalls).toEqual([{ name: 'apply_bucket_credit_event', args: starterCreditRpcArgs(USER_ID) }])
@@ -87,7 +89,7 @@ describe('GET /api/credits', () => {
 
   it('transient read error (not PGRST116) on a user who may have a row -> 500, NO insert, NO grant (no retroactive grant)', async () => {
     state.selects = [{ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }]
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(500)
     expect(state.inserts).toHaveLength(0)
     expect(state.rpcCalls).toHaveLength(0)
@@ -96,7 +98,7 @@ describe('GET /api/credits', () => {
   it('insert loses a race (23505: the trigger/another request created the row) -> NO grant from the route, row re-read', async () => {
     state.selects = [{ data: null, error: { code: 'PGRST116' } }, { data: ROW, error: null }]
     state.insertResult = { data: null, error: { code: '23505' } }
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(200)
     expect(state.rpcCalls).toHaveLength(0)
     expect((await res.json()).balance).toBe(50)
@@ -105,7 +107,7 @@ describe('GET /api/credits', () => {
   it('other insert error -> 500 and no grant', async () => {
     state.selects = [{ data: null, error: { code: 'PGRST116' } }]
     state.insertResult = { data: null, error: { code: '42501' } }
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(500)
     expect(state.rpcCalls).toHaveLength(0)
   })
@@ -113,7 +115,7 @@ describe('GET /api/credits', () => {
   it('grant RPC failure -> 500 (no silent 0-credit success)', async () => {
     state.selects = [{ data: null, error: { code: 'PGRST116' } }]
     state.rpcResult = { data: null, error: { code: 'P0001', message: 'boom' } }
-    const res = await GET()
+    const res = await GET(req())
     expect(res.status).toBe(500)
   })
 })
