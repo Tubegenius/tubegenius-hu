@@ -68,7 +68,7 @@ describe('GET /api/credits -- a Supabase failure is a 503 (status/body only; the
     state.getUser = async () => ({ data: { user: null }, error })
     const res = await GET(req())
     expect(res.status).toBe(503)
-    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
     expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0)
     const body = await res.json()
     expect(body).toMatchObject({ code: 'auth_unavailable', retryable: true, request_id: 'iad1::test-1' })

@@ -164,6 +164,61 @@ describe('PATCH / GET /api/title-studio -- the same auth contract on the other h
   })
 })
 
+describe('Cache-Control: every response of POST / PATCH / GET is explicitly private, no-store', () => {
+  const PNS = 'private, no-store'
+  const cc = (res: Response) => res.headers.get('cache-control')
+  const asRecord = { tool_type: 'title_studio', id: 'abc', user_id: USER_ID, result_json: { topic: 'x', variations: [] } }
+
+  it('POST: 400 validation, 401, 503 auth, 409 lock conflict, 503 lock outage', async () => {
+    expect(cc(await POST(post({})))).toBe(PNS) // validation happens before auth
+    h.auth = { kind: 'unauthenticated', reason: 'no_session' }
+    expect(cc(await POST(post(VALID_POST)))).toBe(PNS)
+    h.auth = unavailable()
+    expect(cc(await POST(post(VALID_POST)))).toBe(PNS)
+    h.auth = AUTHED
+    h.lock = { status: 'conflict' }
+    const conflict = await POST(post(VALID_POST))
+    expect(conflict.status).toBe(409)
+    expect(cc(conflict)).toBe(PNS)
+    h.lock = { status: 'unavailable', cause: 'PGRST205' }
+    const lockDown = await POST(post(VALID_POST))
+    expect(lockDown.status).toBe(503)
+    expect(cc(lockDown)).toBe(PNS)
+    expect(lockDown.headers.get('retry-after')).toBe('2') // other headers of the error response are kept
+  })
+
+  it('PATCH: 400 validation, 401, 503 auth, 403 when the title does not belong to the paid result', async () => {
+    expect(cc(await PATCH(patch({})))).toBe(PNS)
+    h.auth = { kind: 'unauthenticated', reason: 'invalid_session' }
+    expect(cc(await PATCH(patch(VALID_PATCH)))).toBe(PNS)
+    h.auth = unavailable('gateway_5xx')
+    expect(cc(await PATCH(patch(VALID_PATCH)))).toBe(PNS)
+    h.auth = AUTHED
+    const forbidden = await PATCH(patch(VALID_PATCH))
+    expect(forbidden.status).toBe(403)
+    expect(cc(forbidden)).toBe(PNS)
+  })
+
+  it('GET: 400 missing id, 401, 503 auth, 404 unknown result, 200 reopen of a saved result', async () => {
+    expect(cc(await GET(new NextRequest('http://localhost/api/title-studio')))).toBe(PNS) // no paidResultId
+    h.auth = { kind: 'unauthenticated', reason: 'no_session' }
+    expect(cc(await GET(get()))).toBe(PNS)
+    h.auth = unavailable()
+    expect(cc(await GET(get()))).toBe(PNS)
+    h.auth = AUTHED
+    const notFound = await GET(get())
+    expect(notFound.status).toBe(404)
+    expect(cc(notFound)).toBe(PNS)
+    h.spies.byId.mockResolvedValueOnce(asRecord)
+    h.spies.openPaid.mockResolvedValueOnce(asRecord)
+    const ok = await GET(get())
+    expect(ok.status).toBe(200)
+    expect(cc(ok), 'a personal 200 that writes no cookie').toBe(PNS)
+    expect(ok.headers.get('expires')).toBeNull()
+    expect(ok.headers.get('pragma')).toBeNull()
+  })
+})
+
 describe('wave boundary', () => {
   it('the migrated route no longer uses the legacy getUserId / acquireRequestLock', async () => {
     const { readFileSync } = await import('node:fs')

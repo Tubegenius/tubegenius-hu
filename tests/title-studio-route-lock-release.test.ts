@@ -254,6 +254,34 @@ describe('POST /api/title-studio -- locks it must NOT touch', () => {
   })
 })
 
+describe('POST /api/title-studio -- every exit of the paid flow carries Cache-Control: private, no-store', () => {
+  const PNS = 'private, no-store'
+  const exits: Array<[string, number, () => void]> = [
+    ['success (charged and saved)', 200, () => {}],
+    ['cache hit', 200, () => h.spies.cache.mockResolvedValue({ id: 'cached' })],
+    ['402 at the access check', 402, () => h.spies.access.mockResolvedValue({ allowed: false })],
+    ['429 daily soft limit', 429, () => h.spies.access.mockResolvedValue({ allowed: false, reason: 'daily_soft_limit', dailyLimit: 5 })],
+    ['500 provider failure', 500, () => h.spies.ai.mockRejectedValue(new Error('provider down'))],
+    ['402 charge failure', 402, () => h.spies.charge.mockResolvedValue({ success: false, error: 'Nincs elég kredit' })],
+    ['500 save failure + refund', 500, () => h.spies.save.mockResolvedValue({ success: false, error: 'db down' })],
+    ['409 lock held by another operation', 409, () => { h.rows.push({ id: 'other-lock', ...LOCK_KEY, created_at: Date.now() }) }],
+    ['503 lock outage', 503, () => { h.insertError = { code: '57014', message: 'statement timeout' } }],
+  ]
+  it.each(exits)('%s -> %i with private, no-store', async (_label, status, arrange) => {
+    arrange()
+    const res = await POST(post())
+    expect(res.status).toBe(status)
+    expect(res.headers.get('cache-control')).toBe(PNS)
+    expect(res.headers.get('expires')).toBeNull()
+    expect(res.headers.get('pragma')).toBeNull()
+  })
+  it('400 validation (before auth and lock) carries it too', async () => {
+    const res = await POST(new NextRequest('http://localhost/api/title-studio', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) }))
+    expect(res.status).toBe(400)
+    expect(res.headers.get('cache-control')).toBe(PNS)
+  })
+})
+
 describe('POST /api/title-studio -- a FAILED release is logged (identifier-free) and does not change the response', () => {
   /** What may never appear on ANY console channel. */
   function expectNothingSensitiveLogged() {

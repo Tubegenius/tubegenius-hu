@@ -181,7 +181,9 @@ describe('H1 -- GET /api/credits and the browser session cookie when the REFRESH
       expect(first.res.status).toBe(503)
       expect(first.body).toMatchObject({ code: 'auth_unavailable', retryable: true })
       expect(first.ws, 'a 503 for a failed refresh writes no cookie at all').toHaveLength(0)
-      expect(first.res.headers.get('cache-control')).toBe('no-store') // the route's own error header, not the session one
+      expect(first.res.headers.get('cache-control')).toBe('private, no-store') // explicit default; the SSR session headers only come with a cookie write
+      expect(first.res.headers.get('expires')).toBeNull()
+      expect(first.res.headers.get('pragma')).toBeNull()
       expect(refreshTokenOf(h.jar.get(COOKIE)!)).toBe('RT1')
 
       gt.refresh = 'ok'
@@ -202,7 +204,9 @@ describe('H1 -- GET /api/credits and the browser session cookie when the REFRESH
     const second = await callCredits()
     expect(second.res.status).toBe(200)
     expect(gt.refreshCalls).toBe(1)
-    expect(second.res.headers.get('expires')).toBeNull() // no cookie written -> no session headers
+    expect(second.res.headers.get('cache-control')).toBe('private, no-store') // personal 200 without a cookie write: explicit default
+    expect(second.res.headers.get('expires')).toBeNull() // no cookie written -> no SSR Expires/Pragma
+    expect(second.res.headers.get('pragma')).toBeNull()
   })
 
   it('valid, unexpired session: 200, no cookie writes and no session cache headers', async () => {
@@ -210,6 +214,7 @@ describe('H1 -- GET /api/credits and the browser session cookie when the REFRESH
     const r = await callCredits()
     expect(r.res.status).toBe(200)
     expect(r.ws).toHaveLength(0)
+    expect(r.res.headers.get('cache-control')).toBe('private, no-store')
     expect(r.res.headers.get('expires')).toBeNull()
     expect(r.res.headers.get('pragma')).toBeNull()
     expect(gt.refreshCalls).toBe(0)
@@ -233,9 +238,10 @@ describe('H1 -- GET /api/credits and the browser session cookie when the REFRESH
     },
   )
 
-  it('no session cookie at all: 401, no GoTrue call, no cookie writes', async () => {
+  it('no session cookie at all: 401 with the explicit private, no-store, no GoTrue call, no cookie writes', async () => {
     const r = await callCredits()
     expect(r.res.status).toBe(401)
+    expect(r.res.headers.get('cache-control')).toBe('private, no-store')
     expect(r.ws).toHaveLength(0)
     expect(gt.refreshCalls).toBe(0)
   })
@@ -389,15 +395,35 @@ describe('helper contracts', () => {
     expect(second.headers).toEqual({})
   })
 
-  it('withSessionResponseHeaders adds the collected headers to the handler response and never fails an immutable response', async () => {
-    const res = await withSessionResponseHeaders(async s => { s.headers['Cache-Control'] = 'no-store'; s.headers.Pragma = 'no-cache'; return new Response('x') })
-    expect(res.headers.get('cache-control')).toBe('no-store')
+  it('every response gets Cache-Control: private, no-store by default; other headers and the body are untouched', async () => {
+    const res = await withSessionResponseHeaders(async () => new Response('body', { status: 418, headers: { 'x-a': '1', 'Cache-Control': 'public, max-age=600' } }))
+    expect(res.headers.get('cache-control')).toBe('private, no-store') // a weaker/public handler value is replaced
+    expect(res.headers.get('x-a')).toBe('1')
+    expect(res.status).toBe(418)
+    expect(await res.text()).toBe('body')
+    expect(res.headers.get('expires')).toBeNull()
+    expect(res.headers.get('pragma')).toBeNull()
+  })
+
+  it('the stronger SSR session headers REPLACE the default (never weaker) and bring Expires/Pragma', async () => {
+    const res = await withSessionResponseHeaders(async s => {
+      s.headers['Cache-Control'] = SSR_CACHE_HEADERS['cache-control']; s.headers.Expires = '0'; s.headers.Pragma = 'no-cache'
+      return new Response('x')
+    })
+    expect(res.headers.get('cache-control')).toBe(SSR_CACHE_HEADERS['cache-control'])
+    expect(res.headers.get('expires')).toBe('0')
     expect(res.headers.get('pragma')).toBe('no-cache')
+    // HTTP header names are case-insensitive: a lower-case session header still wins over the default
+    const lower = await withSessionResponseHeaders(async s => { s.headers['cache-control'] = SSR_CACHE_HEADERS['cache-control']; return new Response('x') })
+    expect(lower.headers.get('cache-control')).toBe(SSR_CACHE_HEADERS['cache-control'])
+  })
+
+  it('a response with immutable headers is rebuilt (same status, body and Location) instead of being left without the header', async () => {
     const immutable = await withSessionResponseHeaders(async s => { s.headers.Pragma = 'no-cache'; return Response.redirect('http://localhost/x', 302) })
-    expect(immutable.status).toBe(302) // headers of Response.redirect() are immutable: left unchanged, no throw
-    const untouched = await withSessionResponseHeaders(async () => new Response('y', { headers: { 'x-a': '1' } }))
-    expect([...untouched.headers.keys()]).toContain('x-a')
-    expect(untouched.headers.get('pragma')).toBeNull()
+    expect(immutable.status).toBe(302)
+    expect(immutable.headers.get('location')).toBe('http://localhost/x')
+    expect(immutable.headers.get('cache-control')).toBe('private, no-store')
+    expect(immutable.headers.get('pragma')).toBe('no-cache')
   })
 
   it('resolveSessionAuth without a session out-parameter still works (headers are simply not exposed)', async () => {

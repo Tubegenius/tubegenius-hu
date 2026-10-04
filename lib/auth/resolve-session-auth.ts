@@ -47,6 +47,9 @@ export interface SessionAuthOptions {
   persistOnInvalidSession: boolean
 }
 
+/** Default cache directive of every personalised response (see withSessionResponseHeaders). */
+export const PRIVATE_NO_STORE = 'private, no-store'
+
 /** A complete successful rotation (or any set) contains at least one non-empty cookie value. */
 const containsSet = (op: Operation) => op.cookies.some(c => c.value !== '')
 
@@ -99,14 +102,29 @@ export async function resolveSessionAuth(options: SessionAuthOptions, session?: 
 }
 
 /**
- * Runs a route handler and adds the session cache headers collected by resolveSessionAuth() to ITS response
- * (headers only exist when session cookies were applied). Setting headers cannot fail the response.
+ * Runs a route handler and makes EVERY response the handler RETURNS (success and error) non-cacheable:
+ *   * default: `Cache-Control: private, no-store` -- these responses are personalised (credit balance,
+ *     paid results, auth outcome) and must not be stored by a CDN or shared cache; without an explicit
+ *     header Vercel's default for a function response is `public, max-age=0, must-revalidate`;
+ *   * when session cookies were applied, the stronger @supabase/ssr headers collected by
+ *     resolveSessionAuth() (Cache-Control: private, no-cache, no-store, must-revalidate, max-age=0, plus
+ *     Expires and Pragma) replace the default -- the protection is never weakened, Set-Cookie is untouched.
+ * If the response has immutable headers it is rebuilt with the same body and status.
+ * Limit: this holds for responses the handler returns. If an exception ESCAPES the handler, the 500 that Next
+ * itself builds never passes through this wrapper and does NOT get these headers (the title-studio handlers
+ * catch internally; /api/credits has no outer try/catch).
  */
 export async function withSessionResponseHeaders(run: (session: SessionResponseHeaders) => Promise<Response>): Promise<Response> {
   const session: SessionResponseHeaders = { headers: {} }
   const response = await run(session)
-  for (const [name, value] of Object.entries(session.headers)) {
-    try { response.headers.set(name, value) } catch { /* immutable response headers: leave the response unchanged */ }
+  const merged = new Map<string, [string, string]>([['cache-control', ['Cache-Control', PRIVATE_NO_STORE]]])
+  for (const [name, value] of Object.entries(session.headers)) merged.set(name.toLowerCase(), [name, value])
+  try {
+    for (const [name, value] of merged.values()) response.headers.set(name, value)
+    return response
+  } catch {
+    const headers = new Headers(response.headers)
+    for (const [name, value] of merged.values()) headers.set(name, value)
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
   }
-  return response
 }
