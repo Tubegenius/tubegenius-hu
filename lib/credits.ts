@@ -10,6 +10,8 @@ import { cookies } from 'next/headers'
 import { MODELS } from '@/lib/models'
 import { checkDailySoftLimit, type DailySoftLimitDecision } from '@/lib/daily-soft-limit'
 import { randomUUID } from 'crypto'
+import type { AuthResolution } from '@/lib/auth/resolve-auth'
+import { resolveSessionAuth, type SessionResponseHeaders } from '@/lib/auth/resolve-session-auth'
 
 export type FeatureName =
   | 'video_package_shorts'
@@ -94,6 +96,18 @@ export async function getUserId(): Promise<string | null> {
   )
   const { data: { user } } = await supabase.auth.getUser()
   return user?.id || null
+}
+
+// Backend error contract (wave 1): same client as getUserId() (service-role key, same cookies), but the
+// outcome keeps the difference between a PROVEN missing/invalid session and a Supabase
+// network/gateway/unknown failure. Unlike getUserId() it hands a SUCCESSFULLY refreshed session back to
+// the browser (getUserId() discards it with a no-op setAll, so the browser keeps the already-rotated
+// refresh token): pass the `session` out-parameter and add its headers to the response
+// (withSessionResponseHeaders). It does NOT write cookie deletions for an invalid session (unchanged
+// behaviour of this path) and writes no deletion on a transient failure. getUserId() is left unchanged for
+// the routes that have not migrated yet.
+export function resolveUserAuth(session?: SessionResponseHeaders): Promise<AuthResolution> {
+  return resolveSessionAuth({ apiKey: process.env.SUPABASE_SERVICE_ROLE_KEY!, persistOnInvalidSession: false }, session)
 }
 
 export async function getCreditBalance(userId: string): Promise<{ balance: number; plan: string; subscription_balance: number; purchased_balance: number } | null> {
