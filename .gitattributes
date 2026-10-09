@@ -1,0 +1,4 @@
+# LR-1 census SQL: approved by the SHA-256 of its exact bytes. It must always be checked out
+# with LF line endings; a CRLF conversion (core.autocrlf=true on Windows) would change the
+# hash the approval is bound to. Scope: this one file only.
+docs/operations/paid-operations-lr1-census-phase0.sql text eol=lf
