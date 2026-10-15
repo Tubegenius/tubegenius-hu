@@ -24,6 +24,7 @@ import {
 } from '@/lib/video-audit-scoring'
 import { acquireRequestLock, releaseRequestLock, REQUEST_IN_PROGRESS_ERROR } from '@/lib/request-lock'
 import { upsertCreatorMemory } from '@/lib/creator-lane/lane-service'
+import { AUDIT_EVIDENCE_PROMPT_GUARD_HU, buildAuditEvidenceBasis } from '@/lib/editing-pattern/audit-evidence-basis'
 
 async function fetchYouTubeData(videoId: string): Promise<YouTubeApiData | null> {
   const { getActiveApiKey } = await import('@/lib/youtube-service')
@@ -101,6 +102,8 @@ Video adatok:
 - Backend platform fit score: ${backendScores.platform_fit?.score}
 - Backend csomagolas score: ${backendScores.packaging_quality?.score}
 
+${AUDIT_EVIDENCE_PROMPT_GUARD_HU}
+
 MAGYAR NYELVI MINŐSÉG - KÖTELEZŐ:
 - Minden magyar szöveg helyes magyar ékezetekkel készüljön.
 - Ne írj ilyeneket: passszív, szoveg, fo problema, uj cim, ajanlas.
@@ -157,7 +160,7 @@ Adj vissza egy JSON objektumot ezzel a struktúrával:
     maxTokens: 1500,
     messages: [{ role: 'user', content: prompt }],
     promptTemplateId: 'video_audit_interpretation',
-    promptVersion: 'v1',
+    promptVersion: 'v2',
   })
 
   return {
@@ -368,6 +371,8 @@ export async function POST(req: NextRequest) {
       overall_risk: overallInterpretation.risk_level,
       overall_action: overallInterpretation.recommended_action,
       confidence,
+      // explicit provenance: this audit is metadata-based and has NOT looked at any frame or cut
+      evidence_basis: buildAuditEvidenceBasis({ hasApiData, hasBehavioralMetrics }),
       decision,
       weakest_dimension,
       decision_reason,
