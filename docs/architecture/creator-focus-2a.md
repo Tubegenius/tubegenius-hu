@@ -1,8 +1,8 @@
 # Creator Focus 2A — eredet-jelölt fókuszprofil és konzervatív illeszkedés
 
-Státusz: **helyi, nem commitolt** csomag (Creator Intelligence 2A). Tiszta modul (`lib/creator-focus/`),
-DB-mentes tesztekkel. **Nincs** migráció, API, UI, új AI-hívás vagy kreditművelet, és **nem tárol tartós
-megerősítést vagy korrekciót**.
+Státusz: **draft PR (#12), nem integrált** csomag (Creator Intelligence 2A). Tiszta modul (`lib/creator-focus/`),
+DB-mentes tesztekkel; **semmi nem importálja**, nem működő Creator Intelligence felület. **Nincs** migráció, API,
+UI, új AI-hívás vagy kreditművelet, és **nem tárol tartós megerősítést vagy korrekciót**.
 
 ## Mi ez, és mi nem
 
@@ -26,13 +26,28 @@ megerősítést vagy korrekciót**.
 | `lib/creator-focus/profile-validate.ts` | érkező profil szigorú szerkezeti és konzisztencia-ellenőrzése |
 | `lib/creator-focus/fit.ts` | `assessFocusFit` (illeszkedés; a lane mindig `unknown`) |
 | `lib/creator-focus/text.ts` | szövegsegédek (a meglévő `niche-relevance` tokenizálóra épít) |
-| `tests/creator-focus-{adapter,transitions,fit,fit-defense,purity}.test.ts`, `tests/support/creator-focus-fixtures.ts` | 126 DB-mentes teszt |
+| `tests/creator-focus-{adapter,transitions,fit,fit-defense,purity}.test.ts`, `tests/support/creator-focus-fixtures.ts` | 146 DB-mentes teszt |
 
 ## Íróaudit: minden felhasznált `profiles` mezőnél
 
-Az összes ismert író a repóban (forrás: kódolvasás; `tests/creator-focus-adapter.test.ts` őrzi, hogy új író
-ne jelenhessen meg észrevétlenül). Az adatbázis-oldali író egyedül az `auth.users` triggere, ami csak a `user_id`-t
-tölti (migráció `001`, `handle_new_user`).
+A repóban **ismert** írók (forrás: kódolvasás). Az adatbázis-oldali író, amit találtam, az `auth.users` triggere,
+ami csak a `user_id`-t tölti (migráció `001`, `handle_new_user`).
+
+**A lista teljességét ez a csomag nem bizonyítja.** `tests/creator-focus-adapter.test.ts` egy korlátozott
+**forrás-sentinel**: szövegkeresés az `app/`, `lib/`, `components/` TypeScript fájljaiban. Két szintje van:
+(1) közvetlenül `from('profiles')`-ra láncolt `update/upsert/insert/delete`; (2) olyan fájl, ami a `profiles`
+táblára hivatkozik **és** bárhol tartalmaz írást (ez fogja meg a változóra bontott lekérdezést is; a kézzel átnézett
+nem-író fájlok külön listán vannak). Negatív kontrollok rögzítik, mit lát és mit nem.
+
+A sentinel **nem látja** (a tesztben is rögzítve, „BLIND” kontrollokkal):
+- táblanév-konstanssal vagy argumentummal hívott írót (`.from(TABLE)`), számított táblanevet;
+- egy fájlban épített, másikban végrehajtott lekérdezést;
+- `.rpc(...)` hívást, SQL-függvényt vagy triggert (csak a `handle_new_user` ismert);
+- nyers SQL-t, a Supabase konzolt, más repókat, a `scripts/` és `e2e/` fixture-öket, JavaScript fájlokat;
+- régebbi vagy más alkalmazásverzió által korábban írt sorokat.
+
+A sentinel tehát egy új, ismert alakú író megjelenésekor jelez, hogy az eredet-szabályt újra át kell nézni; nem
+állítja, hogy más író nem létezik.
 
 | Írási pont | Mit ír | Ki indítja |
 |---|---|---|
@@ -49,9 +64,9 @@ tölti (migráció `001`, `handle_new_user`).
 |---|---|---|
 | `audience`, `avoid_topics` | `user_declared` | csak az űrlapmentés írja |
 | `specific_focus`, `main_category` — **nem egyezik tárolt javaslattal** | `user_declared` | csak felhasználó-indított írók |
-| `specific_focus`, `main_category` — egyezik az **aktív csatorna** javaslatával **és** `niche_validated_for_channel_id` = aktív csatorna | `user_confirmed`, `channel_derived` | az explicit döntés jelölője bizonyítja az elfogadást |
-| ugyanez **jelölő nélkül** | `unknown` | az egyezés lehet véletlen, lejárt vagy másik úton került be |
+| `specific_focus`, `main_category` — egyezik az **aktív csatorna** javaslatával (a jelölővel vagy anélkül) | `unknown`, `channel_derived` | a sor nem bizonyítja, hogy a javaslatot a felhasználó fogadta el (lásd lent) |
 | egyezés **másik / ismeretlen csatorna** javaslatával | `unknown`, `channel_derived` | a csatornához kötött állítás nem hordozható át |
+| `user_confirmed` | **sorból sosem** | csak a memóriabeli `confirmSuggestion` átmenet állítja elő |
 | `channel_usage_mode` ≠ `manual` | `user_declared` | felhasználó-indított írók |
 | `channel_usage_mode` = `manual` | `unknown` | ez az adatbázis `NOT NULL DEFAULT` értéke is: alapérték ≠ nyilatkozat |
 | `main_category` = `other` | `unknown` | az űrlap induló értéke is |
@@ -59,10 +74,29 @@ tölti (migráció `001`, `handle_new_user`).
 | `selected_main_niche`, `primary_creator_lane` | **figyelmen kívül** | nincs repón belüli író: az eredet nem bizonyítható |
 | `detected_niche_candidates` | `system_suggested` (külön lista) | soha nem állítás; a modell önbizalma és az indoklás szövege nem kerül át |
 
+### A `niche_validated_for_channel_id` jelölő pontosan mit bizonyít
+
+**Csak azt, hogy a felhasználó valamikor döntött a niche-ről az adott csatornára vonatkozóan**, nem azt, hogy egy
+konkrét javaslatot elfogadott:
+
+- a `resolve-niche-review` **mindkét** ága beállítja (`keep_current`: `route.ts:31`, az érték érintetlen;
+  `select_candidate`: `route.ts:61`, az érték a tárolt javaslatból);
+- a `POST /api/profile` mentés a fókuszt a jelölő törlése nélkül módosíthatja (a jelölő nincs az engedélyezett
+  mezők között), tehát a jelölő és az érték **külön időpontban, külön okból** íródhat.
+
+Ezért a javaslattal egyező érték a jelölővel együtt is `unknown` (`channel_derived`), és az okok között a
+`validation_marker_proves_a_channel_level_decision_only` szerepel. Egy `keep_current` után hagyott, a javaslattal
+véletlenül egyező saját érték és egy `select_candidate` után kapott sor **megkülönböztethetetlen** (a teszt
+rögzíti). A jelölő a csatorna-szintű `needs_review` predikátumban továbbra is számít, de **claim eredetet nem ad**.
+
+Tesztelt sorállapotok: `select_candidate`, `keep_current` (egyező és nem egyező érték), későbbi profilmentés
+(a jelölő megmarad, az érték változik), egy másik javaslat-szöveg kézzel beírva, és a javaslatlista frissülése.
+
 **Fontos korlát az „user_declared” jelentésén:** az eredet azt jelzi, *ki döntött az állítás tartásáról* (a
-felhasználó-indított írók bizonyítottak), **nem** azt, hogy a szavakat ki írta. Egy korábban elfogadott AI-javaslat
-szövege, ha a javaslat-lista azóta frissült, már `user_declared`-nek látszik. Ez a kód alapján nem
-különböztethető meg; ld. „Nyitott állítások”.
+felhasználó-indított írók bizonyítottak), **nem** azt, hogy a szavakat ki írta. Ha a javaslat-lista azóta frissült,
+vagy a felhasználó később átírta a fókuszt, egy korábban elfogadott AI-javaslat szövege már nem egyezik semmivel,
+és `user_declared`-nek látszik. Ez a sorból nem különböztethető meg (a teszt „KNOWN LIMIT” esete); ld.
+„Nyitott állítások”.
 
 ## Állapotátmenetek — NEM TARTÓSAK
 
@@ -73,7 +107,7 @@ adapterrel, a megerősítés, a korrekció és az előzmény **nincs meg** (`tes
 „the history is NOT durable”). A tartós tárolás külön, még el nem döntött lépés.
 
 - A rendszerjavaslat **csak** a `confirmSuggestion` explicit hívásával válik `user_confirmed` állítássá; semmi más
-  nem léptet elő javaslatot.
+  nem léptet elő javaslatot, és `user_confirmed` egy adatbázissorból soha nem olvasható ki.
 - Bizonytalan csatorna-kontextusban (`niche_needs_review` vagy `mismatch`) a megerősítést a modul **elutasítja**
   (`channel_context_uncertain`): azt a meglévő `resolve-niche-review` folyamat végzi, ami a perzisztens állapotot is
   törli.
@@ -82,7 +116,9 @@ adapterrel, a megerősítés, a korrekció és az előzmény **nincs meg** (`tes
 
 ## Csatorna-eltérés és `needs_review`: pontosan mi válik bizonytalanná
 
-Csak a **csatornából származó** állítások (`channel_derived`): a javaslat-egyezésű fókusz/kategória. A felhasználó
+Csak a **csatornából származó** állítások (`channel_derived`): a javaslat-egyezésű fókusz/kategória (a sorból
+ezek `unknown` eredetűek, ezért tényként amúgy sem szolgálnak) és a memóriában megerősített javaslat
+(`user_confirmed`, amely bizonytalan kontextusban megszűnik ténynek lenni). A felhasználó
 saját, önálló állításai (`audience`, `avoid_topics`, `channel_usage_mode`, egy javaslatot nem másoló fókusz)
 **megmaradnak ténynek**. A modul a meglévő termékpredikátumot használja újra
 (`isNicheReviewRequired`, `candidatesForActiveChannel`), így nem alakul ki második, eltérő definíció. A
@@ -149,11 +185,11 @@ hitelesítéséhez hitelesített, tartós rekord kell (P1). A kimenet `limitatio
 keresési `main_category` / `specific_focus` / `niche` mezőkbe. Ebben a csomagban ez változatlan. Az új modul sehol
 nem használ `candidates[0]`-t; ezt `tests/creator-focus-purity.test.ts` forrásszinten őrzi.
 
-## Tesztek (126)
+## Tesztek (146)
 
 | Terület | Fájl |
 |---|---|
-| eredetkezelés (táblázatos), javaslat ≠ tény, csatorna-eltérés, hibás sorok, íróaudit-őr | `creator-focus-adapter.test.ts` |
+| eredetkezelés (táblázatos), javaslat ≠ tény, a jelölő csak csatorna-szintű (keep_current / select_candidate / későbbi mentés / lista-frissülés), csatorna-eltérés, hibás sorok, forrás-sentinel negatív kontrollokkal | `creator-focus-adapter.test.ts` |
 | megerősítés/korrekció/elvetés, nem tartós előzmény, determinisztikusság | `creator-focus-transitions.test.ts` |
 | fits/partial/does_not_fit/unknown, unknown elsőbbsége, lane mindig unknown (cluster ID mellett is), kézzel épített / hamisított profilok elutasítása, tiltott mezők hiánya, hibás bemenet | `creator-focus-fit.test.ts` |
 | a validátor kikapcsolva sem fogad el `fact_eligible` jelzőt tekintélyként | `creator-focus-fit-defense.test.ts` |
@@ -169,8 +205,11 @@ Supabase-t.
 - **P3** lane-javaslat: hitelesített kapcsolat + külön döntés + UI és `explicit_user` megerősítési folyamat; a `primary_creator_lane` írója hiányzik.
 - **P4** idea → publikált YouTube-videó kapcsolat (a tanulási hurok előfeltétele); ezért a tanulási hurok nincs a
   csomagban.
-- Nyitott állítás: az „adoption proof” (`niche_validated_for_channel_id`) a repón belüli írókra bizonyított;
-  adatbázis-konzolon, régi alkalmazásverziókkal vagy más eszközzel írt sorokra nem. Éles sorokat nem vizsgáltam.
+- Nyitott állítás: a `profiles` írók listája a **forrás-sentinelre és kódolvasásra** épül, nem teljes bizonyíték
+  (lásd az íróaudit szakaszt); adatbázis-konzolon, régi alkalmazásverziókkal vagy más eszközzel írt sorokra nem
+  vonatkozik. Éles sorokat nem vizsgáltam.
+- Nyitott állítás: egy adatbázissorból **nem** olvasható ki, hogy a felhasználó elfogadott-e egy javaslatot; ehhez a
+  P1 szerinti tartós, hitelesített rekord kell.
 - Nyitott állítás: az `origin` hitelessége nem bizonyítható tiszta modulból (lásd fent); a konzisztencia-ellenőrzés csak az egyszerű hamisítást fogja meg.
 - Nyitott állítás: lexikai egyezés nem szemantikus megértés; a magyar ragozásra csak a közös-prefix szabály nyújt
   közelítést.

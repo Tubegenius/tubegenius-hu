@@ -77,23 +77,64 @@ describe('a system suggestion is never a confirmed claim by itself', () => {
   })
 })
 
-describe('a stored value that equals a suggestion', () => {
-  const stored = [candidate('otthoni edzés kezdőknek', 'health')]
-
-  it('with the validation marker of the SAME channel: user_confirmed, channel-derived, eligible', () => {
-    const p = adaptProfileRow(row({
-      specific_focus: 'Otthoni Edzes Kezdőknek', main_category: 'health', detected_niche_candidates: stored,
-      active_channel_id: CHANNEL_A, niche_validated_for_channel_id: CHANNEL_A,
-    }))
-    expect(p.claims.specific_focus).toMatchObject({ origin: 'user_confirmed', channel_derived: true, fact_eligible: true })
-    expect(p.claims.main_category).toMatchObject({ origin: 'user_confirmed', channel_derived: true, fact_eligible: true })
+describe('a stored value that equals a suggestion: the row cannot prove that the suggestion was adopted', () => {
+  const stored = [candidate('otthoni edzés kezdőknek', 'health'), candidate('főzés gyorsan', 'lifestyle')]
+  const adoptedLooking = (over: Record<string, unknown> = {}) => row({
+    specific_focus: 'otthoni edzés kezdőknek', main_category: 'health', detected_niche_candidates: stored,
+    active_channel_id: CHANNEL_A, ...over,
   })
 
-  it('WITHOUT the validation marker: unknown and not a fact', () => {
-    const p = adaptProfileRow(row({ specific_focus: 'otthoni edzés kezdőknek', detected_niche_candidates: stored, active_channel_id: CHANNEL_A }))
+  // The four row states below are what resolve-niche-review and the profile save actually leave behind.
+  it('select_candidate leaves value + marker: still unknown (the marker is a channel-level decision), never a fact', () => {
+    const p = adaptProfileRow(adoptedLooking({ niche_validated_for_channel_id: CHANNEL_A }))
     expect(p.claims.specific_focus).toMatchObject({
-      origin: 'unknown', channel_derived: true, fact_eligible: false, reasons: ['matches_system_suggestion_without_validation_marker'],
+      origin: 'unknown', channel_derived: true, fact_eligible: false,
+      reasons: ['matches_system_suggestion_adoption_not_provable', 'validation_marker_proves_a_channel_level_decision_only'],
     })
+    expect(p.claims.main_category).toMatchObject({ origin: 'unknown', channel_derived: true, fact_eligible: false })
+  })
+
+  it('keep_current leaves the SAME marker without touching the value: a row after keep_current is indistinguishable', () => {
+    // the user typed 'otthoni edzés kezdőknek' themselves, then pressed "keep current": value equals a suggestion
+    const afterKeepCurrent = adaptProfileRow(adoptedLooking({ niche_validated_for_channel_id: CHANNEL_A }))
+    const afterSelectCandidate = adaptProfileRow(adoptedLooking({ niche_validated_for_channel_id: CHANNEL_A }))
+    expect(afterKeepCurrent).toEqual(afterSelectCandidate)
+    expect(afterKeepCurrent.claims.specific_focus!.origin).toBe('unknown')
+  })
+
+  it('keep_current on a value that matches NO suggestion: the marker changes nothing, the claim stays user_declared', () => {
+    const p = adaptProfileRow(row({
+      specific_focus: 'retró számítógépek', detected_niche_candidates: stored, active_channel_id: CHANNEL_A, niche_validated_for_channel_id: CHANNEL_A,
+    }))
+    expect(p.claims.specific_focus).toMatchObject({ origin: 'user_declared', channel_derived: false, fact_eligible: true, reasons: ['written_only_by_user_initiated_paths'] })
+  })
+
+  it('a later profile save changes the focus but leaves the marker: the new, unmatched value is user_declared; the marker adds nothing', () => {
+    const afterSelect = adaptProfileRow(adoptedLooking({ niche_validated_for_channel_id: CHANNEL_A }))
+    const afterLaterSave = adaptProfileRow(adoptedLooking({ specific_focus: 'retró számítógépek', main_category: 'tech_ai', niche_validated_for_channel_id: CHANNEL_A }))
+    expect(afterSelect.claims.specific_focus!.origin).toBe('unknown')
+    expect(afterLaterSave.claims.specific_focus).toMatchObject({ value: 'retró számítógépek', origin: 'user_declared', channel_derived: false, fact_eligible: true })
+    expect(afterLaterSave.claims.main_category).toMatchObject({ origin: 'user_declared', channel_derived: false })
+  })
+
+  it('a later save that writes ANOTHER suggestion text by hand is unknown again: no marker can tell it from an adoption', () => {
+    const p = adaptProfileRow(adoptedLooking({ specific_focus: 'főzés gyorsan', main_category: 'lifestyle', niche_validated_for_channel_id: CHANNEL_A }))
+    expect(p.claims.specific_focus).toMatchObject({ origin: 'unknown', fact_eligible: false })
+  })
+
+  it('after the suggestion list is refreshed, the earlier text no longer matches: user_declared (the limit is stated, not hidden)', () => {
+    // KNOWN LIMIT: origin = who decided to hold the claim (user-initiated writers only), not who authored the words.
+    // Once discover-niche replaced the list, an earlier adoption is no longer recognisable from the row.
+    const p = adaptProfileRow(adoptedLooking({
+      detected_niche_candidates: [candidate('zenei gyártás otthon', 'entertainment')], niche_validated_for_channel_id: CHANNEL_A,
+    }))
+    expect(p.claims.specific_focus).toMatchObject({ origin: 'user_declared', channel_derived: false, fact_eligible: true })
+    expect(p.suggestions.map(s => s.specific_focus)).toEqual(['zenei gyártás otthon'])
+  })
+
+  it('without any marker the result is the same unknown', () => {
+    const p = adaptProfileRow(adoptedLooking())
+    expect(p.claims.specific_focus).toMatchObject({ origin: 'unknown', fact_eligible: false, reasons: ['matches_system_suggestion_adoption_not_provable'] })
   })
 
   it('a suggestion that belongs to ANOTHER channel: unknown and not a fact', () => {
@@ -108,17 +149,26 @@ describe('a stored value that equals a suggestion', () => {
     const p = adaptProfileRow(row({ specific_focus: 'retró számítógépek', detected_niche_candidates: stored, active_channel_id: CHANNEL_A }))
     expect(p.claims.specific_focus).toMatchObject({ origin: 'user_declared', channel_derived: false, fact_eligible: true })
   })
+
+  it("the adapter never produces user_confirmed or user_corrected: those exist only after an in-memory transition", () => {
+    const rows = [adoptedLooking(), adoptedLooking({ niche_validated_for_channel_id: CHANNEL_A }), adoptedLooking({ niche_validated_for_channel_id: CHANNEL_B, niche_needs_review: true })]
+    for (const r of rows) {
+      const origins = Object.values(adaptProfileRow(r).claims).map(c => c!.origin)
+      expect(origins).not.toContain('user_confirmed')
+      expect(origins).not.toContain('user_corrected')
+    }
+  })
 })
 
-describe('channel mismatch and pending review make exactly the channel-derived claims uncertain', () => {
-  const adopted = row({
-    specific_focus: 'otthoni edzés kezdőknek', main_category: 'health', audience: 'kezdők', avoid_topics: 'politika',
+describe('channel mismatch and pending review make exactly the channel-related claims uncertain', () => {
+  const typed = row({
+    specific_focus: 'retró számítógépek', main_category: 'tech_ai', audience: 'kezdők', avoid_topics: 'politika',
     channel_usage_mode: 'primary_profile', detected_niche_candidates: [candidate('otthoni edzés kezdőknek', 'health')],
     active_channel_id: CHANNEL_A, niche_validated_for_channel_id: CHANNEL_A,
   })
 
-  it('baseline: everything is a fact', () => {
-    const p = adaptProfileRow(adopted)
+  it('baseline: independent, self-typed claims are all facts', () => {
+    const p = adaptProfileRow(typed)
     expect(p.channel.context_uncertain).toBe(false)
     expect(Object.values(p.claims).every(c => c!.fact_eligible)).toBe(true)
   })
@@ -127,20 +177,23 @@ describe('channel mismatch and pending review make exactly the channel-derived c
     ['niche_needs_review', { niche_needs_review: true }],
     ['channel mismatch', { channel_connection_type: 'mismatch' }],
     ['suggestions exist only for another channel (the product review predicate)', { niche_validated_for_channel_id: CHANNEL_B, detected_niche_candidates: [candidate('otthoni edzés kezdőknek', 'health', CHANNEL_B)] }],
-  ])('%s: the adopted focus and category become not-a-fact; the independent claims stay facts', (_name, over) => {
-    const p = adaptProfileRow({ ...adopted, ...over })
+  ])('%s: the context is uncertain, yet the independent, self-typed claims remain facts', (_name, over) => {
+    const p = adaptProfileRow({ ...typed, ...over })
     expect(p.channel.context_uncertain).toBe(true)
-    expect(p.claims.specific_focus!.fact_eligible).toBe(false)
-    expect(p.claims.main_category!.fact_eligible).toBe(false)
-    for (const field of ['audience', 'avoid_topics', 'channel_usage_mode'] as const) {
+    for (const field of ['specific_focus', 'main_category', 'audience', 'avoid_topics', 'channel_usage_mode'] as const) {
       expect(p.claims[field]!.fact_eligible, field).toBe(true)
+      expect(p.claims[field]!.channel_derived, field).toBe(false)
     }
   })
 
-  it('a self-typed focus is NOT dropped under a review or a mismatch', () => {
-    const p = adaptProfileRow(row({ specific_focus: 'retró számítógépek', niche_needs_review: true, channel_connection_type: 'mismatch', active_channel_id: CHANNEL_A }))
-    expect(p.channel).toMatchObject({ niche_review_required: true, mismatch: true, context_uncertain: true })
-    expect(p.claims.specific_focus).toMatchObject({ origin: 'user_declared', fact_eligible: true })
+  it.each([
+    ['niche_needs_review', { niche_needs_review: true }],
+    ['channel mismatch', { channel_connection_type: 'mismatch' }],
+  ])('%s: a focus that equals a suggestion is not a fact (it was never one), the typed claims still are', (_name, over) => {
+    const p = adaptProfileRow({ ...typed, specific_focus: 'otthoni edzés kezdőknek', main_category: 'health', ...over })
+    expect(p.claims.specific_focus).toMatchObject({ origin: 'unknown', channel_derived: true, fact_eligible: false })
+    expect(p.claims.main_category).toMatchObject({ origin: 'unknown', channel_derived: true, fact_eligible: false })
+    for (const field of ['audience', 'avoid_topics', 'channel_usage_mode'] as const) expect(p.claims[field]!.fact_eligible, field).toBe(true)
   })
 })
 
@@ -184,16 +237,52 @@ describe('malformed rows never throw and never invent a claim', () => {
   })
 })
 
-describe('the writer audit behind the provenance policy is guarded', () => {
-  // Every file that writes the `profiles` table. A NEW writer must be reviewed against the policy before it is
-  // added here -- that is the point of this test.
-  const KNOWN_WRITERS = [
+// ───────────────────────────── a SOURCE SENTINEL for profiles writers (NOT a proof) ─────────────────────────────
+// This is a text scan of app/, lib/ and components/. It notices the common writing shapes and fails when a new
+// file starts to write `profiles` in one of them, so the provenance policy gets re-reviewed. It does NOT prove
+// that no other writer exists. The shapes it cannot see are listed in NOT_COVERED and pinned by negative
+// controls below, so the limit is a tested statement rather than a hope.
+const WRITE_METHOD = /\.(update|upsert|insert|delete)\(/
+const FROM_PROFILES = /from\((['"`])profiles\1\)/
+/** tier 1: the write is chained directly on from('profiles') */
+const DIRECT_CHAIN = /from\((['"`])profiles\1\)\s*(\.\s*\w+\([^)]*\)\s*)*\.(update|upsert|insert|delete)\(/
+
+function profileWriterSentinel(sources: Record<string, string>): { direct: string[]; touching: string[] } {
+  const direct: string[] = []
+  const touching: string[] = []
+  for (const [file, text] of Object.entries(sources)) {
+    if (DIRECT_CHAIN.test(text)) direct.push(file)
+    // tier 2: the file references the table AND contains any write call (catches a query split over variables)
+    else if (FROM_PROFILES.test(text) && WRITE_METHOD.test(text)) touching.push(file)
+  }
+  return { direct: direct.sort(), touching: touching.sort() }
+}
+
+/** Writing shapes the sentinel is KNOWN not to see. Each has a negative control below. */
+const NOT_COVERED = [
+  'a wrapper that takes the table name as an argument or a constant: .from(TABLE)',
+  'a query built in one file and executed in another',
+  'writes through .rpc(...) or SQL functions / triggers (only handle_new_user is known)',
+  'raw SQL, the Supabase console, other repositories, scripts/ and e2e/ fixtures, JavaScript files',
+  'older or other application versions that wrote rows before this code existed',
+]
+
+describe('the profiles-writer source sentinel (a limited text scan, not a proof)', () => {
+  const KNOWN_DIRECT_WRITERS = [
     'app/api/profile/route.ts',
     'app/api/youtube/confirm-channel/route.ts',
     'app/api/youtube/discover-niche/route.ts',
     'app/api/youtube/resolve-mismatch/route.ts',
     'app/api/youtube/resolve-niche-review/route.ts',
     'lib/channel-profile-sync.ts',
+  ]
+  // files that read profiles and also write OTHER tables; reviewed by hand, none of them writes profiles
+  const REVIEWED_TOUCHING_ONLY = [
+    'app/api/opportunity/route.ts',
+    'app/api/thumbnail-studio/route.ts',
+    'app/api/title-studio/route.ts',
+    'app/api/video-audit/route.ts',
+    'app/dashboard/opportunities/page.tsx', // a Set.delete(), and a profiles read
   ]
 
   function walk(dir: string, out: string[] = []): string[] {
@@ -206,16 +295,51 @@ describe('the writer audit behind the provenance policy is guarded', () => {
     return out
   }
 
-  it('only the known files write profiles', () => {
+  it('the repository matches the reviewed lists', () => {
     const root = process.cwd()
-    // the update/upsert/insert/delete must be chained DIRECTLY on from('profiles'), not just appear later in the file
-    const writesProfiles = /from\((['"`])profiles\1\)\s*(\.\s*\w+\([^)]*\)\s*)*\.(update|upsert|insert|delete)\(/
-    const writers = ['app', 'lib', 'components']
-      .flatMap(dir => walk(join(root, dir)))
-      .filter(file => writesProfiles.test(readFileSync(file, 'utf8')))
-      .map(file => file.slice(root.length + 1).replace(/\\/g, '/'))
-      .sort()
-    expect(writers).toEqual([...KNOWN_WRITERS].sort())
+    const sources: Record<string, string> = {}
+    for (const file of ['app', 'lib', 'components'].flatMap(dir => walk(join(root, dir)))) {
+      sources[file.slice(root.length + 1).replace(/\\/g, '/')] = readFileSync(file, 'utf8')
+    }
+    const { direct, touching } = profileWriterSentinel(sources)
+    expect(direct).toEqual([...KNOWN_DIRECT_WRITERS].sort())
+    expect(touching).toEqual([...REVIEWED_TOUCHING_ONLY].sort())
+  })
+
+  describe('negative controls: what the scan does and does not see', () => {
+    const scan = (text: string) => profileWriterSentinel({ 'x.ts': text })
+
+    it.each([
+      ['a direct chain', "await admin.from('profiles').update({ a: 1 }).eq('user_id', id)"],
+      ['a chain split over lines', "await admin\n  .from('profiles')\n  .update({ a: 1 })\n  .eq('user_id', id)"],
+      ['double quotes', 'await admin.from("profiles").upsert({ a: 1 })'],
+      ['a chain with an intermediate call', "await admin.from('profiles').select('a').insert({ a: 1 })"],
+    ])('sees %s as a direct writer', (_name, text) => {
+      expect(scan(text).direct).toEqual(['x.ts'])
+    })
+
+    it('does not flag a pure read, or a write to another table', () => {
+      expect(scan("await admin.from('profiles').select('niche').eq('user_id', id)")).toEqual({ direct: [], touching: [] })
+      expect(scan("await admin.from('video_ideas').update({ a: 1 })")).toEqual({ direct: [], touching: [] })
+    })
+
+    it('flags a query split over a variable only in the weaker "touching" tier', () => {
+      const split = "const q = admin.from('profiles')\nawait q.update({ a: 1 })"
+      expect(scan(split)).toEqual({ direct: [], touching: ['x.ts'] })
+    })
+
+    it.each([
+      ['a table-name constant', "const T = 'profiles'\nawait admin.from(T).update({ a: 1 })"],
+      ['a wrapper with the table as an argument', "export const write = (t: string, v: object) => admin.from(t).update(v)\nwrite('profiles', { a: 1 })"],
+      ['an RPC', "await admin.rpc('set_profile_niche', { niche: 'x' })"],
+      ['a computed table name', "await admin.from(['pro', 'files'].join('')).update({ a: 1 })"],
+    ])('is BLIND to %s (documented limit)', (_name, text) => {
+      expect(scan(text)).toEqual({ direct: [], touching: [] })
+    })
+
+    it('records the uncovered shapes explicitly', () => {
+      expect(NOT_COVERED.length).toBeGreaterThanOrEqual(5)
+    })
   })
 
   it('every column the adapter relies on has a documented, non-empty writer list', () => {
@@ -230,5 +354,12 @@ describe('the writer audit behind the provenance policy is guarded', () => {
       expect(table[column].writers.length, column).toBeGreaterThan(0)
       expect(table[column].proves.length, column).toBeGreaterThan(0)
     }
+  })
+
+  it('the marker is documented as a channel-level decision, not as proof of adopting a value', () => {
+    const marker = (PROFILE_COLUMN_PROVENANCE as Record<string, { writers: readonly string[]; proves: string }>).niche_validated_for_channel_id
+    expect(marker.proves).toMatch(/channel/i)
+    expect(marker.proves).toMatch(/not .*value|never .*value|no value/i)
+    expect(marker.writers.join(' ')).toContain('keep_current')
   })
 })

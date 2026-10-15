@@ -1,4 +1,5 @@
 // FICTIONAL profile rows for the Creator Focus tests. Nothing here is a real creator, channel or video.
+import { adaptProfileRow, confirmSuggestion, isFactEligible, type FocusProfile } from '@/lib/creator-focus'
 export const CHANNEL_A = 'UC_fictional_channel_a'
 export const CHANNEL_B = 'UC_fictional_channel_b'
 
@@ -50,3 +51,22 @@ export function allKeys(value: unknown, out: string[] = []): string[] {
 }
 
 export const AT = '2026-10-15T12:00:00Z'
+
+/**
+ * A profile in which the user has CONFIRMED a suggestion in memory (user_confirmed, channel-derived, a fact) and
+ * the channel context THEN becomes uncertain (a review turns pending): the flags are recomputed consistently, as
+ * a caller that re-derives the profile would. The only way a channel-derived claim can be a fact at all.
+ */
+export function confirmedThenReviewPending(rowOver: Record<string, unknown> = {}): { before: FocusProfile; after: FocusProfile } {
+  const start = adaptProfileRow(row({
+    detected_niche_candidates: [candidate('otthoni edzés kezdőknek', 'health')], active_channel_id: CHANNEL_A, ...rowOver,
+  }))
+  const confirmed = confirmSuggestion(start, 0, AT)
+  if (!confirmed.ok) throw new Error('fixture: confirmation refused')
+  const before = confirmed.profile
+  const after = structuredClone(before)
+  after.channel.niche_review_required = true
+  after.channel.context_uncertain = true
+  for (const claim of Object.values(after.claims)) if (claim) claim.fact_eligible = isFactEligible(claim, after.channel)
+  return { before, after }
+}

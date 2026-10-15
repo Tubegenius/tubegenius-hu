@@ -21,12 +21,10 @@ describe('eligibility is recomputed from origin and channel context, not read fr
   })
 
   it('a forged flag on a channel-derived claim under an uncertain context is not a fact either', async () => {
-    const { adaptProfileRow, assessFocusFit } = await import('@/lib/creator-focus')
-    const { row, candidate, CHANNEL_A } = await import('./support/creator-focus-fixtures')
-    const profile = structuredClone(adaptProfileRow(row({
-      specific_focus: 'otthoni edzés kezdőknek', detected_niche_candidates: [candidate('otthoni edzés kezdőknek', 'health')],
-      active_channel_id: CHANNEL_A, niche_validated_for_channel_id: CHANNEL_A, niche_needs_review: true,
-    })))
+    const { assessFocusFit } = await import('@/lib/creator-focus')
+    const { confirmedThenReviewPending } = await import('./support/creator-focus-fixtures')
+    const profile = confirmedThenReviewPending().after
+    expect(profile.claims.specific_focus).toMatchObject({ origin: 'user_confirmed', fact_eligible: false })
     profile.claims.specific_focus!.fact_eligible = true
     const r = assessFocusFit({ contract_version: 'creator-focus.v1', profile, topic: { text: 'otthoni edzés kezdőknek 4 hét alatt' } })
     expect(r.status).toBe('unknown')

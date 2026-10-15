@@ -21,7 +21,8 @@ export const CLAIM_FIELDS: readonly ClaimField[] = ['main_category', 'specific_f
 /**
  * Where the CLAIM comes from (who decided to hold it), not who typed the words:
  *   user_declared     written only by user-initiated paths and not recognisable as an adopted suggestion
- *   user_confirmed    a system suggestion the user adopted (proven by the validation marker of the same channel)
+ *   user_confirmed    a system suggestion the user adopted: produced ONLY by the in-memory confirmSuggestion()
+ *                     transition; a profiles row can never prove it
  *   user_corrected    produced ONLY by the in-memory correction transition; the adapter can never prove it
  *   system_suggested  produced by the system; NEVER a fact
  *   unknown           the origin cannot be proven from the data: never a fact
@@ -51,8 +52,8 @@ export const FOCUS_LIMITS = Object.freeze({
 
 export type ClaimReasonCode =
   | 'written_only_by_user_initiated_paths'
-  | 'adopted_system_suggestion_with_validation_marker'
-  | 'matches_system_suggestion_without_validation_marker'
+  | 'matches_system_suggestion_adoption_not_provable'
+  | 'validation_marker_proves_a_channel_level_decision_only'
   | 'matches_suggestion_from_other_channel'
   | 'database_default_indistinguishable'
   | 'form_default_value_indistinguishable'

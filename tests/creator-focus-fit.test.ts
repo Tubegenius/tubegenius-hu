@@ -1,7 +1,7 @@
 // Creator Intelligence 2A: the conservative focus-fit and lane suggestion.
 import { describe, expect, it } from 'vitest'
 import { adaptProfileRow, assessFocusFit, confirmSuggestion, isFactEligible, type FocusFitInput } from '@/lib/creator-focus'
-import { AT, CHANNEL_A, allKeys, candidate, deepFreeze, row } from './support/creator-focus-fixtures'
+import { AT, CHANNEL_A, allKeys, candidate, confirmedThenReviewPending, deepFreeze, row } from './support/creator-focus-fixtures'
 
 const FOCUS = 'otthoni edzés kezdőknek'
 
@@ -61,12 +61,25 @@ describe('unknown has precedence whenever the basis is incomplete or contradicto
     expect(r.reasons[0]).toMatchObject({ code: 'focus_claim_origin_unknown', claim_origin: 'unknown' })
   })
 
-  it('an adopted, channel-derived focus under a pending review is unknown; a self-typed focus under the same review is not', () => {
-    const adopted = { specific_focus: FOCUS, detected_niche_candidates: [candidate(FOCUS, 'health')], active_channel_id: CHANNEL_A, niche_validated_for_channel_id: CHANNEL_A, niche_needs_review: true }
-    const a = fit(adopted, 'otthoni edzés kezdőknek 4 hét alatt')
+  it('a row whose focus equals a suggestion stays unknown even with the marker and no review: adoption is not provable', () => {
+    const r = fit({ specific_focus: FOCUS, detected_niche_candidates: [candidate(FOCUS, 'health')], active_channel_id: CHANNEL_A, niche_validated_for_channel_id: CHANNEL_A }, 'otthoni edzés kezdőknek 4 hét alatt')
+    expect(r.status).toBe('unknown')
+    expect(r.unknown_because).toEqual(['no_eligible_focus'])
+    expect(r.reasons[0]).toMatchObject({ code: 'focus_claim_origin_unknown', claim_origin: 'unknown' })
+  })
+
+  it('a focus confirmed in memory is a fact; once a review turns pending it is unknown, while the typed claims still work', () => {
+    const { before, after } = confirmedThenReviewPending({ avoid_topics: 'politika' })
+    const topic = 'otthoni edzés kezdőknek 4 hét alatt'
+    expect(assessFocusFit({ contract_version: 'creator-focus.v1', profile: before, topic: { text: topic } }).status).toBe('fits')
+
+    const a = assessFocusFit({ contract_version: 'creator-focus.v1', profile: after, topic: { text: topic } })
     expect(a.status).toBe('unknown')
-    expect(a.reasons[0]).toMatchObject({ code: 'focus_claim_not_eligible_channel_context_uncertain' })
+    expect(a.reasons[0]).toMatchObject({ code: 'focus_claim_not_eligible_channel_context_uncertain', claim_origin: 'user_confirmed' })
     expect(a.warnings).toEqual(expect.arrayContaining(['niche_review_pending', 'channel_derived_claims_unreliable']))
+    // the independent, self-typed avoid topic is NOT removed by the review
+    const b = assessFocusFit({ contract_version: 'creator-focus.v1', profile: after, topic: { text: 'politika hírek elemzés' } })
+    expect(b.status).toBe('does_not_fit')
 
     const typed = fit({ specific_focus: 'retró számítógépek', niche_needs_review: true, channel_connection_type: 'mismatch', active_channel_id: CHANNEL_A }, 'retró számítógépek felújítása')
     expect(typed.status).toBe('fits')
@@ -186,11 +199,8 @@ describe('a profile that did not come from the adapter is not trusted: its flags
   })
 
   it('a channel-derived claim marked as a fact under an uncertain channel context: rejected', () => {
-    const profile = adaptProfileRow(row({
-      specific_focus: FOCUS, detected_niche_candidates: [candidate(FOCUS, 'health')], active_channel_id: CHANNEL_A,
-      niche_validated_for_channel_id: CHANNEL_A, niche_needs_review: true,
-    }))
-    expect(profile.claims.specific_focus).toMatchObject({ origin: 'user_confirmed', fact_eligible: false })
+    const { after: profile } = confirmedThenReviewPending()
+    expect(profile.claims.specific_focus).toMatchObject({ origin: 'user_confirmed', channel_derived: true, fact_eligible: false })
     const forged = structuredClone(profile)
     forged.claims.specific_focus!.fact_eligible = true
     expectRejected(forged, 'profile.claims.specific_focus.fact_eligible', 'inconsistent_with_origin_and_channel_context')

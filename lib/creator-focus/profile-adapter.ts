@@ -2,10 +2,14 @@
 // Turns ONE `profiles` row into a FocusProfile. Pure: it only reads the object it is given.
 //
 // PROVENANCE POLICY (the result of the writer audit, see docs/architecture/creator-focus-2a.md):
-//   A column is only marked user_declared when EVERY known writer of that column in this repository is a
-//   user-initiated path, and the stored value cannot be told apart from a default the system filled in.
-//   Where either condition fails, the origin is `unknown` (or the column is ignored) and it never serves as a
-//   fit fact. A system suggestion (detected_niche_candidates) is never turned into a claim by this module.
+//   A column is only marked user_declared when BOTH hold: (1) EVERY known writer of that column in this
+//   repository is a user-initiated path, and (2) the stored value CAN be told apart from a default the system
+//   filled in. A value that is indistinguishable from a default (the database default `manual`, the form's
+//   initial category `other`) is therefore NEVER automatically user_declared. Where either condition fails, the
+//   origin is `unknown` (or the column is ignored) and it never serves as a fit fact. A system suggestion (detected_niche_candidates) is never turned into a claim by this module.
+//   A row can NEVER prove that a user adopted a particular suggestion: a value that equals a stored suggestion
+//   is `unknown`, whatever the validation marker says (it proves a channel-level decision only). The origin
+//   `user_confirmed` is produced solely by the in-memory confirmSuggestion() transition.
 import { candidatesForActiveChannel, isNicheReviewRequired } from '@/lib/channel-scope'
 import type { NicheCandidate } from '@/types'
 import {
@@ -49,7 +53,10 @@ export const PROFILE_COLUMN_PROVENANCE = Object.freeze({
   selected_main_niche: { writers: ['no in-repo writer found (allowed by the profile API, not sent by any UI)'], proves: 'nothing' },
   primary_creator_lane: { writers: ['no in-repo writer found'], proves: 'nothing' },
   detected_niche_candidates: { writers: ['POST /api/youtube/discover-niche (AI, service role)'], proves: 'system suggestion' },
-  niche_validated_for_channel_id: { writers: ['POST /api/youtube/resolve-niche-review (keep_current / select_candidate)'], proves: 'an explicit user decision for that channel' },
+  niche_validated_for_channel_id: {
+    writers: ['POST /api/youtube/resolve-niche-review (keep_current / select_candidate)'],
+    proves: 'a user decision about the niche for that channel; NOT that any value was adopted: keep_current leaves the value alone and a later profile save can change it without clearing the marker',
+  },
   niche_needs_review: { writers: ['channel sync / resolve-mismatch (true)', 'resolve-niche-review (false)'], proves: 'system flag, cleared by the user' },
   active_channel_id: { writers: ['channel sync', 'resolve-mismatch'], proves: 'system-maintained channel identity' },
   channel_connection_type: { writers: ['channel sync', 'resolve-mismatch'], proves: 'system-maintained' },
@@ -154,11 +161,12 @@ export function adaptProfileRow(row: unknown): FocusProfile {
     const activeMatch = matches.find(c => activeChannelId !== null && c.source_channel_id === activeChannelId)
     if (activeMatch) {
       focusMatchesAnySuggestion = true
-      if (validatedFor !== null && validatedFor === activeChannelId) {
-        claims.specific_focus = makeClaim('specific_focus', focusText, 'user_confirmed', true, ['adopted_system_suggestion_with_validation_marker'], channel)
-      } else {
-        claims.specific_focus = makeClaim('specific_focus', focusText, 'unknown', true, ['matches_system_suggestion_without_validation_marker'], channel)
-      }
+      // The validation marker is set by BOTH resolve-niche-review actions (keep_current leaves the value alone), and
+      // a later profile save can change the focus without clearing it. So it proves a decision about the CHANNEL's
+      // niche at some time, never that THIS value is an adopted suggestion: the origin stays unknown either way.
+      const reasons: ClaimReasonCode[] = ['matches_system_suggestion_adoption_not_provable']
+      if (validatedFor !== null && validatedFor === activeChannelId) reasons.push('validation_marker_proves_a_channel_level_decision_only')
+      claims.specific_focus = makeClaim('specific_focus', focusText, 'unknown', true, reasons, channel)
     } else if (matches.length > 0) {
       focusMatchesAnySuggestion = true
       claims.specific_focus = makeClaim('specific_focus', focusText, 'unknown', true, ['matches_suggestion_from_other_channel'], channel)
@@ -180,10 +188,10 @@ export function adaptProfileRow(row: unknown): FocusProfile {
         : undefined
       if (pair && focusMatchesAnySuggestion) {
         const sameChannel = activeChannelId !== null && pair.source_channel_id === activeChannelId
-        if (sameChannel && validatedFor === activeChannelId) {
-          claims.main_category = makeClaim('main_category', category, 'user_confirmed', true, ['adopted_system_suggestion_with_validation_marker'], channel)
-        } else if (sameChannel) {
-          claims.main_category = makeClaim('main_category', category, 'unknown', true, ['matches_system_suggestion_without_validation_marker'], channel)
+        if (sameChannel) {
+          const reasons: ClaimReasonCode[] = ['matches_system_suggestion_adoption_not_provable']
+          if (validatedFor !== null && validatedFor === activeChannelId) reasons.push('validation_marker_proves_a_channel_level_decision_only')
+          claims.main_category = makeClaim('main_category', category, 'unknown', true, reasons, channel)
         } else {
           claims.main_category = makeClaim('main_category', category, 'unknown', true, ['matches_suggestion_from_other_channel'], channel)
         }
