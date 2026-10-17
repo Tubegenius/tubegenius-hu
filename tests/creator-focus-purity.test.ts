@@ -27,7 +27,10 @@ describe('static: what the module may import and call', () => {
   const files = readdirSync(MODULE_DIR).filter(f => f.endsWith('.ts'))
 
   it('has the expected files only', () => {
-    expect(files.sort()).toEqual(['contract.ts', 'eligibility.ts', 'fit.ts', 'index.ts', 'profile-adapter.ts', 'profile-validate.ts', 'text.ts', 'transitions.ts'])
+    expect(files.sort()).toEqual([
+      'contract.ts', 'decision-command.ts', 'decision-contract.ts', 'decision-events.ts', 'decision-reduce.ts', 'eligibility.ts',
+      'fingerprint.ts', 'fit.ts', 'index.ts', 'profile-adapter.ts', 'profile-validate.ts', 'sha256.ts', 'text.ts', 'transitions.ts',
+    ])
   })
 
   it.each(files)('%s imports only relative modules and the allow-listed pure helpers', (file) => {

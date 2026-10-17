@@ -61,6 +61,7 @@ export type ClaimReasonCode =
   | 'declared_in_memory'
   | 'corrected_in_memory'
   | 'confirmed_in_memory'
+  | 'confirmed_by_decision_record'
 
 export interface FocusClaim {
   field: ClaimField
@@ -120,6 +121,13 @@ export interface FocusProfile {
   /** in-memory only; re-reading the profile row starts with an empty history */
   history: FocusTransition[]
   persistence: 'none'
+  /**
+   * 2B only, ABSENT in every 2A profile: set by `applyDecisions` on the profile it returns when it applied a
+   * non-empty decision list. A profile that carries it is already a PROJECTION; it is refused as the input of a
+   * second projection / command (the dismissed suggestions are gone from it, so a second pass would silently give a
+   * weaker read model). The marker is asserted by whoever holds the object, like every other field.
+   */
+  decision_projection?: { contract_version: 'creator-focus-decision.v1' }
 }
 
 // ───────────────────────────── fit assessment ─────────────────────────────

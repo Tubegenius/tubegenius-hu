@@ -26,7 +26,7 @@ export interface ProfileIssue {
 }
 
 const ORIGINS: readonly ClaimOrigin[] = ['user_declared', 'user_confirmed', 'user_corrected', 'unknown']
-const PROFILE_KEYS = ['contract_version', 'claims', 'suggestions', 'suggestions_other_channel', 'channel', 'ignored_columns', 'history', 'persistence']
+const PROFILE_KEYS = ['contract_version', 'claims', 'suggestions', 'suggestions_other_channel', 'channel', 'ignored_columns', 'history', 'persistence', 'decision_projection']
 const CLAIM_KEYS = ['field', 'value', 'origin', 'channel_derived', 'fact_eligible', 'reasons']
 const SUGGESTION_KEYS = ['index', 'main_category', 'specific_focus', 'source_channel_id', 'origin', 'fact_eligible']
 const CHANNEL_KEYS = ['active_channel_id', 'connection', 'niche_review_required', 'mismatch', 'context_uncertain']
@@ -52,6 +52,10 @@ export function validateFocusProfile(profile: unknown): ProfileIssue[] {
   for (const key of Object.keys(profile)) if (!PROFILE_KEYS.includes(key)) add(`profile.${key}`, 'unknown_field')
   if (profile.contract_version !== CREATOR_FOCUS_CONTRACT_VERSION) add('profile.contract_version', 'unsupported_version')
   if (profile.persistence !== 'none') add('profile.persistence', 'invalid_value')
+  if ('decision_projection' in profile) {
+    const marker = profile.decision_projection
+    if (!isRecord(marker) || !hasOnlyKeys(marker, ['contract_version']) || marker.contract_version !== 'creator-focus-decision.v1') add('profile.decision_projection', 'invalid_value')
+  }
 
   // ── channel context ──
   const channel = profile.channel
