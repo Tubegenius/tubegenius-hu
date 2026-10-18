@@ -83,9 +83,10 @@ DROP FUNCTION IF EXISTS public.profiles_field_revision_assign();`
 // Itemized contract for 094's 2 new application functions -- same line shape as 090's own pin_app entries.
 // body= is md5(replace(prosrc, CRLF, LF)): computed from the committed 094 migration text with the SAME
 // extraction method that reproduced all 5 PIN_092_APP md5 values already confirmed live by CI (validated
-// on 2026-10-18). NOT yet confirmed against a live catalog: the first disposable-database run does that,
-// and a mismatch must FAIL, never be loosened. tests/094-...-source-policy.test.ts keeps these lines in
-// sync with the migration text (any edit of a function body fails there until the md5 is recomputed).
+// on 2026-10-18). CONFIRMED against a live catalog by the isolated PostgreSQL probe (check C02) and by this very
+// test in the CI `regression` job on the PR's disposable stack (45 tests passed); a mismatch must FAIL, never be
+// loosened. tests/094-...-source-policy.test.ts keeps these lines in sync with the migration text (any edit of a
+// function body fails there until the md5 is recomputed).
 const PIN_094_APP = [
   'profiles_field_revision_assert()|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE|body=7c97a9eb1eaa349d7b410eacd4d14bda',
   'profiles_field_revision_assign()|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE|body=f03a538ec277850a5c6b65367dfb25d7',
@@ -351,8 +352,10 @@ ROLLBACK;`)
   // The old form committed the REAL 090 file (with its own BEGIN/COMMIT) against the shared stack. With 094's
   // functions live that would either fail 090's closed inventory or, if they were undone inside the same
   // transaction, COMMIT their removal. So the reapply now runs MIGRATION_BODY inside a transaction that is
-  // ROLLED BACK (the wrapper in psql() restores the pre-091 function and undoes 094's functions first), which
-  // is exactly the property "reapply is idempotent" is about, without touching the shared stack for real.
+  // ROLLED BACK (the psql() wrapper restores the pre-091 function; the transaction below undoes 094's functions
+  // itself via the explicit ${PRE_094_UNDO_SQL}, the wrapper does NOT), which is exactly the property "reapply is
+  // idempotent" is about, without touching the stack for real. COVERAGE CHANGE: the old test also exercised the 090
+  // file's own BEGIN/COMMIT path; this one runs only its body (the same decision PR #8 made).
   it('reapply of MIGRATION_BODY on top of the 090-hardened baseline (rolled back) is a clean no-op', () => {
     const digestExpr = DIGEST_EXPR.trim().replace(/^SELECT /, '')
     const out = psqlOk(`

@@ -1,20 +1,22 @@
 # profiles mezőrevízió (Creator Focus 2B, „V-trigger”) — telepítési és visszagörgetési runbook
 
-Helyi munkacsomag (`supabase/migrations/094_profiles_field_revision.sql`). A trigger tényleges viselkedését DB-mentes
-teszt **nem** bizonyítja (lásd „Nyitott”). A futási státuszt **ez a dokumentum** rögzíti („Futási státusz”), nem a migráció
-szövege és nem egy forrás-teszt: így nem avul el, és az első futás nem kényszerít már átnézett fájl szerkesztésére.
+A 094 migráció (`supabase/migrations/094_profiles_field_revision.sql`) a **draft PR #14**-ben van (a #13-ra épülő stacked PR,
+nincs merge-elve, semmilyen megosztott környezetre nincs alkalmazva). A trigger viselkedését DB-mentes teszt **nem**
+bizonyítja; azt a lenti, tényleges PostgreSQL-futások igazolják, a megjelölt hatókörrel. A futási státuszt **ez a
+dokumentum** rögzíti („Futási státusz”), nem a migráció szövege és nem egy forrás-teszt: így nem avul el.
 
 ## Futási státusz (itt frissítendő; futás után dátummal és a futtató megjelölésével)
 
 | Környezet | Státusz | Megjegyzés |
 |---|---|---|
-| Eldobható, izolált helyi PostgreSQL (`scripts/profiles-field-revision-probe.sql`, P1–P12) | **futott: 2026-10-18, 4 eldobható konténer, PostgreSQL 17.6** | a 094 és a 16 ellenőrzés elsőre lefutott (minden konténerben 16 `PROBE_PASS`, `PROBE_RESULT\|checks=16`, kilépés 0); a guard `violations=0`, `public_functions=110`; részletek és a nem igazolt pontok az átadásban. A konténerek törölve. Nem futott: P7, P11, P12. |
-| A 090 teljes DB-teszt-suite, a hozzá bedrótozott stacken | **nem futott** | külön, megfelelő stacken igazolandó; **a kihagyott (skipped) teszt nem PASS** |
+| Eldobható, izolált helyi PostgreSQL (`scripts/profiles-field-revision-probe.sql`, P1–P16 egy része) | **futott: 2026-10-18, 4 eldobható konténer, PostgreSQL 17.6** | a 094 és a 16 ellenőrzés elsőre lefutott (három konténerben 16 `PROBE_PASS`, `PROBE_RESULT\|checks=16`, kilépés 0; egyiken kétszer); a guard `violations=0`, `public_functions=110`. A konténerek törölve. Részletek és a megőrzött nyers kimenetek köre: a PR #14 leírása. **Nem futott:** P7, P11, P12; a P2 10/1000/100k sor; `MERGE`, `COPY`, `REPEATABLE READ`; a legnagyobb tábla 300 sor volt. |
+| CI (GitHub Actions `regression` job) eldobható, tiszta Supabase stackje, a PR #14 fején | **futott: 2026-10-18** | a stack alkalmazta a 094-et (migrációs előzmény 85 = 85 fájl); a **090 DB-integrációs teszt 45 tesztje zölden lefutott** (a frissített pinekkel, számlálókkal, hat explicit undo-val, rollback-es reapply-jal). A `unit` és a `regression` job ugyanazon az egy, a 091-es forrás-policy tesztben bukott (javítva a PR következő commitjában, új CI-futás kell). Két régi creator-lane S1 kapu-fájl kihagyva (előre ismert, a stackre jellemző). |
+| A 090 DB-teszt a **közös helyi** Supabase stacken | **nem futott** | a teszt ahhoz a stackhez van kötve; **a kihagyott (skipped) teszt nem PASS** |
 | Staging | **nem futott** | kizárt, amíg külön nem engedélyezik |
 | Production / szolgáltatói adatbázis | **nem futott** | kizárt |
-| Független review-k | 2 kör (szöveg alapján) | a legutóbbi javítások utáni állapotot újabb olvasó review még nem látta |
+| Független review-k | 3 kör | a legutóbbi javítások utáni állapotot újabb olvasó review még nem látta |
 
-Nincs commit, push vagy PR ehhez a csomaghoz.
+A csomag commitolva van, a PR #14 draft; **nem merge-ready** (lásd a merge-blokkolókat).
 
 ## Mit ad, és mi nem része
 
@@ -85,20 +87,24 @@ ellenőrzi. A 094 két új public függvényt hoz, ezért a teszt **igazítva va
   hely számát és sorrendjét a `094-…-source-policy` teszt rögzíti.
 - `PIN_094_APP`: a két függvény tételes, pontos pinje (aláírás, tulajdonos, fajta, security mód, volatilitás,
   `search_path`, ACL, törzs-md5), nem wildcard. A törzs-md5-öt ugyanaz a módszer adta, amely mind az 5 CI-ben már élőben
-  megerősített PR #8 (092) pint reprodukálta. **Még nem erősítette meg élő katalógus**; eltérésnek buknia kell, nem
-  lazítani. A `094-…-source-policy` teszt tartja szinkronban a pineket a migráció szövegével.
+  megerősített PR #8 (092) pint reprodukálta. **Élő katalógus megerősítette:** az izolált próba C02 ellenőrzése és a CI
+  `regression` job 090 DB-tesztje (45 teszt zöld). Eltérésnek buknia kell, nem lazítani. A `094-…-source-policy` teszt
+  tartja szinkronban a pineket a migráció szövegével.
 - Számlálók: `public_functions` 108 → **110**, alkalmazási függvények 77 → **79** (ez a 094-es állapotot kódolja: a
   „pin” és „számláló” ellenőrzések **094 nélkül** a stacken elvárt módon elbuknak; a **rollback-es** MIGRATION_BODY
   forgatókönyvek az `IF EXISTS` undo miatt 094 nélkül is futnak). A 094 visszavonásával a pineket és a számlálókat
   vissza kell állítani.
 - A „valódi 090 fájl újraalkalmazása” teszt visszagörgetett `MIGRATION_BODY`-futtatásra váltott (a régi forma
-  commitolta volna a 094 függvények eltávolítását).
+  commitolta volna a 094 függvények eltávolítását). **Lefedettség-változás (a #8 ugyanígy döntött):** a régi teszt a
+  *valódi, commitolt* 090 fájlt alkalmazta újra, a saját `BEGIN`/`COMMIT` útjával együtt; az új a törzsét futtatja
+  visszagörgetve, a fájl saját tranzakció-kezelése már nincs ebben a tesztben lefedve.
 
 **MERGE-BLOKKOLÓ (nyitott, nem rendezett):** a PR #8 (092/093, `feat/opportunity-evidence-snapshot`) **ugyanazt a
-teszt-fájlt** módosítja ugyanezekkel a PIN-/számláló-/reapply-részekkel (`PRE_092/093_UNDO_SQL`, `PIN_092/093_APP`,
-számlálók 114 / 83, átírt reapply-teszt). A két módosítás **textuálisan ütközik**, és az összevont számlálókat újra kell
-számolni a tényleges pinekből (becslés, nem újraszámolt: `public_functions` ≈ 116, alkalmazási függvények ≈ 85).
-Ezt a közös ág még **nem** rendezte; nem állítjuk, hogy rendezett.
+teszt-fájlt** módosítja ugyanazokon a pontokon (`PRE_092/093_UNDO_SQL`, `PIN_092/093_APP`, a számlálók, a `runBodyAfter`
+sor, a hat undo-hely, az átírt reapply-teszt). A két módosítás **textuálisan és tartalmilag ütközik**, és az összevont
+számlálókat és pineket a **valódi pinekből újra kell számolni**; ebben a dokumentumban **nincs és nem is lehet** összevont
+számláló. A közös ág még **nem** rendezte ezt; a #14 **nem merge-ready**. (A 091-es forrás-policy teszt módosítása a #8-cal
+szó szerint azonos, ott nem keletkezik tartalmi ütközés.)
 
 ## Telepítés
 
@@ -201,7 +207,7 @@ COMMIT, nincs elnyelt hiba a két várt-hiba elkapáson kívül); a **futása** 
 | P13 | **`authenticated` szerepkör UPDATE-je** RLS-en át (`profiles_update_own`): a trigger a függvényhez EXECUTE jog és a szekvenciához bármilyen jog nélküli szerepkörrel is működik; a kliens közvetlen revízió-írása figyelmen kívül marad (a próba C13-ja) | új revízió értékváltozásra, változatlan változatlanra, nincs `permission denied`; a próba C13 PASS |
 | P14 | **Üres tábla (N = 0) és egysoros tábla (N = 1)** a migráció alkalmazásakor: két külön, tiszta adatbázison | `COMMIT`; N = 0: nincs sor, `coalesce(sum…, 0)` jó, a triggerek működnek az első beszúrt soron; N = 1: két különböző pozitív revízió, minden más oszlop (az `updated_at` is) változatlan |
 | P15 | **`statement_timeout` negatív kontroll:** egy MÁSOLATON a `statement_timeout = '60s'` sort rövid értékre írva (a repó fájlja érintetlen), alkalmazva szintetikus adatbázison | A teljes tranzakció visszagördül: nincs oszlop, trigger, függvény, index, és a szekvencia sem jön létre (a `CREATE SEQUENCE` is a tranzakcióban van). **Az üzenet az értéktől függ:** az első futáskor (300 szintetikus sor) `1ms`-nál `canceling statement due to user request`, `3ms`-nál `canceling statement due to statement timeout` (mindkettő teljes visszagördüléssel); `20ms` már elég gyors volt, a másolat **lefutott és véglegesült**; `100ms` és `1s` mellett az újrafuttatás a már meglévő objektumok miatt fail-closed hibát adott. Nagyobb táblán (néhány ezer sor vagy több) a `1ms` negatív kontroll még nem futott. |
-| P16 | **Teljes-lock / `lock_timeout` negatív kontroll:** egy másik munkamenet `ACCESS SHARE` zárat tart a `profiles`-on 8 s-ig | a migráció `lock_timeout` (5 s) miatt hibával áll meg, semmit nem hagy hátra |
+| P16 | **Teljes-lock / `lock_timeout` negatív kontroll:** egy másik munkamenet `ACCESS SHARE` zárat tart a `profiles`-on 14 s-ig (a tényleges futásban); a migráció 2 s-sal később indul | a migráció `lock_timeout` (5 s) miatt ~5,7 s után `canceling statement due to lock timeout` hibával áll meg, semmit nem hagy hátra |
 
 ## Visszagörgetés
 
@@ -258,16 +264,26 @@ egyetlen kiosztó; a rollback csak lyukat hagy; a kliens nem állíthatja. **Nem
 
 ## Nyitott (külön döntés vagy munka kell)
 
-- **A SQL soha nem futott.** A szintaxis, a katalógus-utóellenőrzések (pl. `tgattr::int2[]`, `tgtype` értékek,
-  `proconfig` egyezés, `aclexplode` szerepkör-összehasonlítások, `indkey[0]`, a `bit(64)` hash-idióma), az
-  `ADD COLUMN … DEFAULT nextval` táblaújraírás és a trigger-sorrend valódi viselkedése **nem bizonyított**. A DB-mentes
-  tesztek a SQL **szövegét** és egy TypeScript **referenciamodellt** rögzítenek, nem a futást.
-- Az első futás helye: eldobható, izolált helyi PostgreSQL (lásd a próbamátrixot); külön jóváhagyás kell.
-- **Merge-blokkoló:** a 090 DB-integrációs teszt ütközése a PR #8-cal és az összevont számlálók újraszámolása.
-- A 090 DB-teszt javított állapota és az új pinek **élő katalógus ellen nem futottak**.
+- **Mi bizonyított PostgreSQL-lel, és mi nem.** A migráció szintaxisa, a katalógus-utóellenőrzések (`tgattr::int2[]`,
+  `tgtype`, `proconfig`, `aclexplode`, `indkey[0]`, a `bit(64)` hash-idióma), a trigger-sorrend és a probe 16 ellenőrzése
+  **lefutott** az eldobható helyi konténerekben és a CI eldobható stackjén (lásd a „Futási státusz”-t). A DB-mentes
+  tesztek a SQL **szövegét** és egy TypeScript **referenciamodellt** rögzítenek, nem a futást. **Nem bizonyított:**
+  - P7 (olvasók/írók blokkolása a migráció alatt), P11 (`pg_dump | pg_restore`), P12 (`NOTIFY pgrst` kézbesítése);
+  - a `statement_timeout` megszakítása **táblaújraírás közben**: a rövid értékű másolatok csak a pre-check első utasításában
+    szakadtak meg (3 ms), vagy lefutottak (20 ms); a nagyobb táblás `1ms` kontroll nem futott;
+  - a P2 10/1000/100k sora; `MERGE`, `COPY`, `REPEATABLE READ`; a pontos `credit-fixtures` `ON CONFLICT` változat;
+  - a **teljes körű jogosultsági bizonyítás**: a negatívok az `anon`, `authenticated`, `service_role` szerepkörre és a
+    felsorolt műveletekre futottak, csak kilépési kód maradt meg nyers kimenetként (a hibaszövegek a munkamenet kimenetében
+    látszottak, de nincs megőrizve); további szerepkörök (pl. `authenticator`, `supabase_admin`), oszlop-szintű jogok és
+    a hosted katalógus nem;
+  - a valódi PostgREST/JWT réteg; a 092/093-mal együttes alkalmazás; production méretű tábla.
+- **Merge-blokkoló:** a 090 DB-integrációs teszt ütközése a PR #8-cal; az összevont pinek és számlálók újraszámolása a
+  valódi pinekből (nem becsülhető, itt nincs ilyen szám).
+- A 090 teljes DB-suite a **közös helyi** stacken nem futott (a CI eldobható stackjén igen, 45 teszt zöld).
 - A zárolás időtartama production méretű táblán (a sorok száma nem ismert).
 - A migrációszám végleges kiosztása (092/093 még merge-elésre vár).
-- Az `INSERT … ON CONFLICT DO UPDATE` e2e-használat viselkedése (nyomkövetéssel igazolt, DB-vel nem).
+- Az `INSERT … ON CONFLICT DO UPDATE` e2e-használat: az izolált probe C12-je a fixture alakját futtatta (a revíziók
+  változatlanok, legalább két szekvenciaérték elfogyott); a pontos `credit-fixtures` változat nem.
 - Az információszivárgás (közös szekvencia) elfogadása; az opcionális `NEW.rev > OLD.rev` erősítés (ellentmond R6-nak,
   logikai restore-nál sorrendet törne): termékdöntés.
 - Egy később létrejövő, `profiles_zz_revision_assign`-nál nagyobb nevű BEFORE triggert csak a migráció pillanatában

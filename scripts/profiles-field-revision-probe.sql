@@ -2,8 +2,8 @@
 -- profiles field-revision PROBE (migration 094): for the FIRST run on a DISPOSABLE, ISOLATED local PostgreSQL.
 --
 -- The run status of this probe is NOT recorded in this file (it would go stale): see "Futasi statusz" in
--- docs/operations/profiles-field-revision.md. Until a real run, its syntax and every expectation below are UNVERIFIED.
--- A wrong expectation is a FINDING (fix the script or the migration), never a reason to loosen a check.
+-- docs/operations/profiles-field-revision.md (which runs it has had and what they covered). A wrong expectation is a
+-- FINDING (fix the script or the migration), never a reason to loosen a check.
 --
 -- WHERE (the user's direction): a throwaway local PostgreSQL (>= 17) with the Supabase roles (anon, authenticated,
 -- service_role, postgres), migrations 001-091 and then 094 applied, SYNTHETIC data only. NOT the shared

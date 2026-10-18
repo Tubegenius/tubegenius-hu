@@ -2,8 +2,8 @@
 //
 // WHAT THIS PINS: the SQL text of the migration to the revision rules (see tests/support/profile-revision-model.ts and
 // docs/operations/profiles-field-revision.md). WHAT IT DOES NOT PROVE: that the trigger behaves like that when it runs.
-// The real trigger behaviour, the DDL syntax and the catalog post-checks are UNVERIFIED until a database runs them
-// (open item, see the runbook).
+// That is shown only by real PostgreSQL runs (isolated local containers and the CI stack); the runbook ("Futasi
+// statusz") records which runs happened and what they did NOT cover. This file keeps no run status of its own.
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -639,10 +639,11 @@ describe('the writers the design assumes (a drift guard, not a proof)', () => {
 
   // The ONLY other writers of profiles are the e2e fixtures (raw SQL through psql, disposable local stack). They use
   // `INSERT ... ON CONFLICT (user_id) DO UPDATE`: the row already exists (created by handle_new_user), so this is
-  // an UPDATE of non-focus columns. By trace (UNVERIFIED without a database): the BEFORE INSERT trigger fires first and
-  // burns two sequence values; the conflict then turns it into an UPDATE, whose BEFORE UPDATE trigger finds the focus
-  // and category columns unchanged and keeps the OLD revisions. Pinned here so a new statement of this shape (or one
-  // that touches the focus columns) fails this test and gets reviewed; also listed in the runbook's PostgreSQL matrix.
+  // an UPDATE of non-focus columns. The BEFORE INSERT trigger fires first and burns two sequence values; the conflict
+  // then turns it into an UPDATE, whose BEFORE UPDATE trigger finds the focus and category columns unchanged and keeps
+  // the OLD revisions. Observed in the isolated PostgreSQL run (probe C12, the fixture's statement SHAPE; the exact
+  // credit-fixtures variant was not run). Pinned here so a new statement of this shape (or one that touches the focus
+  // columns) fails this test and gets reviewed; also listed in the runbook's PostgreSQL matrix.
   it('the only INSERT ... ON CONFLICT writers of profiles are the two known e2e fixtures, and neither touches the focus/category columns', () => {
     const e2eFiles: string[] = []
     const walkE2e = (dir: string) => {
@@ -674,6 +675,39 @@ describe('the writers the design assumes (a drift guard, not a proof)', () => {
     expect(REVISION_PATTERN.test('9223372036854775807')).toBe(true)
     expect(REVISION_PATTERN.test('0')).toBe(true)
     expect(REVISION_PATTERN.test('9223372036854775808'.padStart(20, '1'))).toBe(false)
+  })
+})
+
+describe('the runbook states the CURRENT run status and no estimated merged numbers', () => {
+  it('does not claim "no commit / PR", "the SQL never ran", "pins never confirmed", or "090 suite not run" any more', () => {
+    expect(DOC).not.toMatch(/Nincs commit, push vagy PR/)
+    expect(DOC).not.toMatch(/A SQL soha nem futott/)
+    expect(DOC).not.toMatch(/Még nem erősítette meg élő katalógus/)
+    expect(DOC).not.toMatch(/élő katalógus ellen nem futottak/)
+    expect(DOC).not.toMatch(/részletek[^\n]*az átadásban/i)
+  })
+
+  it('records the CI run (the CI stack applied 094; the 090 DB test ran there, 45 tests green) next to the local isolated runs', () => {
+    expect(DOC).toMatch(/GitHub Actions `regression` job\) eldobható, tiszta Supabase stackje[\s\S]*?\*\*futott: 2026-10-18\*\*/)
+    expect(DOC).toMatch(/090 DB-integrációs teszt 45 tesztje zölden lefutott/)
+    expect(DOC).toMatch(/A 090 DB-teszt a \*\*közös helyi\*\* Supabase stacken \| \*\*nem futott\*\*/)
+  })
+
+  it('contains no estimated or computed merged function / table counters for the PR #8 combination', () => {
+    expect(DOC).not.toMatch(/≈\s*1\d\d\b/)
+    expect(DOC).not.toMatch(/≈\s*8\d\b/)
+    expect(DOC).not.toMatch(/becslés, nem újraszámolt/)
+    expect(DOC).toMatch(/nincs és nem is lehet\*\* összevont\s+számláló/)
+  })
+
+  it('states the 090 reapply coverage change and that P16 held the lock for 14 s', () => {
+    expect(DOC).toMatch(/Lefedettség-változás[\s\S]*?BEGIN`\/`COMMIT` útjával/)
+    expect(DOC).toMatch(/`ACCESS SHARE` zárat tart a `profiles`-on 14 s-ig/)
+  })
+
+  it('names what was NOT proven (rewrite-time timeout, full privilege coverage) instead of implying it', () => {
+    expect(DOC).toMatch(/táblaújraírás közben/)
+    expect(DOC).toMatch(/teljes körű jogosultsági bizonyítás/)
   })
 })
 
