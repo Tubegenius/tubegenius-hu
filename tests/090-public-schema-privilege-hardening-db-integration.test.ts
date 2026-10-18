@@ -53,7 +53,48 @@ $function$;`
 // md5(replace(prosrc, CRLF, LF)) of the 091 function body; the live catalog may legitimately carry it.
 const POST_091_HANDLE_NEW_USER_CREDITS_BODY_MD5 = 'a93e8c9b68b6f11fee1bff310d00cf83'
 
+// Migration 094 (profiles field revision, Creator Focus 2B "V-trigger") legitimately adds 2 NEW public
+// functions (both trigger functions). 090's OWN embedded closing self-check pins an exact, frozen
+// 77-application-function inventory AS OF 090's authoring time, inside the immutable 090 migration file
+// (090 is NOT modified here), so MIGRATION_BODY can never learn about 094's functions.
+//
+// Same idea as PRE_091_FUNCTION_SQL above, but EXPLICIT (not injected by the psql() wrapper): only the six
+// rolled-back transactions that re-run MIGRATION_BODY first UNDO 094's two functions (and the two triggers that
+// depend on them) INSIDE that transaction, so 090's own pre-check sees exactly the 090-era function inventory it was
+// written against -- then the transaction is rolled back and 094's real, committed objects are never touched.
+// Every other scenario in this file (guard injection, TRUNCATE-role, keeper-read, live-state pins, auth triggers,
+// PostgREST negatives) runs against the REAL post-094 catalog, undo-free. This does NOT loosen 090's check: its
+// fail-closed logic runs completely unmodified; only the transient, rolled-back precondition changes.
+// The allowlist itself is widened ONLY for the live-state assertions below, by two itemized, exact pins
+// (PIN_094_APP: signature, owner, kind, security mode, volatility, search_path, ACL, body md5), never by a
+// wildcard.
+//
+// The undo list is exhaustive and itemized against supabase/migrations/094_profiles_field_revision.sql.
+// The two columns, their CHECK/UNIQUE objects and the sequence are deliberately LEFT in place: 090's
+// inventory is about tables, ACLs, RLS and functions, not about columns or sequences (094's sequence and
+// functions have no PUBLIC/anon/authenticated/service_role privilege, which the guard checks).
+// The `IF EXISTS` forms make this a no-op on a stack where 094 is not applied.
+const PRE_094_UNDO_SQL = `
+DROP TRIGGER IF EXISTS profiles_zz_revision_assert ON public.profiles;
+DROP TRIGGER IF EXISTS profiles_zz_revision_assign ON public.profiles;
+DROP FUNCTION IF EXISTS public.profiles_field_revision_assert();
+DROP FUNCTION IF EXISTS public.profiles_field_revision_assign();`
+
+// Itemized contract for 094's 2 new application functions -- same line shape as 090's own pin_app entries.
+// body= is md5(replace(prosrc, CRLF, LF)): computed from the committed 094 migration text with the SAME
+// extraction method that reproduced all 5 PIN_092_APP md5 values already confirmed live by CI (validated
+// on 2026-10-18). NOT yet confirmed against a live catalog: the first disposable-database run does that,
+// and a mismatch must FAIL, never be loosened. tests/094-...-source-policy.test.ts keeps these lines in
+// sync with the migration text (any edit of a function body fails there until the md5 is recomputed).
+const PIN_094_APP = [
+  'profiles_field_revision_assert()|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE|body=7c97a9eb1eaa349d7b410eacd4d14bda',
+  'profiles_field_revision_assign()|owner=postgres|kind=f|secdef=true|vol=v|cfg=search_path=public, pg_temp|acl=postgres:EXECUTE|body=f03a538ec277850a5c6b65367dfb25d7',
+]
+
 function psql(sql: string, user = 'postgres'): PsqlResult {
+  // Only the pre-091 function is injected globally. PRE_094_UNDO_SQL is deliberately NOT: it is added EXPLICITLY, by
+  // name, only in the transactions that re-run MIGRATION_BODY (see the six `${PRE_094_UNDO_SQL}` sites below), so
+  // every other scenario (guard injection, TRUNCATE-role, keeper-read, ...) sees the real post-094 catalog.
   const wrapped = /^\s*BEGIN;/.test(sql) ? sql.replace('BEGIN;', `BEGIN;\n${PRE_091_FUNCTION_SQL}`) : sql
   const result = spawnSync(
     'docker',
@@ -167,7 +208,7 @@ function guardCount(output: string): number {
 
 function runBodyAfter(prefixSql: string, user = 'postgres', asRole?: string): PsqlResult {
   const setRole = asRole ? `SET LOCAL ROLE ${asRole};` : ''
-  return psql(`BEGIN;\n${prefixSql}\n${setRole}\n${MIGRATION_BODY}\nROLLBACK;`, user)
+  return psql(`BEGIN;\n${PRE_094_UNDO_SQL}\n${prefixSql}\n${setRole}\n${MIGRATION_BODY}\nROLLBACK;`, user)
 }
 
 const adminClient = createClient(LOCAL_URL, LOCAL_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
@@ -192,7 +233,8 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
     expect(guardViolations(out)).toEqual([])
     expect(guardCount(out)).toBe(0)
     expect(out).toMatch(/public_tables=82/)
-    expect(out).toMatch(/public_functions=108/)
+    // 090's own 77 app + 31 pg_trgm functions + 094's 2 new (itemized, PIN_094_APP) trigger functions.
+    expect(out).toMatch(/public_functions=110/)
   })
 
   it('keeper DML sets equal the recorded sets exactly (anon/PUBLIC 0, authenticated, service_role)', () => {
@@ -241,8 +283,8 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
     expect([...callable].sort()).toEqual(allow.map((l) => l.split('|')[0]).sort())
   })
 
-  it('the 77 application functions equal the recorded contract (signature, owner, security, search_path, ACL, body) with zero anon/PUBLIC EXECUTE', () => {
-    const contract = pinned('pin_app')
+  it('the 77+2 application functions (090 unchanged + 094 itemized) equal the recorded contract (signature, owner, security, search_path, ACL, body) with zero anon/PUBLIC EXECUTE', () => {
+    const contract = [...pinned('pin_app'), ...PIN_094_APP]
     const live = psqlOk(`
       SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' ||
         '|owner=' || pg_get_userbyid(p.proowner) || '|kind=' || p.prokind::text || '|secdef=' || p.prosecdef ||
@@ -253,7 +295,7 @@ describeIfLocalDb('090 hardening -- committed clean 001-090 state', () => {
       WHERE n.nspname = 'public' AND NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
         WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e' AND e.extname = 'pg_trgm');`)
       .split('\n').map((l) => l.trim()).filter(Boolean)
-    expect(live).toHaveLength(77)
+    expect(live).toHaveLength(79) // 090's 77 + 094's 2 itemized trigger functions
     // The only function 091 changes is handle_new_user_credits(): identity/owner/security/search_path/ACL must
     // still match the 090 contract exactly; its body may be the recorded 090 body OR the 091 body.
     const swap091Body = (line: string) => (line.startsWith('handle_new_user_credits()|')
@@ -274,6 +316,7 @@ describeIfLocalDb('090 hardening -- apply and reapply', () => {
     const digestStatement = `SELECT (${DIGEST_EXPR.trim().replace(/^SELECT /, '')}) AS d0 \\gset`
     const out = psqlOk(`
 BEGIN;
+${PRE_094_UNDO_SQL}
 ${digestStatement}
 ${PRE_090_STATE_SQL}
 ${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'PRE|'")}
@@ -296,6 +339,7 @@ ROLLBACK;`)
     // PUBLIC + an extra privilege on an existing table: the catalog-driven REVOKE removes it.
     const out = psqlOk(`
 BEGIN;
+${PRE_094_UNDO_SQL}
 GRANT TRUNCATE, REFERENCES ON TABLE public.creator_memory TO PUBLIC;
 ${MIGRATION_BODY}
 SELECT 'PUBLIC_LEFT|' || count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
@@ -304,20 +348,28 @@ ROLLBACK;`)
     expect(out).toContain('PUBLIC_LEFT|0')
   })
 
-  it('reapply of the real migration file (committed, BEGIN/COMMIT) is a clean no-op', () => {
-    const before = psqlOk(`${DIGEST_EXPR};\n${EXTRA_COUNTS_SQL}`)
-    // 091 changed handle_new_user_credits(), which 090 pins: restore the recorded pre-091 function inside the
-    // 090 transaction, then (if 091 was live) re-apply 091 so the stack ends exactly as it started.
-    const post091Live = psqlOk(`SELECT md5(replace(prosrc, E'\\r\\n', E'\\n')) = '${POST_091_HANDLE_NEW_USER_CREDITS_BODY_MD5}' FROM pg_proc WHERE oid = 'public.handle_new_user_credits()'::regprocedure;`).trim() === 't'
-    const run = psql(MIGRATION.replace(/^BEGIN;$/m, `BEGIN;\n${PRE_091_FUNCTION_SQL}`))
-    expect(run.status).toBe(0)
-    if (post091Live) {
-      psqlOk(readFileSync(path.join(ROOT, 'supabase', 'migrations', '091_starter_credit_contract.sql'), 'utf8'))
-    }
-    const after = psqlOk(`${DIGEST_EXPR};\n${EXTRA_COUNTS_SQL}`)
-    expect(after).toBe(before)
-    const counts = parseExtraCounts(after)
-    expect(Object.values(counts).every((n) => n === 0)).toBe(true)
+  // The old form committed the REAL 090 file (with its own BEGIN/COMMIT) against the shared stack. With 094's
+  // functions live that would either fail 090's closed inventory or, if they were undone inside the same
+  // transaction, COMMIT their removal. So the reapply now runs MIGRATION_BODY inside a transaction that is
+  // ROLLED BACK (the wrapper in psql() restores the pre-091 function and undoes 094's functions first), which
+  // is exactly the property "reapply is idempotent" is about, without touching the shared stack for real.
+  it('reapply of MIGRATION_BODY on top of the 090-hardened baseline (rolled back) is a clean no-op', () => {
+    const digestExpr = DIGEST_EXPR.trim().replace(/^SELECT /, '')
+    const out = psqlOk(`
+BEGIN;
+${PRE_094_UNDO_SQL}
+SELECT (${digestExpr}) AS d0 \\gset
+${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'PRE|'")}
+${MIGRATION_BODY}
+${EXTRA_COUNTS_SQL.replace(/'EXTRA\|'/, "'POST|'")}
+SELECT 'DIGEST_UNCHANGED|' || ((${digestExpr}) = :'d0');
+ROLLBACK;`)
+    const pre = parseExtraCounts(out, 'PRE')
+    const post = parseExtraCounts(out, 'POST')
+    // The already-090-hardened baseline has zero extras before the reapply; reapplying must not introduce any.
+    expect(Object.values(pre).every((n) => n === 0)).toBe(true)
+    expect(Object.values(post).every((n) => n === 0)).toBe(true)
+    expect(out).toContain('DIGEST_UNCHANGED|t')
   })
 })
 
@@ -441,6 +493,7 @@ describeIfLocalDb('090 hardening -- fail-fast on drift (rolled back)', () => {
   it('platform default ACL upper bound: a STRICTER platform default is accepted', () => {
     const r = psql(
       `BEGIN;
+${PRE_094_UNDO_SQL}
 ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
 ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
 SET LOCAL ROLE postgres;
@@ -462,7 +515,7 @@ ROLLBACK;`,
   ]
   for (const [label, user, alter] of WIDER) {
     it(`platform default ACL upper bound: ${label} is rejected`, () => {
-      const r = psql(`BEGIN;\n${alter}\nSET LOCAL ROLE postgres;\n${MIGRATION_BODY}\nSELECT 'MUST_NOT_REACH';\nROLLBACK;`, user)
+      const r = psql(`BEGIN;\n${PRE_094_UNDO_SQL}\n${alter}\nSET LOCAL ROLE postgres;\n${MIGRATION_BODY}\nSELECT 'MUST_NOT_REACH';\nROLLBACK;`, user)
       expect(r.status).not.toBe(0)
       expect(r.output).toContain('PLATFORM_OWNED_DEFAULT_ACL_RESIDUAL')
       expect(r.output).toContain('EXCEEDS')
