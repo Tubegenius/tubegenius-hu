@@ -15,7 +15,7 @@ export const PROMPT_TEMPLATES = {
   thumbnailStudioConcepts: definePromptTemplate({ id: 'thumbnail_studio_concepts', version: 'v2', locale: 'hu-HU', description: 'Három gyártható thumbnail-koncepció nem prediktív AI vizuális értékeléssel.' }),
   scriptExtractTranscript: definePromptTemplate({ id: 'script_extract_transcript', version: 'v1', locale: 'hu-HU', description: 'Structure analysis from transcript.' }),
   scriptExtractMetadata: definePromptTemplate({ id: 'script_extract_metadata_only', version: 'v1', locale: 'hu-HU', description: 'Estimated structure analysis from metadata.' }),
-  videoAuditInterpretation: definePromptTemplate({ id: 'video_audit_interpretation', version: 'v1', locale: 'hu-HU', description: 'Qualitative video-audit interpretation.' }),
+  videoAuditInterpretation: definePromptTemplate({ id: 'video_audit_interpretation', version: 'v2', locale: 'hu-HU', description: 'Qualitative video-audit interpretation.' }),
   videoPackageCoreShorts: definePromptTemplate({ id: 'video_package_core_shorts', version: 'v1', locale: 'hu-HU', description: 'Short-form video package core.' }),
   videoPackageCoreLong: definePromptTemplate({ id: 'video_package_core_long', version: 'v1', locale: 'hu-HU', description: 'Long-form video package core.' }),
   videoPackagePackaging: definePromptTemplate({ id: 'video_package_packaging', version: 'v2', locale: 'hu-HU', description: 'Marketing packaging and upload checklist.' }),
