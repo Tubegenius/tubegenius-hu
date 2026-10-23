@@ -105,7 +105,7 @@ describe('F2 / F6 / F5: what the user is told (static text checks, no rendering)
   })
 
   it('the retry button exists only for a retry-safe error and is disabled while a save is running', () => {
-    expect(banner).toMatch(/saveError\.retrySafe && <button type="button" className="wv-package-error-action" onClick=\{retrySave\} disabled=\{archiving\}>/)
+    expect(banner).toMatch(/saveError\.retrySafe && <button type="button" className="wv-package-error-action" onClick=\{retrySave\} disabled=\{archiving \|\| loading\}>/)
   })
 
   it('a Memory failure is its own notice, shown only for a saved package, and it says not to save again', () => {

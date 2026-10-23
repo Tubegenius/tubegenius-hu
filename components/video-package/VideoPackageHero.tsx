@@ -37,6 +37,8 @@ interface VideoPackageHeroProps {
   creditsRemaining: number | null
   calendarStatus: CalendarStatus
   onSaveToCalendar: () => void
+  // Az oldal letiltja a naptárba mentést, amíg új generálás fut (a megjelenített eredmény még a régi).
+  calendarBlocked?: boolean
 }
 
 // Prezentációs komponens: minden státusz és érték a meglévő oldal-logikából
@@ -55,6 +57,7 @@ export default function VideoPackageHero({
   creditsRemaining,
   calendarStatus,
   onSaveToCalendar,
+  calendarBlocked = false,
 }: VideoPackageHeroProps) {
   let calendarLabel: string
   let calendarDisabled: boolean
@@ -110,7 +113,7 @@ export default function VideoPackageHero({
           <div><Clock3 aria-hidden="true" /><span><small>Célhossz</small><strong>{targetLengthLabel ?? '—'}</strong></span></div>
           <div><Coins aria-hidden="true" /><span><small>Maradék kredit</small><strong>{creditsRemaining === null ? '—' : creditsRemaining.toFixed(1)}</strong></span></div>
         </div>
-        <button type="button" onClick={onSaveToCalendar} disabled={calendarDisabled} data-state={calendarStatus}>
+        <button type="button" onClick={onSaveToCalendar} disabled={calendarDisabled || calendarBlocked} data-state={calendarStatus}>
           <Calendar aria-hidden="true" />{calendarLabel}
         </button>
       </aside>

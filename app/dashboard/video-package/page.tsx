@@ -887,6 +887,7 @@ export default function VideoPackagePage() {
       // Új eredmény érkezett: ELŐSZÖR most állítjuk át az archívum-vezérlőt (token), a tényforrásokat és a flag-eket.
       const archiveToken = archiveController.beginGeneration()
       setReopenedWithoutCharge(false)
+      setCalendarStatus('idle') // az előző eredmény naptár-állapota nem öröklődhet az újra
       setFactSources(sources)
       factBlockRef.current = factBlock
       setResult(data)
@@ -920,7 +921,12 @@ export default function VideoPackagePage() {
   }
 
   async function saveToCalendar() {
-    if (!result) return
+    // Futó generálás alatt a megjelenített eredmény még a RÉGI: a naptárba mentés nem indulhat (rossz eredményhez kötött állapot).
+    if (!result || loading) return
+    // A művelet a kattintáskori eredményhez tartozik: ha közben új eredmény érkezik (token vált), a késői befejezés
+    // már nem állíthatja át az új eredmény állapotát.
+    const generationToken = archiveController.currentToken()
+    const stillCurrent = () => archiveController.isCurrent(generationToken)
     setCalendarStatus('saving')
     try {
       const ideaRes = await fetch('/api/video-ideas', {
@@ -928,15 +934,15 @@ export default function VideoPackagePage() {
         body: JSON.stringify({ topic: result.topic, platform: result.platform, workflow_status: 'ready_to_produce' }),
       })
       const ideaData = await ideaRes.json()
-      if (!ideaRes.ok || !ideaData.idea?.id) { setCalendarStatus('error'); return }
+      if (!ideaRes.ok || !ideaData.idea?.id) { if (stillCurrent()) setCalendarStatus('error'); return }
 
       const patchRes = await fetch('/api/video-ideas', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: ideaData.idea.id, calendar_status: 'scheduled' }),
       })
-      setCalendarStatus(patchRes.ok ? 'saved' : 'error')
+      if (stillCurrent()) setCalendarStatus(patchRes.ok ? 'saved' : 'error')
     } catch {
-      setCalendarStatus('error')
+      if (stillCurrent()) setCalendarStatus('error')
     }
   }
 
@@ -992,7 +998,8 @@ export default function VideoPackagePage() {
   // Kézi mentés: kizárólag egy KATTINTÁSRA (a hiba-sávban megjelenő gomb), sosem automatikusan, és csak határozott,
   // beszúrás ELŐTTI hiba után (a vezérlő őrzi); ugyanazt a védett mentőt használja, így dupla kattintás mellett is egyetlen kérés fut.
   async function retrySave() {
-    if (!result) return
+    // Futó generálás alatt a megjelenített eredmény még a régi: a kézi mentés nem indulhat (a késői befejezés elavult állapotot hagyna).
+    if (!result || loading) return
     const { token, outcome } = await archiveController.retry(result, { searchKeyword: searchKeyword || null })
     await finishArchive(outcome, result, token)
   }
@@ -1228,7 +1235,7 @@ export default function VideoPackagePage() {
               <small>{railSmall}</small>
             </span>
           </div>
-          <button type="button" onClick={handleGenerate} disabled={loading || !topic.trim() || generationBlockedByOpportunity}>
+          <button type="button" onClick={handleGenerate} disabled={loading || archiving || !topic.trim() || generationBlockedByOpportunity}>
             {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved || reopenedWithoutCharge || railFreshUnsaved ? <>Újragenerálás <span>legfeljebb {maxCredits} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
           </button>
         </footer>
@@ -1249,7 +1256,7 @@ export default function VideoPackagePage() {
             <strong>{saveError.retrySafe ? 'Az archívum-mentés nem történt meg.' : 'Az archívum-mentés nincs igazolva.'}</strong>
             {reopenedWithoutCharge ? 'A fizetett eredmény megnyitva, új kreditet nem vontunk le. ' : 'A fizetett generálás elkészült, a kredit levonása már megtörtént. '}
             {saveError.message} {generationNote}
-            {saveError.retrySafe && <button type="button" className="wv-package-error-action" onClick={retrySave} disabled={archiving}>Mentés újrapróbálása</button>}
+            {saveError.retrySafe && <button type="button" className="wv-package-error-action" onClick={retrySave} disabled={archiving || loading}>Mentés újrapróbálása</button>}
           </span>
         </div>
       )}
@@ -1283,6 +1290,7 @@ export default function VideoPackagePage() {
             saveStatus={heroSaveStatus}
             creditsRemaining={heroCreditsRemaining}
             calendarStatus={calendarStatus}
+            calendarBlocked={loading}
             onSaveToCalendar={saveToCalendar}
           />
 
