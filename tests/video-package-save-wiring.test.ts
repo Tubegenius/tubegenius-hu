@@ -91,7 +91,7 @@ describe('F2 / F6 / F5: what the user is told (static text checks, no rendering)
     expect(banner).toContain('A fizetett eredmény megnyitva, új kreditet nem vontunk le.')
     expect(banner).toContain('Az archívum-mentés nincs igazolva.')
     expect(banner).toContain('Az archívum-mentés nem történt meg.') // only for the retry-safe (pre-insert) case
-    expect(banner).toContain('Az újragenerálás újabb kreditet használ.')
+    expect(banner).toContain('{saveError.message} {generationNote}') // the conditional new-generation cost note
   })
 
   it('"not happened" is claimed only for the retry-safe case; the uncertain case says "nincs igazolva"', () => {
@@ -125,9 +125,9 @@ describe('F2 / F6 / F5: what the user is told (static text checks, no rendering)
 
   it('rail texts: fresh-but-unsaved shows the charge AND the unproven archive; reopened-unverified says no new charge AND unproven; both say regeneration uses new credit', () => {
     expect(PAGE).toContain("'A fizetett generálás elkészült — a kredit levonása már megtörtént.'")
-    expect(PAGE).toContain("'Az archívum-mentés nincs igazolva. Az újragenerálás újabb kreditet használ.'")
+    expect(PAGE).toContain('`Az archívum-mentés nincs igazolva. ${generationNote}`')
     expect(PAGE).toContain("'Fizetett eredmény megnyitva — új kredit levonása nélkül.'")
-    expect(PAGE).toContain("'Az archívum-mentés nem igazolt. Az újragenerálás újabb kreditet használ.'")
+    expect(PAGE).toContain('`Az archívum-mentés nem igazolt. ${generationNote}`')
     // an unsaved fresh result does not fall back to the pre-payment "N kredit / kreditmegerősítés" wording
     expect(PAGE).toContain('railFreshUnsaved')
     expect(PAGE).toMatch(/saved \|\| reopenedWithoutCharge \|\| railFreshUnsaved \? <>Újragenerálás/)

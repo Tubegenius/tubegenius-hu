@@ -32,6 +32,7 @@ import {
   hasTimeBudgetForChargeAndSave,
 } from '@/lib/video-package'
 import { isJsonWithinLimit, isPlainRecord, topicInputTooLong, topicTooLongResponseMessage } from '@/lib/api-input-validation'
+import { insufficientCreditsNoCachedResultMessage } from '@/lib/video-package-credit-gate'
 
 interface PackageSource {
   title: string; url?: string; snippet?: string; source?: string
@@ -191,6 +192,9 @@ export async function POST(request: NextRequest) {
       console.error('[VideoPackage] Korábbi eredmény ellenőrzése sikertelen -- nincs AI-hívás, nincs levonás:', cacheCheckError)
       return NextResponse.json({ error: 'Nem sikerült ellenőrizni, van-e már kész eredményed. Próbáld újra.' }, { status: 503 })
     }
+    // SORREND-INVARIÁNS (tests/video-package-credit-gate-route.test.ts őrzi): a már kifizetett, azonos bemenetű eredmény
+    // díjmentesen, az egyenlegtől és a napi lágy limittől függetlenül megnyitható, ezért a cache-keresés MEGELŐZI a
+    // kredit-ellenőrzést; a kredit-ellenőrzés (402/429) viszont MINDIG megelőzi az AI-hívást és a levonást.
     if (paid) {
       const opened = await openPaidResult(paid)
       const polishedResult = polishHungarianOutput(opened.result_json) as Record<string, unknown>
@@ -204,7 +208,7 @@ export async function POST(request: NextRequest) {
     const access = await checkPaidFeatureAccess(userId, feature, request.headers.get('x-daily-soft-limit-override') === 'true')
     if (access.reason === 'daily_soft_limit' && access.dailyLimit) return NextResponse.json(dailySoftLimitError(access.dailyLimit), { status: 429 })
     if (!access.allowed) {
-      return NextResponse.json({ error: `Nincs elég kredited. Ehhez ${CREDIT_COSTS[feature]} kredit szükséges.` }, { status: 402 })
+      return NextResponse.json({ error: insufficientCreditsNoCachedResultMessage(CREDIT_COSTS[feature]) }, { status: 402 })
     }
 
     // ── 1. FACT SAFETY LAYER ──────────────────────────────────

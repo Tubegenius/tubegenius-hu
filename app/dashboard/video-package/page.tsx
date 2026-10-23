@@ -5,8 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase'
 import type { CreatorProfile } from '@/types'
-import CreditConfirmModal from '@/components/CreditConfirmModal'
-import type { UsageCheckResult } from '@/lib/usage-protection'
+import VideoPackageCreditModal from '@/components/video-package/VideoPackageCreditModal'
 import LoadingScreen, { LOADING_STEPS } from '@/components/ui/LoadingScreen'
 import { publishCreditMutationCompleted } from '@/lib/credit-balance-events'
 import { useCreditBalance } from '@/components/credits/CreditBalanceContext'
@@ -72,6 +71,7 @@ import {
   createVideoPackageSaver,
   type SaveVideoPackageOutcome,
 } from '@/lib/paid-results/video-package-save-client'
+import { buildVideoPackageCreditCheck, newGenerationCostNote, type VideoPackageCreditCheck } from '@/lib/video-package-credit-gate'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -412,7 +412,7 @@ export default function VideoPackagePage() {
   // logged differently, never silently treated as success).
   const [snapshotStatus, setSnapshotStatus] = useState<'idle' | 'loading' | 'found' | 'missing' | 'error'>('idle')
   const [allowWeakOpportunityGeneration, setAllowWeakOpportunityGeneration] = useState(false)
-  const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
+  const [creditCheck, setCreditCheck] = useState<VideoPackageCreditCheck | null>(null)
   const pendingActionRef = useRef<(() => void) | null>(null)
   // `saved`/`savedPackageId` azt jelzi, hogy a csomag be van irva a video_packages
   // tablaba — ez FRISS generalas utan is igaz, ha a persistPackage() mentese sikerult (hiba
@@ -735,41 +735,19 @@ export default function VideoPackagePage() {
   }
 
   async function checkCreditsBeforeAction(cost: number, featureName: string, onConfirm: () => void) {
+    // Szerver-vezérelt kapu (lib/video-package-credit-gate.ts): az egyenleg csak tájékoztat, kliensoldalon NEM tiltunk — a szerver
+    // előbb megkeresi a már kifizetett, azonos bemenetű eredményt (díjmentes megnyitás), és csak cache-hiánynál utasít el 402-vel,
+    // AI-hívás és levonás előtt. A megerősítés MINDEN helyzetben megelőzi a külső tényadat-lekérést (/api/facts), kevés vagy
+    // nem olvasható egyenlegnél is.
+    let balance: number | null = null
     try {
       const credits = await refreshCredits()
-      if (!credits) throw new Error('credit_balance_unavailable')
-      const balance = credits.balance
-
-      if (balance < cost) {
-        setCreditCheck({
-          feature: featureName,
-          cost,
-          currency: 'credit',
-          currentCredits: balance,
-          remainingCreditsAfterRun: balance,
-          requiresConfirmation: true,
-          canRun: false,
-          reason: 'insufficient_credits',
-          message: `Nincs elég kredited. ${cost} kredit szükséges.`,
-        })
-        return
-      }
-
-      pendingActionRef.current = onConfirm
-      setCreditCheck({
-        feature: featureName,
-        cost,
-        currency: 'credit',
-        currentCredits: balance,
-        remainingCreditsAfterRun: balance - cost,
-        requiresConfirmation: true,
-        canRun: true,
-        message: `Ez a művelet ${cost} kreditbe kerül.`,
-      })
+      balance = credits ? credits.balance : null
     } catch {
-      // Ha nem sikerül a credit check, engedjük tovább
-      onConfirm()
+      balance = null
     }
+    pendingActionRef.current = onConfirm
+    setCreditCheck(buildVideoPackageCreditCheck({ feature: featureName, cost, balance }))
   }
 
   function handleGenerate() {
@@ -790,14 +768,11 @@ export default function VideoPackagePage() {
     setLoading(true)
     setFactsLoading(true)
     setError(null)
-    setResult(null)
-    setFactSources([])
-    const archiveToken = archiveController.beginGeneration()
-    setReopenedWithoutCharge(false)
-
+    // A korábbi eredmény (és annak archívum-állapota, tényforrásai) LÁTHATÓ marad, amíg új eredmény meg nem érkezik: egy
+    // 402/429/503 vagy hálózati hiba nem törölheti a már kifizetett eredményt a nézetből. Az új állapotot (token, tényforrások,
+    // flag-ek) csak a sikeres válasz állítja be, lásd lent.
     let factBlock: string | null = null
     let sources: { title: string; snippet: string; url: string; source_type: string }[] = []
-    factBlockRef.current = null
 
     // 1. Tényadatok lekérése — Wikipedia + Serper
     const sourceExtract = sourceExtractRef.current
@@ -814,8 +789,6 @@ export default function VideoPackagePage() {
         url: sourceVideoUrl || '',
         source_type: 'source_video_transcript',
       }]
-      setFactSources(sources)
-      factBlockRef.current = factBlock
       setFactsLoading(false)
     } else if (opportunityContextData && opportunityFactBlock) {
       factBlock = opportunityFactBlock
@@ -833,8 +806,6 @@ export default function VideoPackagePage() {
           source_type: 'opportunity_youtube',
         })),
       ]
-      setFactSources(sources)
-      factBlockRef.current = factBlock
       setFactsLoading(false)
     } else {
       try {
@@ -847,8 +818,6 @@ export default function VideoPackagePage() {
         if (factsData.has_data) {
           factBlock = factsData.fact_block
           sources = factsData.sources
-          setFactSources(sources)
-          factBlockRef.current = factBlock
         }
       } catch (e) {
         console.error('Facts fetch error:', e)
@@ -915,6 +884,11 @@ export default function VideoPackagePage() {
         }
         return
       }
+      // Új eredmény érkezett: ELŐSZÖR most állítjuk át az archívum-vezérlőt (token), a tényforrásokat és a flag-eket.
+      const archiveToken = archiveController.beginGeneration()
+      setReopenedWithoutCharge(false)
+      setFactSources(sources)
+      factBlockRef.current = factBlock
       setResult(data)
       publishCreditMutationCompleted('/api/video-package', data)
 
@@ -1048,6 +1022,8 @@ export default function VideoPackagePage() {
       ? { label: 'A fizetett generálás elkészült, a kredit levonása megtörtént. Az archívum-mentés nincs igazolva.', variant: 'info' }
       : null
   // Rail: a fizetett generálás sikere, a kreditlevonás és az archívum-mentés bizonytalansága külön állítás.
+  const maxCredits = isShorts ? 2 : 6
+  const generationNote = newGenerationCostNote(maxCredits)
   const railFreshUnsaved = !!result && !saved && !reopenedWithoutCharge && !!saveError
   const railStrong = saved
     ? (reopenedWithoutCharge ? 'Mentett csomag megnyitva — új kredit levonása nélkül.' : 'A csomag elkészült és mentésre került.')
@@ -1055,14 +1031,14 @@ export default function VideoPackagePage() {
     ? 'Fizetett eredmény megnyitva — új kredit levonása nélkül.'
     : railFreshUnsaved
     ? 'A fizetett generálás elkészült — a kredit levonása már megtörtént.'
-    : `${isShorts ? 'Shorts' : 'Long videó'} csomag · ${isShorts ? '2' : '6'} kredit`
+    : `${isShorts ? 'Shorts' : 'Long videó'} csomag · legfeljebb ${maxCredits} kredit`
   const railSmall = saved
-    ? 'Az újragenerálás új kreditet használ.'
+    ? generationNote
     : reopenedWithoutCharge
-    ? 'Az archívum-mentés nem igazolt. Az újragenerálás újabb kreditet használ.'
+    ? `Az archívum-mentés nem igazolt. ${generationNote}`
     : railFreshUnsaved
-    ? 'Az archívum-mentés nincs igazolva. Az újragenerálás újabb kreditet használ.'
-    : 'A következő lépés előtt kreditmegerősítést kapsz.'
+    ? `Az archívum-mentés nincs igazolva. ${generationNote}`
+    : generationNote
   const heroCreditsRemaining = result && typeof result._credits_remaining === 'number' && Number.isFinite(result._credits_remaining)
     ? result._credits_remaining
     : null
@@ -1211,7 +1187,7 @@ export default function VideoPackagePage() {
       <section className="wv-package-composer" aria-labelledby="wv-package-composer-title">
         <header>
           <div><span>01</span><div><small>Döntési konzol</small><h2 id="wv-package-composer-title">Állítsd be a gyártási irányt.</h2><p>A projektkörnyezet már megérkezett. Itt a konkrét videó formáját és kreatív nyomását döntöd el.</p></div></div>
-          <aside><Coins aria-hidden="true" /><span><small>Generálás ára</small><strong>{isShorts ? '2' : '6'} kredit</strong></span></aside>
+          <aside><Coins aria-hidden="true" /><span><small>Új generálás ára</small><strong>{isShorts ? '2' : '6'} kredit</strong></span></aside>
         </header>
 
         <label className="wv-package-topic-field">
@@ -1253,7 +1229,7 @@ export default function VideoPackagePage() {
             </span>
           </div>
           <button type="button" onClick={handleGenerate} disabled={loading || !topic.trim() || generationBlockedByOpportunity}>
-            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved || reopenedWithoutCharge || railFreshUnsaved ? <>Újragenerálás <span>{isShorts ? '2' : '6'} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
+            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved || reopenedWithoutCharge || railFreshUnsaved ? <>Újragenerálás <span>legfeljebb {maxCredits} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
           </button>
         </footer>
       </section>
@@ -1272,7 +1248,7 @@ export default function VideoPackagePage() {
           <span>
             <strong>{saveError.retrySafe ? 'Az archívum-mentés nem történt meg.' : 'Az archívum-mentés nincs igazolva.'}</strong>
             {reopenedWithoutCharge ? 'A fizetett eredmény megnyitva, új kreditet nem vontunk le. ' : 'A fizetett generálás elkészült, a kredit levonása már megtörtént. '}
-            {saveError.message} Az újragenerálás újabb kreditet használ.
+            {saveError.message} {generationNote}
             {saveError.retrySafe && <button type="button" className="wv-package-error-action" onClick={retrySave} disabled={archiving}>Mentés újrapróbálása</button>}
           </span>
         </div>
@@ -1578,11 +1554,10 @@ export default function VideoPackagePage() {
       )}
 
       {creditCheck && (
-        <CreditConfirmModal
+        <VideoPackageCreditModal
           check={creditCheck}
           onConfirm={() => { const action = pendingActionRef.current; setCreditCheck(null); pendingActionRef.current = null; action?.() }}
           onCancel={() => { setCreditCheck(null); pendingActionRef.current = null }}
-          loading={loading}
         />
       )}
     </div>
