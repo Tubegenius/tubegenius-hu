@@ -60,6 +60,14 @@ import {
   resolveCreatorStudioGoal,
   resolveCreatorStudioLane,
 } from '@/lib/creator-studio-presentation'
+import {
+  ARCHIVE_REF_STORAGE_KEY,
+  createVideoPackageSaver,
+  readArchiveRef,
+  serializeArchiveRef,
+  verifyArchivedPackage,
+  type VideoPackageSaver,
+} from '@/lib/paid-results/video-package-save-client'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -363,6 +371,15 @@ export default function VideoPackagePage() {
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [savedPackageId, setSavedPackageId] = useState<string | null>(null)
+  // A mentés (video_packages) hibája: a fizetett eredmény ilyenkor MEGVAN a paid_results-ban, a kredit
+  // levonása és a generálás nem érintett. retrySafe=false: a kimenetel bizonytalan, nincs újrapróbálás gomb.
+  const [saveError, setSaveError] = useState<{ message: string; retrySafe: boolean } | null>(null)
+  // Egyetlen mentő példány az oldal élettartamára: az automatikus mentés és a kézi újrapróbálás ugyanazt használja
+  // (párhuzamos hívás -> egyetlen kérés, már mentett eredményre nincs új kérés), lásd lib/paid-results/video-package-save-client.ts.
+  const packageSaverRef = useRef<VideoPackageSaver | null>(null)
+  if (!packageSaverRef.current) packageSaverRef.current = createVideoPackageSaver()
+  // Új generálásnál növeljük: a visszanyitott eredmény még futó archívum-ellenőrzése így nem írhatja felül az új állapotot.
+  const archiveCheckRef = useRef(0)
   const [calendarStatus, setCalendarStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [factSources, setFactSources] = useState<{ title: string; snippet: string; url: string; source_type: string }[]>([])
   const [loadingSavedPackage, setLoadingSavedPackage] = useState(false)
@@ -388,8 +405,8 @@ export default function VideoPackagePage() {
   const [creditCheck, setCreditCheck] = useState<UsageCheckResult | null>(null)
   const pendingActionRef = useRef<(() => void) | null>(null)
   // `saved`/`savedPackageId` azt jelzi, hogy a csomag be van irva a video_packages
-  // tablaba — ez FRISS generalas utan is igaz (autoSavePackage mindig lefut), nem
-  // csak visszanyitasnal. A "nem vontunk le kreditet" felirat ezert kulon jelzot
+  // tablaba — ez FRISS generalas utan is igaz, ha a persistPackage() mentese sikerult (hiba
+  // eseten false marad), nem csak visszanyitasnal. A "nem vontunk le kreditet" felirat ezert kulon jelzot
   // hasznal, amit csak a tenyleges (kredit nelkuli) visszanyitasi utak allitanak be.
   const [reopenedWithoutCharge, setReopenedWithoutCharge] = useState(false)
 
@@ -429,8 +446,9 @@ export default function VideoPackagePage() {
           if (state.topic) setTopic(state.topic)
           if (state.result) {
             setResult(state.result)
-            setSaved(true)
+            // A visszanyitott eredmény NEM számít automatikusan mentettnek: csak igazolt archívumsor alapján (confirmArchivedPackage).
             setReopenedWithoutCharge(true)
+            void confirmArchivedPackage(state.result)
           }
           if (state.platform) setPlatform(state.platform)
           if (state.videoLength) setVideoLength(state.videoLength)
@@ -582,6 +600,21 @@ export default function VideoPackagePage() {
     return null
   }
 
+  // Igazolt archívumsor: a mentett állapotot csak akkor jelöljük, ha a tárolt csomag-azonosító ugyanehhez a fizetett
+  // eredményhez tartozik ÉS az owner-szűrt olvasás (GET /api/video-packages?id=) 200-zal visszaadja a sort.
+  // Bármi egyéb (nincs hivatkozás, 404, hiba) -> az állapot nem igazolt marad, és nem indul mentés.
+  async function confirmArchivedPackage(pkg: { paid_result_id?: string }) {
+    const token = ++archiveCheckRef.current
+    let raw: string | null = null
+    try { raw = sessionStorage.getItem(ARCHIVE_REF_STORAGE_KEY) } catch {}
+    const packageId = readArchiveRef(raw, pkg.paid_result_id)
+    if (!packageId) return
+    if (await verifyArchivedPackage(packageId) !== 'present') return
+    if (token !== archiveCheckRef.current) return
+    setSavedPackageId(packageId)
+    setSaved(true)
+  }
+
   async function loadPaidResult(paidResultId: string) {
     setLoadingSavedPackage(true)
     try {
@@ -597,8 +630,10 @@ export default function VideoPackagePage() {
           setOpportunityContext(data.opportunity_context as OpportunityPackageContext)
           opportunityContextRef.current = data.opportunity_context as OpportunityPackageContext
         }
-        setSaved(true)
+        // A paid_results-ból visszanyitott eredmény sem számít mentettnek (a video_packages táblában nincs paid_result_id,
+        // a sor létezése itt nem igazolható); csak az ugyanezen a fülön tárolt, igazolt archívum-hivatkozás számít.
         setReopenedWithoutCharge(true)
+        void confirmArchivedPackage(data)
       } else {
         setError(data.error || 'A videócsomag nem található')
       }
@@ -765,7 +800,9 @@ export default function VideoPackagePage() {
     setFactSources([])
     setSaved(false)
     setSavedPackageId(null)
+    setSaveError(null)
     setReopenedWithoutCharge(false)
+    archiveCheckRef.current += 1
 
     let factBlock: string | null = null
     let sources: { title: string; snippet: string; url: string; source_type: string }[] = []
@@ -902,7 +939,7 @@ export default function VideoPackagePage() {
       }))
 
       // ─── Automatikus mentés — a kifizetett generálás eredménye nem veszhet el ───
-      await autoSavePackage(data)
+      await persistPackage(data)
     } catch { setError('Kapcsolati hiba.') }
     finally { setLoading(false) }
   }
@@ -928,144 +965,60 @@ export default function VideoPackagePage() {
     }
   }
 
-  async function autoSavePackage(pkg: VideoPackageResult) {
-    try {
-      const res = await fetch('/api/video-packages', {
+  // A fizetett generálás eredménye a paid_results-ban már megvan; ez a lépés csak a video_packages archívumot
+  // (és a Memory-kapcsolatot) hozza létre. A kérés törzse KIZÁRÓLAG a paid_result_id (a szerver a tartalmat a
+  // paid_results-ból olvassa; ld. lib/paid-results/video-package-save-client.ts). 0 kredit, nincs újragenerálás.
+  // Az `saved` állapot csak sikeres HTTP-válasz után áll be; hibánál nincs automatikus újrapróbálás.
+  async function persistPackage(pkg: VideoPackageResult) {
+    const saver = packageSaverRef.current
+    if (!saver || !pkg.paid_result_id) return
+    setSaveError(null)
+    const outcome = await saver.save({ paidResultId: pkg.paid_result_id, topic: pkg.topic, searchKeyword: searchKeyword || null })
+    if (outcome.status !== 'saved') {
+      console.error('Video package save failed:', outcome.httpStatus)
+      setSaveError({ message: outcome.message, retrySafe: outcome.retrySafe })
+      return
+    }
+    setSavedPackageId(outcome.id)
+    setSaved(true)
+    try { sessionStorage.setItem(ARCHIVE_REF_STORAGE_KEY, serializeArchiveRef(pkg.paid_result_id, outcome.id)) } catch {}
+    if (outcome.alreadySaved) return
+    if (!outcome.memoryLinked) console.error('Video package saved, but the Creator Memory link failed')
+
+    // Ha "Saját verzió" workflow-ból jöttünk (volt forrásvideó), mentjük a kapcsolatot
+    if (sourceVideoId && sourceVideoUrl) {
+      await fetch('/api/source-video-analysis', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          paid_result_id: pkg.paid_result_id,
-          topic: pkg.topic,
-          search_keyword: searchKeyword || null,
-          platform: pkg.platform,
-          video_length: pkg.video_length,
-          narration_style: pkg.narration_style,
-          intensity: pkg.intensity,
-          goal: pkg.goal,
-          sources: pkg.sources_used || [],
+          source_video_id: sourceVideoId,
+          source_video_url: sourceVideoUrl,
+          source_video_title: pkg.topic,
+          source_context: sourceContext || 'script_extractor',
+          transcript_available: sourceExtractRef.current?.transcript_available || false,
+          transcript_source: sourceExtractRef.current?.transcript_source || 'metadata',
+          extracted_structure: sourceExtractRef.current ? {
+            hook: sourceExtractRef.current.hook,
+            structure: sourceExtractRef.current.structure || [],
+            key_points: sourceExtractRef.current.key_points || [],
+            success_factors: sourceExtractRef.current.success_factors,
+            estimated_duration: sourceExtractRef.current.estimated_duration,
+            word_count: sourceExtractRef.current.word_count,
+            transcript_available: !!sourceExtractRef.current.transcript_available,
+            transcript_source: sourceExtractRef.current.transcript_source || 'metadata',
+          } : {},
           verified_fact_block: factBlockRef.current,
-          verified_fact_block_json: pkg.verified_fact_block || null,
-          forbidden_claims: pkg.forbidden_claims || [],
-          sources_used: pkg.sources_used || [],
-          quality_status: pkg.quality_status || null,
-          content_type: pkg.content_type || null,
-          strict_fact_mode: pkg.strict_fact_mode || false,
-          fact_strictness_level: pkg.fact_strictness_level || null,
-          intensity_original: pkg.intensity_original || null,
-          intensity_final: pkg.intensity_final || null,
-          hook: pkg.hook,
-          narration: pkg.narration,
-          scene_structure: pkg.scene_structure,
-          broll_ideas: pkg.broll_ideas,
-          timestamps: pkg.timestamps || [],
-          title_variations: pkg.title_variations,
-          thumbnail_texts: pkg.thumbnail_texts,
-          caption: pkg.caption,
-          description: pkg.description,
-          hashtags: pkg.hashtags,
-          upload_times: pkg.upload_times,
-          cta: pkg.cta,
-          estimated_word_count: pkg.estimated_word_count,
-          estimated_duration: pkg.estimated_duration,
+          sources: pkg.sources_used || [],
+          generated_video_package_id: outcome.id,
         }),
-      })
-      const data = await res.json()
-      if (res.ok) {
-        setSavedPackageId(data.id)
-        setSaved(true)
-        // Creator Memory-ban is megjelenik — video_package_id összekapcsolva
-        await fetch('/api/memory', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            topic: pkg.topic, search_keyword: searchKeyword || null,
-            state: 'in_progress', video_package_id: data.id,
-          }),
-        })
-
-        // Ha "Saját verzió" workflow-ból jöttünk (volt forrásvideó), mentjük a kapcsolatot
-        if (sourceVideoId && sourceVideoUrl) {
-          await fetch('/api/source-video-analysis', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_video_id: sourceVideoId,
-              source_video_url: sourceVideoUrl,
-              source_video_title: pkg.topic,
-              source_context: sourceContext || 'script_extractor',
-              transcript_available: sourceExtractRef.current?.transcript_available || false,
-              transcript_source: sourceExtractRef.current?.transcript_source || 'metadata',
-              extracted_structure: sourceExtractRef.current ? {
-                hook: sourceExtractRef.current.hook,
-                structure: sourceExtractRef.current.structure || [],
-                key_points: sourceExtractRef.current.key_points || [],
-                success_factors: sourceExtractRef.current.success_factors,
-                estimated_duration: sourceExtractRef.current.estimated_duration,
-                word_count: sourceExtractRef.current.word_count,
-                transcript_available: !!sourceExtractRef.current.transcript_available,
-                transcript_source: sourceExtractRef.current.transcript_source || 'metadata',
-              } : {},
-              verified_fact_block: factBlockRef.current,
-              sources: pkg.sources_used || [],
-              generated_video_package_id: data.id,
-            }),
-          }).catch(() => {})
-        }
-      }
-    } catch (e) {
-      console.error('Auto-save error:', e)
+      }).catch(() => {})
     }
   }
 
-  async function savePackage() {
-    if (!result || saved) return
-
-    // 1. Teljes csomag mentése video_packages táblába — 0 kredit, csak DB write
-    const res = await fetch('/api/video-packages', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        paid_result_id: result.paid_result_id,
-        topic: result.topic,
-        search_keyword: searchKeyword || null,
-        platform: result.platform,
-        video_length: result.video_length,
-        narration_style: result.narration_style,
-        intensity: result.intensity,
-        goal: result.goal,
-        sources: result.sources_used || [],
-        verified_fact_block: factBlockRef.current,
-        verified_fact_block_json: result.verified_fact_block || null,
-        forbidden_claims: result.forbidden_claims || [],
-        sources_used: result.sources_used || [],
-        quality_status: result.quality_status || null,
-        content_type: result.content_type || null,
-        strict_fact_mode: result.strict_fact_mode || false,
-        fact_strictness_level: result.fact_strictness_level || null,
-        intensity_original: result.intensity_original || null,
-        intensity_final: result.intensity_final || null,
-        hook: result.hook,
-        narration: result.narration,
-        scene_structure: result.scene_structure,
-        broll_ideas: result.broll_ideas,
-        timestamps: result.timestamps || [],
-        title_variations: result.title_variations,
-        thumbnail_texts: result.thumbnail_texts,
-        caption: result.caption,
-        description: result.description,
-        hashtags: result.hashtags,
-        upload_times: result.upload_times,
-        cta: result.cta,
-        estimated_word_count: result.estimated_word_count,
-        estimated_duration: result.estimated_duration,
-      }),
-    })
-    const data = await res.json()
-    if (res.ok) setSavedPackageId(data.id)
-
-    // 2. Creator Memory frissítés — folyamatban állapot
-    await fetch('/api/memory', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: result.topic, search_keyword: searchKeyword || null, state: 'in_progress' }),
-    })
-
-    setSaved(true)
+  // Kézi mentés: kizárólag egy KATTINTÁSRA (a hiba-sávban megjelenő gomb), sosem automatikusan; ugyanazt a
+  // védett mentőt használja, így dupla kattintás vagy a még futó automatikus mentés mellett is egyetlen kérés fut.
+  async function retrySave() {
+    if (!result || saved || !saveError?.retrySafe) return
+    await persistPackage(result)
   }
 
   const producerBrief = result ? getProductionBrief(result, opportunityContext) : ''
@@ -1083,12 +1036,12 @@ export default function VideoPackagePage() {
   const heroQualityMeta: QualityMetaDisplay = { label: heroQuality?.label || '', variant: heroQualityVariant }
   const heroSourceCounts = result ? getSourceCounts(result, opportunityContext) : { webSourceCount: 0, videoEvidenceCount: 0 }
   const heroSaveStatus: SaveStatusDisplay | null = !result ? null :
-    result.from_paid_result
-      ? { label: 'Mentett eredmény, kredit nélkül megnyitva', variant: 'success' }
-      : reopenedWithoutCharge
-      ? { label: 'Mentett csomag megnyitva — nem vontunk le új kreditet.', variant: 'success' }
-      : saved
-      ? { label: 'A gyártási csomag elkészült és mentésre került.', variant: 'success' }
+    saved
+      ? reopenedWithoutCharge
+        ? { label: 'Mentett csomag megnyitva — nem vontunk le új kreditet.', variant: 'success' }
+        : { label: 'A gyártási csomag elkészült és mentésre került.', variant: 'success' }
+      : reopenedWithoutCharge || result.from_paid_result
+      ? { label: 'Fizetett eredmény megnyitva — nem vontunk le új kreditet. Az archívum-mentés nem igazolt.', variant: 'info' }
       : null
   const heroCreditsRemaining = result && typeof result._credits_remaining === 'number' && Number.isFinite(result._credits_remaining)
     ? result._credits_remaining
@@ -1275,12 +1228,12 @@ export default function VideoPackagePage() {
           <div>
             {reopenedWithoutCharge || saved ? <CheckCircle2 aria-hidden="true" /> : <Zap aria-hidden="true" />}
             <span>
-              <strong>{reopenedWithoutCharge ? 'Mentett csomag megnyitva — új kredit levonása nélkül.' : saved ? 'A csomag elkészült és mentésre került.' : `${isShorts ? 'Shorts' : 'Long videó'} csomag · ${isShorts ? '2' : '6'} kredit`}</strong>
+              <strong>{reopenedWithoutCharge ? (saved ? 'Mentett csomag megnyitva — új kredit levonása nélkül.' : 'Fizetett eredmény megnyitva — új kredit levonása nélkül.') : saved ? 'A csomag elkészült és mentésre került.' : `${isShorts ? 'Shorts' : 'Long videó'} csomag · ${isShorts ? '2' : '6'} kredit`}</strong>
               <small>{reopenedWithoutCharge || saved ? 'Az újragenerálás új kreditet használ.' : 'A következő lépés előtt kreditmegerősítést kapsz.'}</small>
             </span>
           </div>
           <button type="button" onClick={handleGenerate} disabled={loading || !topic.trim() || generationBlockedByOpportunity}>
-            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved ? <>Újragenerálás <span>{isShorts ? '2' : '6'} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
+            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved || reopenedWithoutCharge ? <>Újragenerálás <span>{isShorts ? '2' : '6'} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
           </button>
         </footer>
       </section>
@@ -1292,6 +1245,17 @@ export default function VideoPackagePage() {
       )}
 
       {error && <div className="wv-package-error" role="alert"><AlertTriangle aria-hidden="true" /><span><strong>A csomag most nem készíthető el.</strong>{error}</span></div>}
+
+      {saveError && result && !saved && (
+        <div className="wv-package-error" role="alert">
+          <AlertTriangle aria-hidden="true" />
+          <span>
+            <strong>A csomag mentése nem sikerült.</strong>
+            {saveError.message} A fizetett eredmény megvan, a kredit levonása nem érintett, újragenerálás nem történik.
+            {saveError.retrySafe && <button type="button" className="wv-package-error-action" onClick={retrySave}>Mentés újrapróbálása</button>}
+          </span>
+        </div>
+      )}
 
       {result && (
         <section className="wv-package-results" aria-labelledby="wv-package-results-title">

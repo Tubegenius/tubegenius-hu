@@ -1,9 +1,9 @@
 // ============================================================
 // WILLVIRAL — Credit System Helper
 // ============================================================
-// Anthropic Claude árazás (kb. USD/millió token)
-// Sonnet: $3 input / $15 output
-// Haiku:  $0.25 input / $1.25 output (~12x olcsóbb)
+// Anthropic Claude árazás (USD/millió token, ld. lent a MODEL_PRICING-et)
+// Sonnet 4.6: $3 input / $15 output
+// Haiku 4.5:  $1 input / $5 output (~3x olcsóbb a Sonnetnél)
 
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
@@ -61,9 +61,16 @@ export const CREDIT_COSTS: Record<FeatureName, number> = {
 // modellnevek (claude-sonnet-4-5, claude-3-5-haiku-20241022) szerepeltek, amik
 // sosem talaltak talalatot, ezert minden hivas csendben a Sonnet-arral lett
 // beccsulve, a Haiku-hivasok is.
+//
+// USD / 1M token, az Anthropic hivatalos arlistaja szerint (platform.claude.com
+// -> Pricing, ellenorizve 2026-10-22): Sonnet 4.6 = $3 / $15, Haiku 4.5 =
+// $1 / $5. A Haiku sor korabban a regi Haiku 3.5 arat ($0.25 / $1.25) hordozta,
+// ami a Haiku 4.5-re negyszeres alulbecslest adott az ai_usage_logs
+// estimated_cost_usd es a paid_results estimated_cost mezoiben. Ez KIZAROLAG
+// naplozott becsles: a kredit-termekar (CREDIT_COSTS) es a levonas nem fugg tole.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   [MODELS.primary]: { input: 3, output: 15 },
-  [MODELS.fast]: { input: 0.25, output: 1.25 },
+  [MODELS.fast]: { input: 1, output: 5 },
 }
 
 export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {

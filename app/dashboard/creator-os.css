@@ -539,6 +539,8 @@ html[data-wv-session='ended'] .wv-shell { visibility: hidden; }
 .wv-package-error { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 11px; align-items: start; padding: 14px; color: var(--wv-coral); background: rgba(232, 117, 91, 0.06); border: 1px solid rgba(232, 117, 91, 0.25); border-radius: 10px; }
 .wv-package-error > svg { width: 20px; height: 20px; }
 .wv-package-error > span { display: grid; gap: 3px; color: var(--wv-muted); font-size: 12px; line-height: 1.45; }
+.wv-package-error-action { justify-self: start; margin-top: 6px; padding: 6px 12px; color: var(--wv-text); background: transparent; border: 1px solid var(--wv-line-strong); border-radius: 8px; font-size: 12px; cursor: pointer; }
+.wv-package-error-action:hover { border-color: var(--wv-coral); }
 .wv-package-error strong { color: var(--wv-text); font-size: 13px; font-weight: 500; }
 .wv-package-results { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 7px; }
 .wv-package-results-head { grid-column: 1 / -1; display: flex; gap: 17px; align-items: center; justify-content: space-between; padding: 19px 3px 13px; border-bottom: 1px solid var(--wv-line); }
