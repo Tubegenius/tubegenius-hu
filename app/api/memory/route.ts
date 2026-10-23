@@ -13,6 +13,7 @@ import {
 import type { TopicState, MemoryProofSignalSummary, MemoryInsight, VideoIdeaProofSignal, VideoIdeaEvent } from '@/types'
 import { isOptionalTextWithinLimit, isScoreOrNull, topicInputTooLong } from '@/lib/api-input-validation'
 import { upsertCreatorMemory, getCreatorMemoryByLaneFilter, assertValidLaneFilter } from '@/lib/creator-lane/lane-service'
+import { resolveOpportunityEvidence, saveOpportunityRecommendationToMemory } from '@/lib/opportunity-evidence/evidence-service'
 
 const MEMORY_STATES: TopicState[] = ['saved', 'in_progress', 'completed', 'rejected']
 
@@ -147,7 +148,47 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Nem vagy bejelentkezve' }, { status: 401 })
   }
 
-  const { topic, search_keyword, state, opportunity_score, viral_score, audit_score, audit_id, video_package_id, platform, notes, source_context, quality_status } = await request.json()
+  const body = await request.json()
+  const { topic, search_keyword, state, opportunity_score, viral_score, audit_score, audit_id, video_package_id, platform, notes, source_context, quality_status, paid_result_id, topic_id } = body
+
+  // Opportunity-evidence save path: an atomic, evidence-carrying save,
+  // distinct from the generic path below. Only taken when the caller
+  // explicitly points at a stored Opportunity Engine result (paid_result_id
+  // + topic_id) -- evidence content is always re-derived server-side from
+  // that record, never taken from the request body (see evidence-service.ts).
+  // The generic, non-opportunity save path below is UNCHANGED by this branch.
+  if (source_context === 'opportunity_engine' && typeof paid_result_id === 'string' && paid_result_id && typeof topic_id === 'string' && topic_id) {
+    const resolved = await resolveOpportunityEvidence(user.id, paid_result_id, topic_id)
+    if (!resolved.success) {
+      return NextResponse.json({ error: 'Az ajánlás nem található vagy nem hozzáférhető.' }, { status: 404 })
+    }
+    const admin = createAdminClient()
+    const ideaResult = await ensureVideoIdea(admin, {
+      userId: user.id,
+      title: resolved.evidence.title,
+      topic: resolved.evidence.videoIdeaCandidate.topic,
+      platform: resolved.evidence.videoIdeaCandidate.platform || 'youtube',
+      opportunityScore: resolved.evidence.opportunityScore,
+      metadata: { source_context: 'opportunity_engine', search_keyword: resolved.evidence.videoIdeaCandidate.keyword },
+    })
+    if (!ideaResult.success || !ideaResult.idea?.id) {
+      return NextResponse.json({ error: 'A központi videóötlet mentése sikertelen.' }, { status: 500 })
+    }
+    const saveResult = await saveOpportunityRecommendationToMemory(admin, {
+      userId: user.id,
+      videoIdeaId: ideaResult.idea.id,
+      evidence: resolved.evidence,
+      searchKeyword: search_keyword ?? undefined,
+    })
+    if (!saveResult.success) {
+      console.error('[Memory] opportunity evidence save failed:', saveResult.error)
+      return NextResponse.json({ error: 'A mentés sikertelen. Próbáld újra.' }, { status: 500 })
+    }
+    return NextResponse.json({
+      item: { id: saveResult.memoryId, video_idea_id: ideaResult.idea.id, topic: resolved.evidence.videoIdeaCandidate.topic, state: 'saved' },
+      snapshot_id: saveResult.snapshotId,
+    })
+  }
 
   if (typeof topic !== 'string' || !topic.trim()) {
     return NextResponse.json({ error: "Tema kotelezo" }, { status: 400 })

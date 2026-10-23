@@ -1,9 +1,8 @@
 // Semantic Topic Identity v0 -- S3A AI-provider quota RPCs, REAL local DB
-// integration tests. Same pattern as the 072/073/074/S2B suites: uses the
-// existing local Docker Supabase stack (supabase_db_WillViralFinal), skips
-// entirely (not a failure) when unavailable, direct postgres-privileged
-// psql fixture inserts, SET ROLE for real grant-boundary checks. No AI/
-// provider call anywhere in this file -- only the RPCs themselves.
+// integration tests. Same pattern as the 072/073/074/S2B suites: direct
+// postgres-privileged psql fixture inserts, SET ROLE for real
+// grant-boundary checks. No AI/provider call anywhere in this file --
+// only the RPCs themselves.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.setConfig({ testTimeout: 30000 })
@@ -12,12 +11,60 @@ import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { isStatefulDbRequired, resolveStatefulDbTarget } from './lib/db-integration-guard'
+
+// This file's own ensureFullyApplied() can DROP all 7 RPC functions + all
+// 3 of its tables and reapply migration 075 from scratch (the "artificial
+// body drift..." / topology-drift tests further down, and any
+// beforeAll-time drift-repair) -- gated behind the same explicit target+
+// confirmation check as 074's and 076's DB-integration suites, not the
+// hardcoded long-lived dev-container name the rest of this codebase's
+// *-db-integration.test.ts files still use: on 2026-09-28, running this
+// file against whatever local dev stack happened to be up (no explicit
+// opt-in asked or given) dropped all 7 functions for real and left them
+// missing after a failed reapply, only discovered later via a targeted
+// read-only diff against a container-identity-proven earlier snapshot.
+// See tests/lib/db-integration-guard.ts for the exact env-var contract and
+// tests/db-integration-guard.test.ts for its own DB-free proof.
+const STATEFUL_TARGET = resolveStatefulDbTarget()
+const DB_CONTAINER = STATEFUL_TARGET.allowed ? STATEFUL_TARGET.container! : null
+// Set ONLY by the dedicated CI job that starts its own disposable stack for
+// exactly this file (never by a developer's shell, never by the shared
+// `regression` job, which excludes this file entirely -- see
+// .github/workflows/quality.yml). In that job, silently skipping would
+// hide the fact these tests never ran; here it is a hard, immediate
+// module-load failure instead.
+const STATEFUL_REQUIRED = isStatefulDbRequired()
+if (STATEFUL_REQUIRED && !STATEFUL_TARGET.allowed) {
+  throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the stateful DB target is not authorized: ${STATEFUL_TARGET.reason}`)
+}
 
 const execFileAsync = promisify(execFile)
 const MIGRATION_PATH = join(process.cwd(), 'supabase/migrations/075_semantic_topic_s3a_ai_quota_foundation.sql')
 
+// Moved above the guard block below (verifyRequiredSchema references
+// RPC_NAMES; a `const` used before its declaration executes throws a
+// TDZ ReferenceError, not a silent undefined).
+const RPC_NAMES = [
+  'reserve_ai_provider_units', 'mark_ai_provider_attempt_started', 'commit_ai_provider_units',
+  'mark_ai_provider_outcome_unknown', 'release_ai_provider_units',
+  'finalize_ai_provider_reservation_outcome', 'reconcile_stale_ai_provider_reservations',
+]
+
+const TABLE_NAMES = ['ai_extraction_control', 'ai_provider_daily_budgets', 'ai_provider_budget_reservations']
+
+// Every one of these throws BEFORE attempting any Docker call at all when
+// the explicit target+confirmation gate is not satisfied -- see
+// STATEFUL_TARGET/DB_CONTAINER above. describeIfLocalDb below already
+// short-circuits to describe.skip in that case, so this throw is a
+// defense-in-depth backstop, not the primary mechanism.
+function requireContainer(): string {
+  if (!DB_CONTAINER) throw new Error(`stateful DB-integration call attempted without authorization: ${STATEFUL_TARGET.reason}`)
+  return DB_CONTAINER
+}
+
 function dockerPsql(sql: string): string {
-  return execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+  return execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
     input: sql,
     encoding: 'utf-8',
   })
@@ -25,7 +72,7 @@ function dockerPsql(sql: string): string {
 
 function dockerPsqlExpectError(sql: string): string {
   try {
-    execSync('docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -', {
+    execSync(`docker exec -i ${requireContainer()} psql -U postgres -d postgres -t -A -q -v ON_ERROR_STOP=1 -f -`, {
       input: sql,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -37,7 +84,7 @@ function dockerPsqlExpectError(sql: string): string {
 }
 
 async function dockerPsqlConcurrent(sql: string) {
-  const args = ['exec', '-i', 'supabase_db_WillViralFinal', 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql]
+  const args = ['exec', '-i', requireContainer(), 'psql', '-U', 'postgres', '-d', 'postgres', '-t', '-A', '-c', sql]
   return execFileAsync('docker', args)
 }
 
@@ -45,7 +92,7 @@ function runMigration(): { out: string; threw: boolean } {
   const migrationSql = readFileSync(MIGRATION_PATH, 'utf8')
   try {
     const out = execSync(
-      'docker exec -i supabase_db_WillViralFinal psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1',
+      `docker exec -i ${requireContainer()} psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 -t -A -f - 2>&1`,
       { input: migrationSql, encoding: 'utf8' },
     )
     return { out, threw: false }
@@ -54,23 +101,54 @@ function runMigration(): { out: string; threw: boolean } {
   }
 }
 
+// Every table/function this file's helpers ever write to (dropAllRpcs's 7
+// functions, dropAllTables's 3 tables, plus the prerequisite tables the
+// fixture helpers and RPCs themselves read/write) -- checked ONCE,
+// read-only, up front, before stackAvailable can become true, i.e. before
+// this file allows ANY write (including ensureFullyApplied()'s own
+// drop+reapply path).
+const REQUIRED_TABLES = ['ai_extraction_control', 'ai_provider_daily_budgets', 'ai_provider_budget_reservations', 'signal_evidence', 'signal_sources', 'signal_runs', 'topic_extraction_runs']
+
+function verifyRequiredSchema(): { ok: boolean; missing: string[] } {
+  const tablesSql = REQUIRED_TABLES.map((t) => `'${t}'`).join(',')
+  const fnsSql = RPC_NAMES.map((f) => `'${f}'`).join(',')
+  const out = dockerPsql(`
+    SELECT 'MISSING_TABLE|' || t FROM unnest(ARRAY[${tablesSql}]) t WHERE to_regclass('public.' || t) IS NULL
+    UNION ALL
+    SELECT 'MISSING_FUNCTION|' || f FROM unnest(ARRAY[${fnsSql}]) f
+      WHERE NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = f);
+  `).trim()
+  const missing = out ? out.split('\n').map((l) => l.trim()).filter(Boolean) : []
+  return { ok: missing.length === 0, missing }
+}
+
+// The target+confirmation gate is checked FIRST, before any Docker call is
+// even attempted -- on a normal developer machine (or any CI job that
+// hasn't explicitly opted in), DB_CONTAINER is null and stackAvailable
+// stays false without ever touching Docker. When authorized, connectivity
+// AND schema completeness are BOTH required before stackAvailable becomes
+// true. Unlike 074/076, an incomplete schema here does NOT imply
+// ensureFullyApplied() would repair it soundly (this file's own rebuild
+// path can itself fail partway -- see the comment above ensureFullyApplied
+// below), so completeness is required up front rather than left to that
+// function to discover.
 let stackAvailable = false
-try {
-  dockerPsql('select 1;')
-  stackAvailable = true
-} catch {
-  stackAvailable = false
+if (DB_CONTAINER) {
+  try {
+    dockerPsql('select 1;')
+    const schema = verifyRequiredSchema()
+    stackAvailable = schema.ok
+    if (!schema.ok && STATEFUL_REQUIRED) {
+      throw new Error(`PFM_STATEFUL_DB_REQUIRED=1 but the target's schema is incomplete -- missing: ${schema.missing.join(', ')}. Zero writes will be attempted.`)
+    }
+    // else (not required, schema incomplete): stackAvailable stays false, i.e. skip (zero writes), not a hard failure.
+  } catch (e) {
+    if (STATEFUL_REQUIRED) throw e // required mode: connectivity/schema failures must fail the run, not silently skip.
+    stackAvailable = false
+  }
 }
 
 const describeIfLocalDb = stackAvailable ? describe : describe.skip
-
-const RPC_NAMES = [
-  'reserve_ai_provider_units', 'mark_ai_provider_attempt_started', 'commit_ai_provider_units',
-  'mark_ai_provider_outcome_unknown', 'release_ai_provider_units',
-  'finalize_ai_provider_reservation_outcome', 'reconcile_stale_ai_provider_reservations',
-]
-
-const TABLE_NAMES = ['ai_extraction_control', 'ai_provider_daily_budgets', 'ai_provider_budget_reservations']
 
 function dropAllRpcs() {
   dockerPsql(`

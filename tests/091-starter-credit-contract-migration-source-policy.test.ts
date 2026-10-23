@@ -22,10 +22,18 @@ const STATEMENT_SCAN = WITHOUT_FUNCTION_BODY
   .replace(/ON COMMIT DROP/g, '')
 
 describe('091 migration file', () => {
-  it('is the newest migration and the only 091', () => {
+  // The "is the newest migration" claim this test made until 092 landed is
+  // now correctly false -- 092_opportunity_evidence_snapshot.sql legitimately
+  // follows it, exactly as this file's own 090-numbered predecessor already
+  // anticipated for itself ("the only 090 migration (later migrations, e.g.
+  // 091, may follow it)"). Narrowed to match that same, more conservative
+  // convention: this test only pins 091's own uniqueness, not global
+  // migration-directory ordering. NOT a weakened check -- 091's actual
+  // properties (single-transaction, single-object, fail-fast pins, etc.
+  // below) are all unchanged and still fully asserted.
+  it('is the only 091 migration (later migrations, e.g. 092, may follow it)', () => {
     const files = readdirSync(path.join(ROOT, 'supabase', 'migrations')).filter((f) => f.endsWith('.sql')).sort()
     expect(files.filter((f) => f.startsWith('091'))).toEqual([MIGRATION_FILE])
-    expect(files[files.length - 1]).toBe(MIGRATION_FILE)
   })
 
   it('is a single transaction: BEGIN ... COMMIT', () => {
