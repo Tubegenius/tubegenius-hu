@@ -40,6 +40,7 @@ import {
   Mic,
   Music2,
   Pin,
+  Info,
   PlayCircle,
   Send,
   Share2,
@@ -61,12 +62,15 @@ import {
   resolveCreatorStudioLane,
 } from '@/lib/creator-studio-presentation'
 import {
-  ARCHIVE_REF_STORAGE_KEY,
+  INITIAL_ARCHIVE_STATE,
+  createArchiveController,
+  type ArchiveController,
+  type ArchiveState,
+} from '@/lib/paid-results/video-package-archive-controller'
+import {
+  createStorageUncertainStore,
   createVideoPackageSaver,
-  readArchiveRef,
-  serializeArchiveRef,
-  verifyArchivedPackage,
-  type VideoPackageSaver,
+  type SaveVideoPackageOutcome,
 } from '@/lib/paid-results/video-package-save-client'
 import { useCreatorOS } from '@/components/dashboard/CreatorOSContext'
 
@@ -369,17 +373,23 @@ export default function VideoPackagePage() {
   const [factsLoading, setFactsLoading] = useState(false)
   const [result, setResult] = useState<VideoPackageResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-  const [savedPackageId, setSavedPackageId] = useState<string | null>(null)
-  // A mentés (video_packages) hibája: a fizetett eredmény ilyenkor MEGVAN a paid_results-ban, a kredit
-  // levonása és a generálás nem érintett. retrySafe=false: a kimenetel bizonytalan, nincs újrapróbálás gomb.
-  const [saveError, setSaveError] = useState<{ message: string; retrySafe: boolean } | null>(null)
-  // Egyetlen mentő példány az oldal élettartamára: az automatikus mentés és a kézi újrapróbálás ugyanazt használja
-  // (párhuzamos hívás -> egyetlen kérés, már mentett eredményre nincs új kérés), lásd lib/paid-results/video-package-save-client.ts.
-  const packageSaverRef = useRef<VideoPackageSaver | null>(null)
-  if (!packageSaverRef.current) packageSaverRef.current = createVideoPackageSaver()
-  // Új generálásnál növeljük: a visszanyitott eredmény még futó archívum-ellenőrzése így nem írhatja felül az új állapotot.
-  const archiveCheckRef = useRef(0)
+  // Archívum-állapot (video_packages): a fizetett generálás sikere és a kredit levonása a paid_results-ban már megvan,
+  // az archívum-mentés ettől KÜLÖN, igazolandó állapot. Az állapotgép és a szabályai: lib/paid-results/video-package-archive-controller.ts
+  // (mentett = csak igazolt sor; cache-találatból nincs automatikus mentés; bizonytalan azonosító frissítés után is fail-closed;
+  // az elavult generálás mentése nem írhatja felül az újat). Mindez KLIENSOLDALI védelem, a szerver POST nem idempotens.
+  const [archive, setArchive] = useState<ArchiveState>(INITIAL_ARCHIVE_STATE)
+  const { saved, saveError, memoryLinkFailed, archiving } = archive
+  const archiveRef = useRef<ArchiveController | null>(null)
+  if (!archiveRef.current) {
+    archiveRef.current = createArchiveController({
+      saver: createVideoPackageSaver(undefined, {
+        uncertain: createStorageUncertainStore(() => (typeof window === 'undefined' ? null : window.localStorage)),
+      }),
+      getSessionStorage: () => (typeof window === 'undefined' ? null : window.sessionStorage),
+      onChange: setArchive,
+    })
+  }
+  const archiveController = archiveRef.current
   const [calendarStatus, setCalendarStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [factSources, setFactSources] = useState<{ title: string; snippet: string; url: string; source_type: string }[]>([])
   const [loadingSavedPackage, setLoadingSavedPackage] = useState(false)
@@ -446,9 +456,9 @@ export default function VideoPackagePage() {
           if (state.topic) setTopic(state.topic)
           if (state.result) {
             setResult(state.result)
-            // A visszanyitott eredmény NEM számít automatikusan mentettnek: csak igazolt archívumsor alapján (confirmArchivedPackage).
+            // A visszanyitott eredmény NEM számít automatikusan mentettnek: csak igazolt archívumsor alapján (reconcileReopened).
             setReopenedWithoutCharge(true)
-            void confirmArchivedPackage(state.result)
+            void archiveController.reconcileReopened(state.result)
           }
           if (state.platform) setPlatform(state.platform)
           if (state.videoLength) setVideoLength(state.videoLength)
@@ -600,21 +610,6 @@ export default function VideoPackagePage() {
     return null
   }
 
-  // Igazolt archívumsor: a mentett állapotot csak akkor jelöljük, ha a tárolt csomag-azonosító ugyanehhez a fizetett
-  // eredményhez tartozik ÉS az owner-szűrt olvasás (GET /api/video-packages?id=) 200-zal visszaadja a sort.
-  // Bármi egyéb (nincs hivatkozás, 404, hiba) -> az állapot nem igazolt marad, és nem indul mentés.
-  async function confirmArchivedPackage(pkg: { paid_result_id?: string }) {
-    const token = ++archiveCheckRef.current
-    let raw: string | null = null
-    try { raw = sessionStorage.getItem(ARCHIVE_REF_STORAGE_KEY) } catch {}
-    const packageId = readArchiveRef(raw, pkg.paid_result_id)
-    if (!packageId) return
-    if (await verifyArchivedPackage(packageId) !== 'present') return
-    if (token !== archiveCheckRef.current) return
-    setSavedPackageId(packageId)
-    setSaved(true)
-  }
-
   async function loadPaidResult(paidResultId: string) {
     setLoadingSavedPackage(true)
     try {
@@ -633,7 +628,7 @@ export default function VideoPackagePage() {
         // A paid_results-ból visszanyitott eredmény sem számít mentettnek (a video_packages táblában nincs paid_result_id,
         // a sor létezése itt nem igazolható); csak az ugyanezen a fülön tárolt, igazolt archívum-hivatkozás számít.
         setReopenedWithoutCharge(true)
-        void confirmArchivedPackage(data)
+        void archiveController.reconcileReopened(data)
       } else {
         setError(data.error || 'A videócsomag nem található')
       }
@@ -676,8 +671,7 @@ export default function VideoPackagePage() {
           estimated_word_count: pkg.estimated_word_count, estimated_duration: pkg.estimated_duration,
           opportunity_context: snapshot || null,
         })
-        setSaved(true)
-        setSavedPackageId(pkg.id)
+        archiveController.markArchived(pkg.id)
         setReopenedWithoutCharge(true)
       }
     } catch (e) {
@@ -798,11 +792,8 @@ export default function VideoPackagePage() {
     setError(null)
     setResult(null)
     setFactSources([])
-    setSaved(false)
-    setSavedPackageId(null)
-    setSaveError(null)
+    const archiveToken = archiveController.beginGeneration()
     setReopenedWithoutCharge(false)
-    archiveCheckRef.current += 1
 
     let factBlock: string | null = null
     let sources: { title: string; snippet: string; url: string; source_type: string }[] = []
@@ -927,19 +918,29 @@ export default function VideoPackagePage() {
       setResult(data)
       publishCreditMutationCompleted('/api/video-package', data)
 
-      // Mentés sessionStorage-ba — böngésző vissza gomb támogatás
-      sessionStorage.setItem('willviral_video_package_state', JSON.stringify({
-        topic,
-        result: data,
-        platform,
-        videoLength,
-        narrationStyle,
-        intensity,
-        goal,
-      }))
+      // Mentés sessionStorage-ba — böngésző vissza gomb támogatás (a tár hibája nem érintheti a már kifizetett eredményt)
+      try {
+        sessionStorage.setItem('willviral_video_package_state', JSON.stringify({
+          topic,
+          result: data,
+          platform,
+          videoLength,
+          narrationStyle,
+          intensity,
+          goal,
+        }))
+      } catch {}
 
-      // ─── Automatikus mentés — a kifizetett generálás eredménye nem veszhet el ───
-      await persistPackage(data)
+      if (data.from_paid_result) {
+        // Gyorsítótárból visszaadott, korábban kifizetett eredmény (azonos bemenet): az archívum-mentést az eredetileg
+        // generáló oldal már megpróbálta, ezért innen SOSE indul automatikus mentés (egy második POST dupla sort hozhat).
+        // Csak az igazolt hivatkozás ellenőrzése fut; ha nincs, az eredmény "nem igazolt" marad.
+        setReopenedWithoutCharge(true)
+        await archiveController.reconcileReopened(data)
+      } else {
+        // ─── Automatikus mentés — csak FRISS generálás eredményéből ───
+        await persistPackage(data, archiveToken)
+      }
     } catch { setError('Kapcsolati hiba.') }
     finally { setLoading(false) }
   }
@@ -968,22 +969,22 @@ export default function VideoPackagePage() {
   // A fizetett generálás eredménye a paid_results-ban már megvan; ez a lépés csak a video_packages archívumot
   // (és a Memory-kapcsolatot) hozza létre. A kérés törzse KIZÁRÓLAG a paid_result_id (a szerver a tartalmat a
   // paid_results-ból olvassa; ld. lib/paid-results/video-package-save-client.ts). 0 kredit, nincs újragenerálás.
-  // Az `saved` állapot csak sikeres HTTP-válasz után áll be; hibánál nincs automatikus újrapróbálás.
-  async function persistPackage(pkg: VideoPackageResult) {
-    const saver = packageSaverRef.current
-    if (!saver || !pkg.paid_result_id) return
-    setSaveError(null)
-    const outcome = await saver.save({ paidResultId: pkg.paid_result_id, topic: pkg.topic, searchKeyword: searchKeyword || null })
+  // A mentett állapotot a vezérlő állítja, csak sikeres archívum-POST után és csak az aktuális generálásra.
+  async function persistPackage(pkg: VideoPackageResult, token: number) {
+    const outcome = await archiveController.persist(token, pkg, { searchKeyword: searchKeyword || null })
+    await finishArchive(outcome, pkg, token)
+  }
+
+  async function finishArchive(outcome: SaveVideoPackageOutcome | null, pkg: VideoPackageResult, token: number) {
+    if (!outcome) return
     if (outcome.status !== 'saved') {
       console.error('Video package save failed:', outcome.httpStatus)
-      setSaveError({ message: outcome.message, retrySafe: outcome.retrySafe })
       return
     }
-    setSavedPackageId(outcome.id)
-    setSaved(true)
-    try { sessionStorage.setItem(ARCHIVE_REF_STORAGE_KEY, serializeArchiveRef(pkg.paid_result_id, outcome.id)) } catch {}
     if (outcome.alreadySaved) return
     if (!outcome.memoryLinked) console.error('Video package saved, but the Creator Memory link failed')
+    // Elavult (közben újraindított) generálásnál a forrásvideó-kapcsolat már nem az aktuális oldalállapotra vonatkozna.
+    if (!archiveController.isCurrent(token)) return
 
     // Ha "Saját verzió" workflow-ból jöttünk (volt forrásvideó), mentjük a kapcsolatot
     if (sourceVideoId && sourceVideoUrl) {
@@ -1014,11 +1015,12 @@ export default function VideoPackagePage() {
     }
   }
 
-  // Kézi mentés: kizárólag egy KATTINTÁSRA (a hiba-sávban megjelenő gomb), sosem automatikusan; ugyanazt a
-  // védett mentőt használja, így dupla kattintás vagy a még futó automatikus mentés mellett is egyetlen kérés fut.
+  // Kézi mentés: kizárólag egy KATTINTÁSRA (a hiba-sávban megjelenő gomb), sosem automatikusan, és csak határozott,
+  // beszúrás ELŐTTI hiba után (a vezérlő őrzi); ugyanazt a védett mentőt használja, így dupla kattintás mellett is egyetlen kérés fut.
   async function retrySave() {
-    if (!result || saved || !saveError?.retrySafe) return
-    await persistPackage(result)
+    if (!result) return
+    const { token, outcome } = await archiveController.retry(result, { searchKeyword: searchKeyword || null })
+    await finishArchive(outcome, result, token)
   }
 
   const producerBrief = result ? getProductionBrief(result, opportunityContext) : ''
@@ -1042,7 +1044,25 @@ export default function VideoPackagePage() {
         : { label: 'A gyártási csomag elkészült és mentésre került.', variant: 'success' }
       : reopenedWithoutCharge || result.from_paid_result
       ? { label: 'Fizetett eredmény megnyitva — nem vontunk le új kreditet. Az archívum-mentés nem igazolt.', variant: 'info' }
+      : saveError
+      ? { label: 'A fizetett generálás elkészült, a kredit levonása megtörtént. Az archívum-mentés nincs igazolva.', variant: 'info' }
       : null
+  // Rail: a fizetett generálás sikere, a kreditlevonás és az archívum-mentés bizonytalansága külön állítás.
+  const railFreshUnsaved = !!result && !saved && !reopenedWithoutCharge && !!saveError
+  const railStrong = saved
+    ? (reopenedWithoutCharge ? 'Mentett csomag megnyitva — új kredit levonása nélkül.' : 'A csomag elkészült és mentésre került.')
+    : reopenedWithoutCharge
+    ? 'Fizetett eredmény megnyitva — új kredit levonása nélkül.'
+    : railFreshUnsaved
+    ? 'A fizetett generálás elkészült — a kredit levonása már megtörtént.'
+    : `${isShorts ? 'Shorts' : 'Long videó'} csomag · ${isShorts ? '2' : '6'} kredit`
+  const railSmall = saved
+    ? 'Az újragenerálás új kreditet használ.'
+    : reopenedWithoutCharge
+    ? 'Az archívum-mentés nem igazolt. Az újragenerálás újabb kreditet használ.'
+    : railFreshUnsaved
+    ? 'Az archívum-mentés nincs igazolva. Az újragenerálás újabb kreditet használ.'
+    : 'A következő lépés előtt kreditmegerősítést kapsz.'
   const heroCreditsRemaining = result && typeof result._credits_remaining === 'number' && Number.isFinite(result._credits_remaining)
     ? result._credits_remaining
     : null
@@ -1226,14 +1246,14 @@ export default function VideoPackagePage() {
 
         <footer className="wv-package-generate-rail">
           <div>
-            {reopenedWithoutCharge || saved ? <CheckCircle2 aria-hidden="true" /> : <Zap aria-hidden="true" />}
+            {saved ? <CheckCircle2 aria-hidden="true" /> : reopenedWithoutCharge ? <Info aria-hidden="true" /> : railFreshUnsaved ? <AlertTriangle aria-hidden="true" /> : <Zap aria-hidden="true" />}
             <span>
-              <strong>{reopenedWithoutCharge ? (saved ? 'Mentett csomag megnyitva — új kredit levonása nélkül.' : 'Fizetett eredmény megnyitva — új kredit levonása nélkül.') : saved ? 'A csomag elkészült és mentésre került.' : `${isShorts ? 'Shorts' : 'Long videó'} csomag · ${isShorts ? '2' : '6'} kredit`}</strong>
-              <small>{reopenedWithoutCharge || saved ? 'Az újragenerálás új kreditet használ.' : 'A következő lépés előtt kreditmegerősítést kapsz.'}</small>
+              <strong>{railStrong}</strong>
+              <small>{railSmall}</small>
             </span>
           </div>
           <button type="button" onClick={handleGenerate} disabled={loading || !topic.trim() || generationBlockedByOpportunity}>
-            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved || reopenedWithoutCharge ? <>Újragenerálás <span>{isShorts ? '2' : '6'} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
+            {loading ? <><i aria-hidden="true" />{factsLoading ? 'Tényadatok keresése…' : 'A csomag épül…'}</> : generationBlockedByOpportunity ? 'Előbb validálás szükséges' : saved || reopenedWithoutCharge || railFreshUnsaved ? <>Újragenerálás <span>{isShorts ? '2' : '6'} kredit</span></> : opportunityPreparationMode ? <>Előkészítő csomag <ArrowRight aria-hidden="true" /></> : <>Gyártási csomag indítása <ArrowRight aria-hidden="true" /></>}
           </button>
         </footer>
       </section>
@@ -1250,9 +1270,20 @@ export default function VideoPackagePage() {
         <div className="wv-package-error" role="alert">
           <AlertTriangle aria-hidden="true" />
           <span>
-            <strong>A csomag mentése nem sikerült.</strong>
-            {saveError.message} A fizetett eredmény megvan, a kredit levonása nem érintett, újragenerálás nem történik.
-            {saveError.retrySafe && <button type="button" className="wv-package-error-action" onClick={retrySave}>Mentés újrapróbálása</button>}
+            <strong>{saveError.retrySafe ? 'Az archívum-mentés nem történt meg.' : 'Az archívum-mentés nincs igazolva.'}</strong>
+            {reopenedWithoutCharge ? 'A fizetett eredmény megnyitva, új kreditet nem vontunk le. ' : 'A fizetett generálás elkészült, a kredit levonása már megtörtént. '}
+            {saveError.message} Az újragenerálás újabb kreditet használ.
+            {saveError.retrySafe && <button type="button" className="wv-package-error-action" onClick={retrySave} disabled={archiving}>Mentés újrapróbálása</button>}
+          </span>
+        </div>
+      )}
+
+      {memoryLinkFailed && saved && (
+        <div className="wv-package-error" role="status">
+          <Info aria-hidden="true" />
+          <span>
+            <strong>A Memory-kapcsolat nem jött létre.</strong>
+            A csomag az archívumba mentve van, csak a Memory-bejegyzés hiányzik. Ne mentsd újra a csomagot.
           </span>
         </div>
       )}

@@ -21,7 +21,8 @@
 // legfeljebb egy kérés fut (a párhuzamos hívás ugyanazt az ígéretet kapja), és egy
 // már sikeresen mentett eredményre nem indul új kérés. A szerver nem idempotens
 // (minden sikeres POST új video_packages sort hoz létre), ezért a kliens őr a
-// védelem.
+// védelem — és EZ A VÉDELEM KLIENSOLDALI: egy böngészőprofilra (localStorage) és egy
+// lapra (sessionStorage) szól, eszközök vagy böngészők között NEM garantál semmit.
 //
 // Mikor biztonságos az újrapróbálás (retrySafe)? KIZÁRÓLAG zárt, pozitívan felsorolt
 // HTTP-státuszoknál, amelyeket a route a video_packages INSERT ELŐTT ad vissza
@@ -32,6 +33,13 @@
 // nem ellenőrzik, így a sor megmaradhat. Ugyanígy bizonytalan a hálózati hiba és az
 // olvashatatlan sikeres válasz. Bizonytalan kimenetel után a modul ugyanarra a
 // paid_result_id-ra TÖBBÉ nem küld kérést (a kimenetel megőrződik): nincs vak újrapróbálás.
+//
+// Oldalfrissítés / bezárt lap: ha az `uncertain` tár (localStorage) meg van adva, a
+// paid_result_id-t a POST ELŐTT megjelöljük "bizonytalannak", és a jelölést csak egy
+// határozott, INSERT előtti hiba (retrySafe) törli. Így a félbeszakadt kérés (lapozás,
+// bezárás, hálózati megszakadás) után is fail-closed marad: a jelölt azonosítóra az
+// új saver-példány sem küld kérést. Ha a tár nem elérhető, ez a védelem nem működik
+// (nincs mit olvasni/írni) — ilyenkor csak a memóriabeli, egy oldalbetöltésnyi őr él.
 export const VIDEO_PACKAGES_ENDPOINT = '/api/video-packages'
 export const MEMORY_ENDPOINT = '/api/memory'
 
@@ -42,6 +50,9 @@ export const PRE_WRITE_HTTP_STATUSES: readonly number[] = [400, 401, 404, 422]
 export function isDefinitelyNotWritten(httpStatus: number | null): boolean {
   return httpStatus !== null && PRE_WRITE_HTTP_STATUSES.includes(httpStatus)
 }
+
+// A Memory-hívás nem blokkolhatja a mentett állapot rögzítését és nem lóghat örökké.
+export const MEMORY_LINK_TIMEOUT_MS = 15_000
 
 export interface SaveVideoPackageInput {
   paidResultId: string
@@ -64,36 +75,56 @@ export function buildLinkPackageToMemoryBody(input: { topic: string; searchKeywo
 
 // A szerver minden hibaágon fix, felhasználóbarát szöveget ad; a kliens ennek a
 // zárt tükrét mutatja, sosem a szerver error-mezőjét.
+export const UNCERTAIN_SAVE_MESSAGE = 'Az archívum-mentés eredménye bizonytalan: a csomag lehet, hogy már bekerült az archívumba, de ezt nem tudjuk igazolni. Ne mentsd újra.'
+
 export function mapSaveVideoPackageError(status: number | null): string {
   if (status === 401) return 'A mentéshez be kell jelentkezned.'
   if (status === 404) return 'A fizetett eredmény nem található.'
   if (status === 400 || status === 422) return 'A csomag ebben a formában nem menthető.'
-  // Minden egyéb (500/503/hálózati hiba/olvashatatlan válasz): a csomag mentése már megtörténhetett.
-  return 'A mentés eredménye bizonytalan: a csomag létrejöhetett az archívumban. Ne mentsd újra; előbb ellenőrizd a Tartalommemóriában a mentett videócsomagokat.'
+  // Minden egyéb (500/503/hálózati hiba/olvashatatlan válasz): a mentés már megtörténhetett.
+  return UNCERTAIN_SAVE_MESSAGE
 }
 
 // ─── Igazolt archívumsor ──────────────────────────────────────────────────────────
 // A video_packages táblában NINCS paid_result_id oszlop: egy fizetett eredményhez nem lehet szerver oldalon
 // archívumsort keresni. A "mentett" állapot ezért kizárólag (a) a friss mentés sikeres POST-válaszából (a
 // szerver a sort létrehozta és a workflow-lépéseket is lefuttatta), vagy (b) egy konkrét csomag-azonosító
-// owner-szűrt olvasásából (GET /api/video-packages?id=) igazolható. A sessionStorage-ból vagy a
-// paid_results-ból visszanyitott eredmény ettől még NEM számít mentettnek.
+// owner-szűrt olvasásából (GET /api/video-packages?id=) igazolható. A sessionStorage-ból, a paid_results-ból
+// vagy egy gyorsítótárazott (from_paid_result) válaszból visszanyitott eredmény ettől még NEM számít mentettnek.
 export const ARCHIVE_REF_STORAGE_KEY = 'willviral_video_package_archive_ref'
+const ARCHIVE_REF_MAX_ENTRIES = 20
 
-export function serializeArchiveRef(paidResultId: string, packageId: string): string {
-  return JSON.stringify({ paidResultId, packageId })
+type ArchiveRefMap = Record<string, string>
+
+function parseArchiveRefMap(raw: string | null): ArchiveRefMap {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as { refs?: unknown } | null
+    const refs = parsed && typeof parsed === 'object' ? parsed.refs : null
+    if (!refs || typeof refs !== 'object' || Array.isArray(refs)) return {}
+    const map: ArchiveRefMap = {}
+    for (const [paidResultId, packageId] of Object.entries(refs as Record<string, unknown>)) {
+      if (typeof packageId === 'string' && packageId) map[paidResultId] = packageId
+    }
+    return map
+  } catch {
+    return {}
+  }
+}
+
+// Több fizetett eredmény hivatkozása él egymás mellett (egy késő mentés nem írhatja felül a másikét).
+export function mergeArchiveRef(raw: string | null, paidResultId: string, packageId: string): string {
+  const map = parseArchiveRefMap(raw)
+  delete map[paidResultId]
+  map[paidResultId] = packageId // a legutóbbi a végére kerül
+  const entries = Object.entries(map).slice(-ARCHIVE_REF_MAX_ENTRIES)
+  return JSON.stringify({ refs: Object.fromEntries(entries) })
 }
 
 // A tárolt hivatkozás csak akkor használható, ha EZ a fizetett eredmény tartozik hozzá.
 export function readArchiveRef(raw: string | null, paidResultId: string | undefined): string | null {
-  if (!raw || !paidResultId) return null
-  try {
-    const ref = JSON.parse(raw) as { paidResultId?: unknown; packageId?: unknown } | null
-    if (ref && ref.paidResultId === paidResultId && typeof ref.packageId === 'string' && ref.packageId) return ref.packageId
-  } catch {
-    // sérült tároló: nincs hivatkozás
-  }
-  return null
+  if (!paidResultId) return null
+  return parseArchiveRefMap(raw)[paidResultId] ?? null
 }
 
 export type ArchiveVerification = 'present' | 'absent' | 'unknown'
@@ -111,36 +142,144 @@ export async function verifyArchivedPackage(packageId: string, fetchImpl: typeof
   }
 }
 
+// ─── Tartós "bizonytalan" jelölés (oldalfrissítés után is fail-closed) ───────────────
+export const UNCERTAIN_IDS_STORAGE_KEY = 'willviral_video_package_uncertain_ids'
+const UNCERTAIN_IDS_MAX_ENTRIES = 50
+
+export interface StorageLike {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+}
+
+export interface UncertainStore {
+  isUncertain(paidResultId: string): boolean
+  mark(paidResultId: string): void
+  clear(paidResultId: string): void
+}
+
+function parseUncertainIds(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string' && v.length > 0) : []
+  } catch {
+    return []
+  }
+}
+
+// A tárat hívásonként kérjük le (SSR-nél nincs window; privát módban a hozzáférés dobhat) — minden hiba "nincs tár".
+export function createStorageUncertainStore(getStorage: () => StorageLike | null): UncertainStore {
+  function read(): { storage: StorageLike; ids: string[] } | null {
+    try {
+      const storage = getStorage()
+      if (!storage) return null
+      return { storage, ids: parseUncertainIds(storage.getItem(UNCERTAIN_IDS_STORAGE_KEY)) }
+    } catch {
+      return null
+    }
+  }
+  function write(storage: StorageLike, ids: string[]): void {
+    try { storage.setItem(UNCERTAIN_IDS_STORAGE_KEY, JSON.stringify(ids.slice(-UNCERTAIN_IDS_MAX_ENTRIES))) } catch { /* nincs tár */ }
+  }
+  return {
+    isUncertain(paidResultId) {
+      return read()?.ids.includes(paidResultId) ?? false
+    },
+    mark(paidResultId) {
+      const current = read()
+      if (!current) return
+      write(current.storage, [...current.ids.filter(id => id !== paidResultId), paidResultId])
+    },
+    clear(paidResultId) {
+      const current = read()
+      if (!current || !current.ids.includes(paidResultId)) return
+      write(current.storage, current.ids.filter(id => id !== paidResultId))
+    },
+  }
+}
+
 export type SaveVideoPackageOutcome =
   | { status: 'saved'; id: string; alreadySaved: boolean; memoryLinked: boolean }
   | { status: 'error'; message: string; httpStatus: number | null; retrySafe: boolean }
 
-export interface VideoPackageSaver {
-  save(input: SaveVideoPackageInput): Promise<SaveVideoPackageOutcome>
+export interface SaveVideoPackageHooks {
+  // A sikeres archívum-POST azonosítójával, AZONNAL meghívva — a Memory-hívás előtt és attól függetlenül.
+  onArchived?: (packageId: string) => void
 }
 
-export function createVideoPackageSaver(fetchImpl: typeof fetch = (...args) => fetch(...args)): VideoPackageSaver {
+export interface VideoPackageSaver {
+  save(input: SaveVideoPackageInput, hooks?: SaveVideoPackageHooks): Promise<SaveVideoPackageOutcome>
+  // Igaz, ha ehhez a paid_result_id-hoz bizonytalan kimenetű (vagy félbeszakadt) mentés tartozik és nincs igazolt mentett sor.
+  isUncertain(paidResultId: string): boolean
+}
+
+export interface VideoPackageSaverOptions {
+  uncertain?: UncertainStore
+  memoryTimeoutMs?: number
+}
+
+export function createVideoPackageSaver(
+  fetchImpl: typeof fetch = (...args) => fetch(...args),
+  options: VideoPackageSaverOptions = {},
+): VideoPackageSaver {
+  const store = options.uncertain ?? null
+  const memoryTimeoutMs = options.memoryTimeoutMs ?? MEMORY_LINK_TIMEOUT_MS
   const saved = new Map<string, { id: string; memoryLinked: boolean }>()
   const inFlight = new Map<string, Promise<SaveVideoPackageOutcome>>()
   // Bizonytalan kimenetelű (retrySafe=false) mentések: ugyanarra a paid_result_id-ra nincs több kérés.
   const uncertain = new Map<string, SaveVideoPackageOutcome>()
 
-  async function run(input: SaveVideoPackageInput): Promise<SaveVideoPackageOutcome> {
+  function uncertainOutcome(httpStatus: number | null): SaveVideoPackageOutcome {
+    return { status: 'error', message: mapSaveVideoPackageError(httpStatus), httpStatus, retrySafe: false }
+  }
+
+  async function linkMemory(input: SaveVideoPackageInput, packageId: string): Promise<boolean> {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<false>(resolve => {
+      timer = setTimeout(() => { controller?.abort(); resolve(false) }, memoryTimeoutMs)
+    })
+    const call = (async () => {
+      try {
+        const res = await fetchImpl(MEMORY_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildLinkPackageToMemoryBody({ topic: input.topic, searchKeyword: input.searchKeyword, videoPackageId: packageId })),
+          signal: controller?.signal,
+        })
+        return res.ok
+      } catch {
+        return false
+      }
+    })()
+    try {
+      return await Promise.race([call, timeout])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async function run(input: SaveVideoPackageInput, hooks?: SaveVideoPackageHooks): Promise<SaveVideoPackageOutcome> {
+    const key = input.paidResultId
+    // A kérés ELŐTT jelöljük: ha a lap a kérés közben megszűnik, a jelölés megmarad (fail-closed).
+    store?.mark(key)
     let res: Response
     try {
       res = await fetchImpl(VIDEO_PACKAGES_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildSaveVideoPackageBody(input.paidResultId)),
+        body: JSON.stringify(buildSaveVideoPackageBody(key)),
       })
     } catch {
       // A kérés célba érhetett és a szerver menthetett: bizonytalan, nem újrapróbálható.
-      return { status: 'error', message: mapSaveVideoPackageError(null), httpStatus: null, retrySafe: false }
+      return uncertainOutcome(null)
     }
     if (!res.ok) {
       // Csak az INSERT előtti státuszoknál bizonyos, hogy nem jött létre sor; az 500/503 és a többi lehet INSERT utáni is
       // (a kompenzáló DELETE sikerében nem bízunk).
-      return { status: 'error', message: mapSaveVideoPackageError(res.status), httpStatus: res.status, retrySafe: isDefinitelyNotWritten(res.status) }
+      const retrySafe = isDefinitelyNotWritten(res.status)
+      if (retrySafe) store?.clear(key)
+      return { status: 'error', message: mapSaveVideoPackageError(res.status), httpStatus: res.status, retrySafe }
     }
     let id: unknown
     try {
@@ -148,47 +287,46 @@ export function createVideoPackageSaver(fetchImpl: typeof fetch = (...args) => f
     } catch {
       id = undefined
     }
-    if (typeof id !== 'string' || !id) {
-      return { status: 'error', message: mapSaveVideoPackageError(null), httpStatus: res.status, retrySafe: false }
-    }
+    if (typeof id !== 'string' || !id) return uncertainOutcome(res.status)
 
-    // A Memory-kapcsolat KIZÁRÓLAG sikeres mentés után indul; hibája nem teszi
-    // semmissé a már mentett csomagot, csak jelzi (memoryLinked=false).
-    let memoryLinked = false
-    try {
-      const memoryRes = await fetchImpl(MEMORY_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildLinkPackageToMemoryBody({ topic: input.topic, searchKeyword: input.searchKeyword, videoPackageId: id })),
-      })
-      memoryLinked = memoryRes.ok
-    } catch {
-      memoryLinked = false
-    }
+    // A mentett állapotot és az azonosítót AZONNAL rögzítjük — a Memory-kapcsolat ettől függetlenül, utána indul,
+    // és a hibája nem teszi semmissé a már mentett csomagot (memoryLinked=false).
+    saved.set(key, { id, memoryLinked: false })
+    try { hooks?.onArchived?.(id) } catch { /* a hívó hibája nem érintheti a mentést */ }
+    const memoryLinked = await linkMemory(input, id)
+    saved.set(key, { id, memoryLinked })
     return { status: 'saved', id, alreadySaved: false, memoryLinked }
   }
 
   return {
-    async save(input) {
+    async save(input, hooks) {
       const key = input.paidResultId
       if (typeof key !== 'string' || !key) {
         return { status: 'error', message: mapSaveVideoPackageError(400), httpStatus: null, retrySafe: true }
       }
-      const known = saved.get(key)
-      if (known) return { status: 'saved', id: known.id, alreadySaved: true, memoryLinked: known.memoryLinked }
-      const blocked = uncertain.get(key)
-      if (blocked) return blocked
+      // Futó mentésnél ugyanazt az ígéretet adjuk (a Memory-lépés végét is megvárja): nincs második kérés.
       const running = inFlight.get(key)
       if (running) return running
-      const attempt = run(input)
+      const known = saved.get(key)
+      if (known) {
+        try { hooks?.onArchived?.(known.id) } catch { /* lásd fent */ }
+        return { status: 'saved', id: known.id, alreadySaved: true, memoryLinked: known.memoryLinked }
+      }
+      const blocked = uncertain.get(key)
+      if (blocked) return blocked
+      if (store?.isUncertain(key)) return uncertainOutcome(null)
+      const attempt = run(input, hooks)
         .then(outcome => {
-          if (outcome.status === 'saved') saved.set(key, { id: outcome.id, memoryLinked: outcome.memoryLinked })
-          else if (!outcome.retrySafe) uncertain.set(key, outcome)
+          if (outcome.status === 'error' && !outcome.retrySafe) uncertain.set(key, outcome)
           return outcome
         })
         .finally(() => { inFlight.delete(key) })
       inFlight.set(key, attempt)
       return attempt
+    },
+    isUncertain(paidResultId) {
+      if (saved.has(paidResultId)) return false
+      return uncertain.has(paidResultId) || (store?.isUncertain(paidResultId) ?? false)
     },
   }
 }
